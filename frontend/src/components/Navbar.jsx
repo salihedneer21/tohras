@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { path: '/', label: 'Users' },
   { path: '/training', label: 'Training' },
   { path: '/generate', label: 'Generate' },
+  { path: '/evaluate', label: 'Evaluate' },
 ];
 
 function Navbar() {

@@ -4,6 +4,7 @@ import Navbar from './components/Navbar';
 import Users from './pages/Users';
 import Training from './pages/Training';
 import Generate from './pages/Generate';
+import Evaluate from './pages/Evaluate';
 
 function App() {
   return (
@@ -42,6 +43,7 @@ function App() {
               <Route path="/" element={<Users />} />
               <Route path="/training" element={<Training />} />
               <Route path="/generate" element={<Generate />} />
+              <Route path="/evaluate" element={<Evaluate />} />
             </Routes>
           </div>
         </main>

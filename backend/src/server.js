@@ -9,6 +9,7 @@ const { validateReplicateToken } = require('./config/replicate');
 const userRoutes = require('./routes/userRoutes');
 const trainingRoutes = require('./routes/trainingRoutes');
 const generationRoutes = require('./routes/generationRoutes');
+const evalRoutes = require('./routes/evalRoutes');
 
 // Initialize express app
 const app = express();
@@ -18,8 +19,8 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   credentials: true,
 }));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '25mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -31,6 +32,7 @@ app.use((req, res, next) => {
 app.use('/api/users', userRoutes);
 app.use('/api/trainings', trainingRoutes);
 app.use('/api/generations', generationRoutes);
+app.use('/api/evals', evalRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -51,6 +53,7 @@ app.get('/', (req, res) => {
       users: '/api/users',
       trainings: '/api/trainings',
       generations: '/api/generations',
+      evals: '/api/evals',
       health: '/health',
     },
   });

@@ -63,6 +63,7 @@ ai-book-story/
 - Node.js >= 16.0.0
 - MongoDB (local or Atlas)
 - Replicate API token
+- OpenRouter API key (for dataset evaluation)
 
 ### Backend Setup
 
@@ -86,6 +87,9 @@ cp .env.example .env
 MONGODB_URI=mongodb://localhost:27017/ai-book-story
 PORT=5000
 REPLICATE_API_TOKEN=your_replicate_api_token_here
+OPENROUTER_API_KEY=your_openrouter_key_here
+# Optional: override default model
+# OPENROUTER_MODEL=openai/gpt-4.1-mini
 CORS_ORIGIN=http://localhost:3000
 ```
 
@@ -177,6 +181,14 @@ The frontend will be available at `http://localhost:3000`
 - Click "Download" to save images locally
 - Click "View Full Size" on any image to open in a new tab
 
+### 4. Dataset Evaluation
+
+**Assess Image Quality:**
+1. Navigate to the "Evaluate" page
+2. Upload a reference image (files are not persisted)
+3. Click "Run evaluation" to receive scores, issues, and recommendations
+4. Use the feedback (accept/reject, percentage scores, actionable tips) to curate higher quality datasets before fine-tuning
+
 ## API Endpoints
 
 ### Users
@@ -202,6 +214,9 @@ The frontend will be available at `http://localhost:3000`
 - `POST /api/generations` - Generate new image
 - `POST /api/generations/:id/download` - Download images
 - `GET /api/generations/user/:userId` - Get generations by user
+
+### Evaluation
+- `POST /api/evals` - Evaluate uploaded images for fine-tuning readiness (OpenRouter vision)
 
 ## Configuration
 

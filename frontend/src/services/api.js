@@ -64,4 +64,9 @@ export const generationAPI = {
   getByUser: (userId) => api.get(`/generations/user/${userId}`),
 };
 
+// Evaluation API
+export const evalAPI = {
+  evaluate: (data) => api.post('/evals', data),
+};
+
 export default api;
