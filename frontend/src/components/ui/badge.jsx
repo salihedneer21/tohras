@@ -3,13 +3,13 @@ import { cn } from '@/lib/utils';
 function Badge({ className, variant = 'default', ...props }) {
   const variants = {
     default:
-      'border border-accent/40 bg-accent/15 text-accent',
+      'border border-transparent bg-accent/15 text-accent',
     outline:
       'border border-border/60 bg-transparent text-foreground/70',
     success:
-      'border border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+      'border border-emerald-500/40 bg-emerald-500/12 text-emerald-300',
     warning:
-      'border border-amber-500/40 bg-amber-500/10 text-amber-200',
+      'border border-amber-500/40 bg-amber-500/12 text-amber-200',
     destructive:
       'border border-red-500/40 bg-red-500/15 text-red-200',
   };

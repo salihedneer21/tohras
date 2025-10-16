@@ -21,7 +21,7 @@ function Navbar() {
   const isActive = (path) => location.pathname === path;
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-2xl">
+    <header className="fixed inset-x-0 top-0 z-50 border-b border-border/60 bg-background/95 backdrop-blur">
       <div className="container flex h-16 items-center justify-between gap-4 sm:h-20">
         <Link
           to="/"
@@ -61,7 +61,7 @@ function Navbar() {
           <Button
             variant="secondary"
             size="icon"
-            className="rounded-xl border border-border/70 bg-background/70 text-foreground/80 hover:border-border hover:bg-background/90 sm:hidden"
+            className="rounded-xl border border-border/70 bg-card text-foreground/80 hover:border-border hover:bg-card sm:hidden"
             onClick={() => setIsMenuOpen((prev) => !prev)}
             aria-expanded={isMenuOpen}
             aria-label="Toggle navigation"

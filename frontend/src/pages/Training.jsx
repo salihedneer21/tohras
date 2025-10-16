@@ -256,7 +256,7 @@ function Training() {
                 </div>
               </div>
 
-              <div className="space-y-4 rounded-xl border border-border/60 bg-foreground/[0.04] p-4">
+              <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-1">
                     <Label>Training image URLs</Label>
@@ -301,7 +301,7 @@ function Training() {
                     {formData.imageUrls.map((url, index) => (
                       <div
                         key={`${url}-${index}`}
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/50 bg-background/70 px-3 py-2 text-xs text-foreground/70"
+                        className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/50 bg-card px-3 py-2 text-xs text-foreground/70"
                       >
                         <span className="flex-1 truncate">{url}</span>
                         <Button
@@ -318,7 +318,7 @@ function Training() {
                 )}
               </div>
 
-              <div className="space-y-3 rounded-xl border border-border/60 bg-foreground/[0.04] p-4">
+              <div className="space-y-3 rounded-xl border border-border/60 bg-muted p-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <Label htmlFor="trainingZip">Upload training ZIP</Label>
@@ -457,7 +457,7 @@ function Training() {
                     </a>
                   )}
                 </CardContent>
-                <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-background/40 py-4">
+                <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-card py-4">
                   <Button
                     variant="outline"
                     size="sm"
@@ -485,7 +485,7 @@ function Training() {
         </div>
 
         {trainings.length === 0 && (
-          <Card className="border-dashed border-border/50 bg-background/60 text-center">
+          <Card className="border-dashed border-border/50 bg-card text-center">
             <CardContent className="space-y-3 py-14">
               <CloudUpload className="mx-auto h-10 w-10 text-foreground/30" />
               <h3 className="text-lg font-medium text-foreground">

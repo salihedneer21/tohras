@@ -287,7 +287,7 @@ function Users() {
                 </div>
 
                 {formData.imageUrls.length > 0 && (
-                  <div className="grid gap-2 rounded-xl border border-border/60 bg-foreground/[0.04] p-4">
+                  <div className="grid gap-2 rounded-xl border border-border/60 bg-muted p-4">
                     <p className="text-xs uppercase tracking-[0.25em] text-foreground/40">
                       Attached images ({formData.imageUrls.length})
                     </p>
@@ -295,7 +295,7 @@ function Users() {
                       {formData.imageUrls.map((url, index) => (
                         <div
                           key={url + index}
-                          className="flex min-w-0 items-center justify-between gap-4 rounded-lg border border-border/40 bg-background/60 px-3 py-2 text-sm text-foreground/70"
+                          className="flex min-w-0 items-center justify-between gap-4 rounded-lg border border-border/40 bg-card px-3 py-2 text-sm text-foreground/70"
                         >
                           <span className="flex-1 truncate">{url}</span>
                           <Button
@@ -385,7 +385,7 @@ function Users() {
       </div>
 
       {users.length === 0 && (
-        <Card className="border-dashed border-border/50 bg-background/60 text-center">
+        <Card className="border-dashed border-border/50 bg-card text-center">
           <CardContent className="space-y-3 py-14">
             <UserCircle2 className="mx-auto h-10 w-10 text-foreground/30" />
             <h3 className="text-lg font-medium text-foreground">

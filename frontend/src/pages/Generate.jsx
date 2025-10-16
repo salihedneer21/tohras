@@ -263,7 +263,7 @@ function Generate() {
                 />
               </div>
 
-              <div className="space-y-4 rounded-xl border border-border/60 bg-foreground/[0.04] p-4">
+              <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
                 <h4 className="text-sm font-semibold text-foreground/70">
                   Generation settings
                 </h4>
@@ -399,7 +399,7 @@ function Generate() {
                     </div>
                     <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
                   </div>
-                  <div className="rounded-lg bg-foreground/[0.04] p-3 text-xs text-foreground/65 break-words">
+                  <div className="rounded-lg bg-muted p-3 text-xs text-foreground/65 break-words">
                     <span className="font-semibold text-foreground/70">Prompt: </span>
                     {generation.prompt}
                   </div>
@@ -421,7 +421,7 @@ function Generate() {
                       {generation.imageUrls.map((url, index) => (
                         <div
                           key={`${generation._id}-${index}`}
-                          className="overflow-hidden rounded-xl border border-border/70 bg-background/70"
+                          className="overflow-hidden rounded-xl border border-border/70 bg-card"
                         >
                           <img
                             src={url}
@@ -457,13 +457,13 @@ function Generate() {
                       )}
                     </div>
                   ) : (
-                    <div className="rounded-lg border border-border/60 bg-background/60 p-3 text-sm text-foreground/50">
+                    <div className="rounded-lg border border-border/60 bg-card p-3 text-sm text-foreground/50">
                       Rendering in progress...
                     </div>
                   )}
                 </CardContent>
 
-                <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-background/40 py-4">
+                <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-card py-4">
                   <Button
                     variant="outline"
                     size="sm"
@@ -491,7 +491,7 @@ function Generate() {
         </div>
 
         {generations.length === 0 && (
-          <Card className="border-dashed border-border/50 bg-background/60 text-center">
+          <Card className="border-dashed border-border/50 bg-card text-center">
             <CardContent className="space-y-3 py-14">
               <Workflow className="mx-auto h-10 w-10 text-foreground/30" />
               <h3 className="text-lg font-medium text-foreground">

@@ -18,25 +18,25 @@ export default {
     extend: {
       colors: {
         border: 'rgba(255, 255, 255, 0.08)',
-        input: '#2a2d33',
-        ring: 'rgba(86, 156, 214, 0.6)',
-        background: '#1e1e1e',
-        foreground: '#f3f3f3',
+        input: '#2b3038',
+        ring: 'rgba(58, 122, 254, 0.65)',
+        background: '#1b1d23',
+        foreground: '#f5f7fb',
         muted: {
-          DEFAULT: 'rgba(255, 255, 255, 0.05)',
-          foreground: '#b4b9c4',
+          DEFAULT: '#24272f',
+          foreground: '#a5adbd',
         },
         accent: {
-          DEFAULT: '#569cd6',
-          foreground: '#0c1a24',
+          DEFAULT: '#3a7afe',
+          foreground: '#0c1226',
         },
         popover: {
-          DEFAULT: '#252526',
-          foreground: '#f3f3f3',
+          DEFAULT: '#22252d',
+          foreground: '#f5f7fb',
         },
         card: {
-          DEFAULT: '#252526',
-          foreground: '#f3f3f3',
+          DEFAULT: '#23262f',
+          foreground: '#f5f7fb',
         },
       },
       borderRadius: {
