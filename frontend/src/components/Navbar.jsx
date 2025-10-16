@@ -27,7 +27,7 @@ function Navbar() {
           to="/"
           className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground/90 transition hover:text-foreground"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500 text-base font-bold text-white shadow-subtle sm:h-11 sm:w-11">
+          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent text-base font-bold text-accent-foreground shadow-subtle sm:h-11 sm:w-11">
             AI
           </span>
           <span className="hidden text-lg font-semibold sm:inline-flex">
@@ -49,8 +49,8 @@ function Navbar() {
                 className={cn(
                   'rounded-xl px-4 py-2 text-sm font-medium text-foreground/70 transition hover:text-foreground sm:rounded-full',
                   isActive(path)
-                    ? 'bg-indigo-500 text-white shadow-subtle'
-                    : 'hover:bg-foreground/5'
+                    ? 'bg-accent text-accent-foreground shadow-subtle'
+                    : 'hover:bg-muted/60'
                 )}
               >
                 {label}

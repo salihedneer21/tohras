@@ -17,26 +17,26 @@ export default {
     },
     extend: {
       colors: {
-        border: 'rgba(148, 163, 184, 0.16)',
-        input: 'rgba(30, 41, 59, 0.65)',
-        ring: 'rgba(99, 102, 241, 0.65)',
-        background: '#030712',
-        foreground: '#f8fafc',
+        border: 'rgba(255, 255, 255, 0.08)',
+        input: '#2a2d33',
+        ring: 'rgba(86, 156, 214, 0.6)',
+        background: '#1e1e1e',
+        foreground: '#f3f3f3',
         muted: {
-          DEFAULT: 'rgba(148, 163, 184, 0.15)',
-          foreground: '#94a3b8',
+          DEFAULT: 'rgba(255, 255, 255, 0.05)',
+          foreground: '#b4b9c4',
         },
         accent: {
-          DEFAULT: '#6366f1',
-          foreground: '#f8fafc',
+          DEFAULT: '#569cd6',
+          foreground: '#0c1a24',
         },
         popover: {
-          DEFAULT: 'rgba(15, 23, 42, 0.98)',
-          foreground: '#f8fafc',
+          DEFAULT: '#252526',
+          foreground: '#f3f3f3',
         },
         card: {
-          DEFAULT: 'rgba(15, 23, 42, 0.9)',
-          foreground: '#f8fafc',
+          DEFAULT: '#252526',
+          foreground: '#f3f3f3',
         },
       },
       borderRadius: {

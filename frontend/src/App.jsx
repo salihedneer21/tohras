@@ -15,21 +15,21 @@ function App() {
           className:
             'glass-panel border border-border bg-card text-foreground shadow-subtle',
           style: {
-            background: 'rgba(15, 23, 42, 0.92)',
-            color: '#f8fafc',
+            background: '#2a2d33',
+            color: '#f3f3f3',
             borderRadius: '0.8rem',
-            border: '1px solid rgba(148, 163, 184, 0.25)',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
           },
           success: {
             iconTheme: {
-              primary: '#34d399',
-              secondary: '#030712',
+              primary: '#569cd6',
+              secondary: '#1e1e1e',
             },
           },
           error: {
             iconTheme: {
               primary: '#f97316',
-              secondary: '#030712',
+              secondary: '#1e1e1e',
             },
           },
         }}

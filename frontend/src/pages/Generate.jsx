@@ -429,7 +429,7 @@ function Generate() {
                             className="h-48 w-full object-cover"
                             loading="lazy"
                           />
-                          <div className="flex items-center justify-between px-3 py-2 text-xs text-sky-200">
+                          <div className="flex items-center justify-between px-3 py-2 text-xs text-foreground/60">
                             <span>
                               Output {index + 1}
                             </span>
@@ -437,7 +437,7 @@ function Generate() {
                               href={url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 hover:text-sky-100"
+                              className="inline-flex items-center gap-1 text-accent hover:text-accent/80"
                             >
                               <Images className="h-3.5 w-3.5" />
                               View

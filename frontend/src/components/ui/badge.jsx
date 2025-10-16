@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 function Badge({ className, variant = 'default', ...props }) {
   const variants = {
     default:
-      'border border-border/70 bg-foreground/10 text-foreground/80',
+      'border border-accent/40 bg-accent/15 text-accent',
     outline:
       'border border-border/60 bg-transparent text-foreground/70',
     success:

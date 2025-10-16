@@ -450,7 +450,7 @@ function Training() {
                       href={training.logsUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex w-fit items-center gap-2 text-xs text-sky-300 hover:text-sky-200"
+                      className="flex w-fit items-center gap-2 text-xs text-accent hover:text-accent/80"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       View training logs
