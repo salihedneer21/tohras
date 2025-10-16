@@ -49,6 +49,11 @@ export const bookAPI = {
   },
   delete: (id) => api.delete(`/books/${id}`),
   updateStatus: (id, status) => api.patch(`/books/${id}/status`, { status }),
+  getStorybooks: (id) => api.get(`/books/${id}/storybooks`),
+  generateStorybook: (id, data) =>
+    api.post(`/books/${id}/storybooks`, data, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 };
 
 // User API
@@ -98,6 +103,14 @@ export const generationAPI = {
 // Evaluation API
 export const evalAPI = {
   evaluate: (data) => api.post('/evals', data),
+};
+
+// Prompt API
+export const promptAPI = {
+  generate: (formData) =>
+    api.post('/prompts/generate', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 };
 
 export default api;

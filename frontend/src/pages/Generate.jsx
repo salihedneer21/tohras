@@ -69,9 +69,9 @@ function Generate() {
     [generations]
   );
 
-  const fetchData = async () => {
+  const fetchData = async (withSpinner = true) => {
     try {
-      setLoading(true);
+      if (withSpinner) setLoading(true);
       const [usersResponse, generationsResponse] = await Promise.all([
         userAPI.getAll(),
         generationAPI.getAll(),
@@ -119,10 +119,24 @@ function Generate() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     try {
-      await generationAPI.create(formData);
+      const response = await generationAPI.create(formData);
+      const newGeneration = response.data || response;
+      const selectedUser = users.find((user) => user._id === formData.userId);
+      const selectedTraining = trainings.find(
+        (training) => training._id === formData.trainingId
+      );
+
+      setGenerations((prev) => [
+        {
+          ...newGeneration,
+          userId: newGeneration.userId || selectedUser,
+          trainingId: newGeneration.trainingId || selectedTraining,
+        },
+        ...prev,
+      ]);
       toast.success('Generation started! Check the feed below.');
       resetForm();
-      setTimeout(() => fetchData(), 2500);
+      setTimeout(() => fetchData(false), 2500);
     } catch (error) {
       toast.error(`Failed to generate image: ${error.message}`);
     }
@@ -132,7 +146,7 @@ function Generate() {
     try {
       const response = await generationAPI.getById(id);
       toast.success(`Status: ${response.data.status}`);
-      fetchData();
+      fetchData(false);
     } catch (error) {
       toast.error(`Failed to refresh: ${error.message}`);
     }

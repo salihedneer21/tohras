@@ -6,9 +6,11 @@ import { Button } from './ui/button';
 
 const NAV_LINKS = [
   { path: '/books', label: 'Books' },
+  { path: '/prompts', label: 'Prompt Studio' },
   { path: '/users', label: 'Users' },
   { path: '/training', label: 'Training' },
   { path: '/generate', label: 'Generate' },
+  { path: '/storybooks', label: 'Storybooks' },
   { path: '/evaluate', label: 'Evaluate' },
 ];
 

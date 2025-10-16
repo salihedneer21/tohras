@@ -4,11 +4,13 @@ const https = require('https');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const fetch = require('node-fetch');
-const { replicate } = require('../config/replicate');
+const Replicate = require('replicate');
 const { downloadFromS3 } = require('../config/s3');
 
-const DEFAULT_PAGE_WIDTH = 842;
-const DEFAULT_PAGE_HEIGHT = 421;
+const replicate = new Replicate();
+
+const PAGE_WIDTH = 842; // A4 landscape width in points
+const PAGE_HEIGHT = 421; // A4 landscape height in points
 const CHARACTER_MAX_WIDTH_RATIO = 0.4;
 const CHARACTER_MAX_HEIGHT_RATIO = 0.8;
 const TEXT_BLOCK_WIDTH = 300;
@@ -16,7 +18,7 @@ const TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const TEXT_MARGIN = 40;
 const FONT_SIZE = 16;
 const LINE_HEIGHT = FONT_SIZE * 1.4;
-const CHARACTER_BOTTOM_MARGIN = 0;
+
 const HTTP_AGENT = new https.Agent({
   keepAlive: true,
   timeout: 30000,
@@ -40,23 +42,33 @@ const tryEmbedCustomFont = async (pdfDoc, fontPath) => {
     pdfDoc.registerFontkit(fontkit);
     return pdfDoc.embedFont(bytes);
   } catch (error) {
-    console.warn(`⚠️  Failed to load font at ${fontPath}: ${error.message}`);
     return null;
   }
 };
 
-const fetchBufferFromUrl = async (input) => {
-  if (!input) return null;
-  const url = typeof input === 'string' ? input.trim() : '';
-  if (!url) {
-    throw new Error('Image URL is missing or invalid');
+const fetchBufferFromUrl = async (url) => {
+  if (!url) return null;
+  if (typeof url !== 'string') {
+    throw new Error('Asset URL must be a string');
   }
-  const response = await fetch(url, { agent: url.startsWith('https') ? HTTP_AGENT : undefined, timeout: 30000 });
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) {
+    throw new Error('Asset URL must be a non-empty string');
+  }
+
+  const response = await fetch(normalizedUrl, {
+    timeout: 30000,
+    agent: normalizedUrl.startsWith('https') ? HTTP_AGENT : undefined,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36',
+    },
+  });
   if (!response.ok) {
-    throw new Error(`Failed to fetch image from ${url}: ${response.status} ${response.statusText}`);
+    throw new Error(`Failed to fetch asset: ${response.status} ${response.statusText}`);
   }
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  const buffer = await response.buffer();
+  return buffer;
 };
 
 const getImageBuffer = async (source) => {
@@ -81,110 +93,94 @@ const embedImage = async (pdfDoc, buffer) => {
   }
 };
 
-const wrapText = (text, font, maxWidth, fontSize) => {
-  if (!text) return [];
+const resolveReplicateOutputBuffer = async (output) => {
+  if (!output) return null;
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
 
+  if (typeof output === 'string') {
+    return fetchBufferFromUrl(output);
+  }
+
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      const buffer = await resolveReplicateOutputBuffer(item);
+      if (buffer) return buffer;
+    }
+    return null;
+  }
+
+  if (typeof output === 'object') {
+    if (typeof output.url === 'function') {
+      try {
+        const urlValue = output.url();
+        const resolvedUrl = typeof urlValue === 'string' ? urlValue : await urlValue;
+        if (typeof resolvedUrl === 'string' && resolvedUrl) {
+          return fetchBufferFromUrl(resolvedUrl);
+        }
+      } catch (error) {
+        // ignore and continue fallbacks
+      }
+    }
+
+    if (typeof output.url === 'string' && output.url) {
+      return fetchBufferFromUrl(output.url);
+    }
+
+    if (typeof output.href === 'string' && output.href) {
+      return fetchBufferFromUrl(output.href);
+    }
+
+    if (output.output) {
+      return resolveReplicateOutputBuffer(output.output);
+    }
+  }
+
+  return null;
+};
+
+const removeBackground = async (character) => {
+  if (!character) return null;
+  const imageUrl = typeof character.url === 'string' ? character.url.trim() : '';
+  if (!imageUrl) return null;
+  try {
+    const result = await replicate.run('bria/remove-background', {
+      input: {
+        image: imageUrl,
+        content_moderation: false,
+        preserve_partial_alpha: true,
+      },
+    });
+    const processedBuffer = await resolveReplicateOutputBuffer(result);
+    if (!processedBuffer) {
+      throw new Error('Unexpected response from remove-background model');
+    }
+    return processedBuffer;
+  } catch (error) {
+    return null;
+  }
+};
+
+const wrapText = (text, maxWidth, fontSize) => {
+  if (!text) return [];
   const words = text.split(/\s+/);
   const lines = [];
   let currentLine = '';
+  const avgCharWidth = fontSize * 0.45;
 
-  for (const word of words) {
+  words.forEach((word) => {
     const testLine = currentLine ? `${currentLine} ${word}` : word;
-    const width = font.widthOfTextAtSize(testLine, fontSize);
-    if (width <= maxWidth) {
+    const lineWidth = testLine.length * avgCharWidth;
+    if (lineWidth <= maxWidth) {
       currentLine = testLine;
     } else {
       if (currentLine) lines.push(currentLine);
       currentLine = word;
     }
-  }
+  });
 
   if (currentLine) lines.push(currentLine);
   return lines;
-};
-
-const drawTextBlock = (page, lines, font, options) => {
-  const {
-    x,
-    y,
-    fontSize = FONT_SIZE,
-    lineHeight = LINE_HEIGHT,
-    backgroundOpacity = 0.5,
-    maxWidth = TEXT_BLOCK_WIDTH,
-  } = options;
-
-  if (!lines.length) return;
-
-  const totalHeight = lines.length * lineHeight;
-
-  page.drawRectangle({
-    x: x - 20,
-    y: y - totalHeight - 20,
-    width: maxWidth + 40,
-    height: totalHeight + 40,
-    color: rgb(1, 1, 1),
-    opacity: backgroundOpacity,
-    borderColor: rgb(1, 1, 1),
-    borderRadius: 12,
-  });
-
-  lines.forEach((line, index) => {
-    const lineY = y - index * lineHeight - 18;
-
-    // Outline passes
-    [-1, 1].forEach((dx) => {
-      [-1, 1].forEach((dy) => {
-        page.drawText(line, {
-          x: x + dx,
-          y: lineY + dy,
-          size: fontSize,
-          font,
-          color: rgb(1, 1, 1),
-        });
-      });
-    });
-
-    // Main text
-    page.drawText(line, {
-      x,
-      y: lineY,
-      size: fontSize,
-      font,
-      color: rgb(0, 0, 0),
-    });
-  });
-};
-
-const resolveReplicateOutputUrl = (output) => {
-  if (!output) return null;
-  if (typeof output === 'string') return output;
-  if (Array.isArray(output)) return resolveReplicateOutputUrl(output[0]);
-  if (output?.output) return resolveReplicateOutputUrl(output.output);
-  if (output?.url) return output.url;
-  if (output?.href) return output.href;
-  return null;
-};
-
-const removeBackground = async (imageUrl) => {
-  if (!imageUrl) return null;
-  if (typeof imageUrl !== 'string') {
-    throw new Error('Character image URL must be a string');
-  }
-  try {
-    const result = await replicate.run('bria/remove-background', {
-      input: {
-        image: imageUrl,
-      },
-    });
-    const processedUrl = resolveReplicateOutputUrl(result);
-    if (!processedUrl) {
-      throw new Error('Unexpected response from remove-background model');
-    }
-    return fetchBufferFromUrl(processedUrl);
-  } catch (error) {
-    console.warn(`⚠️  Failed to remove background for ${imageUrl}: ${error.message}`);
-    return null;
-  }
 };
 
 async function generateStorybookPdf({ title, pages }) {
@@ -193,6 +189,7 @@ async function generateStorybookPdf({ title, pages }) {
   }
 
   const pdfDoc = await PDFDocument.create();
+  pdfDoc.registerFontkit(fontkit);
   pdfDoc.setTitle(title || 'Storybook');
   pdfDoc.setCreator('AI Book Story');
   pdfDoc.setProducer('AI Book Story');
@@ -214,104 +211,117 @@ async function generateStorybookPdf({ title, pages }) {
 
   for (let index = 0; index < pages.length; index += 1) {
     const pageData = pages[index];
-    const pageWidth = DEFAULT_PAGE_WIDTH;
-    const pageHeight = DEFAULT_PAGE_HEIGHT;
-    let backgroundImage = null;
-
-    if (pageData.background) {
-      try {
-        const backgroundBuffer = await getImageBuffer(pageData.background);
-        backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
-      } catch (error) {
-        console.warn(`⚠️  Failed to render background for page ${index + 1}: ${error.message}`);
-      }
-    }
-
-    const page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     const isCharacterOnRight = index % 2 === 0;
 
-    if (backgroundImage) {
-      page.drawImage(backgroundImage, {
-        x: 0,
-        y: 0,
-        width: pageWidth,
-        height: pageHeight,
-      });
+    const backgroundBuffer = await getImageBuffer(pageData.background);
+    if (backgroundBuffer) {
+      const backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
+      if (backgroundImage) {
+        page.drawImage(backgroundImage, {
+          x: 0,
+          y: 0,
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+        });
+      }
     } else {
       page.drawRectangle({
         x: 0,
         y: 0,
-        width: pageWidth,
-        height: pageHeight,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
         color: rgb(1, 1, 1),
       });
     }
 
-    // Character overlay
-    let charWidth = 0;
-    let charHeight = 0;
-    let charX = 0;
-    const charY = CHARACTER_BOTTOM_MARGIN;
+    let characterBuffer = await removeBackground(pageData.character);
+    if (!characterBuffer) {
+      characterBuffer = await getImageBuffer(pageData.character);
+    }
 
-    if (pageData.character) {
-      try {
-        let removedBgBuffer = null;
-        if (pageData.character.url && pageData.character.url.trim()) {
-          removedBgBuffer = await removeBackground(pageData.character.url.trim());
+    if (characterBuffer) {
+      const characterImage = await embedImage(pdfDoc, characterBuffer);
+      if (characterImage) {
+        const aspectRatio = characterImage.width / characterImage.height;
+        const maxCharWidth = PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO;
+        const maxCharHeight = PAGE_HEIGHT * CHARACTER_MAX_HEIGHT_RATIO;
+
+        let charWidth;
+        let charHeight;
+        if (aspectRatio > maxCharWidth / maxCharHeight) {
+          charWidth = maxCharWidth;
+          charHeight = charWidth / aspectRatio;
+        } else {
+          charHeight = maxCharHeight;
+          charWidth = charHeight * aspectRatio;
         }
-        if (!removedBgBuffer) {
-          removedBgBuffer = await getImageBuffer(pageData.character);
-        }
 
-        const characterImage = await embedImage(pdfDoc, removedBgBuffer);
-        if (characterImage) {
-          const aspectRatio = characterImage.width / characterImage.height;
-          const maxCharWidth = pageWidth * CHARACTER_MAX_WIDTH_RATIO;
-          const maxCharHeight = pageHeight * CHARACTER_MAX_HEIGHT_RATIO;
+        const charX = isCharacterOnRight ? PAGE_WIDTH - charWidth : 0;
+        const charY = 0;
 
-          if (aspectRatio > maxCharWidth / maxCharHeight) {
-            charWidth = maxCharWidth;
-            charHeight = charWidth / aspectRatio;
-          } else {
-            charHeight = maxCharHeight;
-            charWidth = charHeight * aspectRatio;
-          }
-
-          charWidth = Math.min(charWidth, pageWidth);
-          charHeight = Math.min(charHeight, pageHeight);
-          charX = isCharacterOnRight ? Math.max(pageWidth - charWidth, 0) : 0;
-
-          page.drawImage(characterImage, {
-            x: charX,
-            y: charY,
-            width: charWidth,
-            height: charHeight,
-          });
-        }
-      } catch (error) {
-        console.warn(`⚠️  Failed to render character for page ${index + 1}: ${error.message}`);
+        page.drawImage(characterImage, {
+          x: charX,
+          y: charY,
+          width: charWidth,
+          height: charHeight,
+        });
       }
     }
 
-    // Text block
-    const maxAvailableTextWidth = Math.max(pageWidth - TEXT_MARGIN * 2, 80);
-    const preferredTextWidth = Math.min(pageWidth * TEXT_BLOCK_WIDTH_RATIO, TEXT_BLOCK_WIDTH);
-    const textBlockWidth = Math.min(Math.max(preferredTextWidth, 80), maxAvailableTextWidth);
-    const textX = isCharacterOnRight
-      ? TEXT_MARGIN
-      : Math.max(pageWidth - textBlockWidth - TEXT_MARGIN, TEXT_MARGIN);
-    const textY = pageHeight * 0.7;
+    const textBlockWidth = Math.min(
+      Math.max(PAGE_WIDTH * TEXT_BLOCK_WIDTH_RATIO, TEXT_BLOCK_WIDTH),
+      PAGE_WIDTH - TEXT_MARGIN * 2
+    );
 
-    const lines = wrapText(pageData.text || '', bodyFont, textBlockWidth, FONT_SIZE);
-    drawTextBlock(page, lines, bodyFont, {
-      x: textX,
-      y: textY,
-      maxWidth: textBlockWidth,
-    });
+    const textX = isCharacterOnRight ? TEXT_MARGIN : PAGE_WIDTH - textBlockWidth - TEXT_MARGIN;
+    const textY = PAGE_HEIGHT * 0.7;
+
+    const textLines = wrapText(pageData.text || '', textBlockWidth, FONT_SIZE);
+    const textHeight = textLines.length * LINE_HEIGHT;
+
+    if (textLines.length) {
+      page.drawRectangle({
+        x: textX - 20,
+        y: textY - textHeight - 20,
+        width: textBlockWidth + 40,
+        height: textHeight + 40,
+        color: rgb(1, 1, 1),
+        opacity: 0.5,
+        borderColor: rgb(1, 1, 1),
+        borderRadius: 24,
+      });
+
+      textLines.forEach((line, lineIndex) => {
+        const y = textY - lineIndex * LINE_HEIGHT - 18;
+        page.drawText(line, {
+          x: textX,
+          y,
+          size: FONT_SIZE,
+          font: bodyFont,
+          color: rgb(0, 0, 0),
+        });
+      });
+    }
+
+    if (pageData.quote) {
+      const quoteLines = wrapText(pageData.quote, PAGE_WIDTH * 0.3, FONT_SIZE);
+      quoteLines.forEach((line, lineIndex) => {
+        const x = isCharacterOnRight ? PAGE_WIDTH - 260 : TEXT_MARGIN;
+        const y = PAGE_HEIGHT - 80 - lineIndex * LINE_HEIGHT;
+        page.drawText(line, {
+          x,
+          y,
+          size: FONT_SIZE,
+          font: accentFont,
+          color: rgb(0, 0, 0),
+        });
+      });
+    }
 
     page.drawText(`Page ${pageData.order || index + 1}`, {
       x: TEXT_MARGIN,
-      y: Math.max(pageHeight - 35, TEXT_MARGIN),
+      y: Math.max(PAGE_HEIGHT - 35, TEXT_MARGIN),
       size: 14,
       font: accentFont,
       color: rgb(1, 1, 1),

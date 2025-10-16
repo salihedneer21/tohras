@@ -155,9 +155,9 @@ function Books() {
               id: page._id || null,
               text: page.text || '',
               file: null,
-              preview: page.characterImage?.url || null,
+              preview: page.backgroundImage?.url || page.characterImage?.url || null,
               previewIsObject: false,
-              existingImage: page.characterImage || null,
+              existingImage: page.backgroundImage || page.characterImage || null,
               removeImage: false,
             }))
           : [createEmptyPage()],

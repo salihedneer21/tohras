@@ -172,7 +172,7 @@ exports.createBook = async (req, res) => {
       if (pageDefinition.hasNewImage) {
         const file = pageImageFiles[pageImageCursor];
         if (!file) {
-          throw new Error(`Missing character image for page at position ${index + 1}`);
+          throw new Error(`Missing background image for page at position ${index + 1}`);
         }
         pageImageCursor += 1;
         const key = generateBookPageImageKey(slug, pageData.order, file.originalname);
@@ -180,7 +180,7 @@ exports.createBook = async (req, res) => {
           acl: 'public-read',
         });
         uploadedKeys.push(key);
-        pageData.characterImage = buildImageResponse(file, key, url);
+        pageData.backgroundImage = buildImageResponse(file, key, url);
       }
 
       pages.push(pageData);
@@ -315,15 +315,17 @@ exports.updateBook = async (req, res) => {
         pageData._id = existing._id;
       }
 
+      let backgroundImage = existing?.backgroundImage || existing?.characterImage || null;
+
       if (hasNewImage) {
         const file = pageImageFiles[pageImageCursor];
         if (!file) {
-          throw new Error(`Missing character image for page at position ${index + 1}`);
+          throw new Error(`Missing background image for page at position ${index + 1}`);
         }
         pageImageCursor += 1;
 
-        if (existing?.characterImage?.key) {
-          keysToDelete.push(existing.characterImage.key);
+        if (backgroundImage?.key) {
+          keysToDelete.push(backgroundImage.key);
         }
 
         const key = generateBookPageImageKey(slug, order, file.originalname);
@@ -331,13 +333,20 @@ exports.updateBook = async (req, res) => {
           acl: 'public-read',
         });
         uploadedKeys.push(key);
-        pageData.characterImage = buildImageResponse(file, key, url);
+        backgroundImage = buildImageResponse(file, key, url);
       } else if (removeImage) {
-        if (existing?.characterImage?.key) {
-          keysToDelete.push(existing.characterImage.key);
+        if (backgroundImage?.key) {
+          keysToDelete.push(backgroundImage.key);
         }
+        backgroundImage = null;
       } else if (existing?.characterImage) {
-        pageData.characterImage = existing.characterImage;
+        backgroundImage = existing.characterImage; // compatibility fallback
+      }
+
+      if (backgroundImage) {
+        pageData.backgroundImage = backgroundImage;
+      } else {
+        pageData.backgroundImage = null;
       }
 
       pages.push(pageData);
@@ -533,7 +542,14 @@ exports.generateStorybook = async (req, res) => {
 
       const order = requestedOrder || bookPage.order || index + 1;
 
-      const backgroundSource = bookPage.characterImage
+      const backgroundSource = bookPage.backgroundImage
+        ? {
+            key: bookPage.backgroundImage.key,
+            url: bookPage.backgroundImage.url,
+            contentType: bookPage.backgroundImage.contentType,
+            originalName: bookPage.backgroundImage.originalName,
+          }
+        : bookPage.characterImage
         ? {
             key: bookPage.characterImage.key,
             url: bookPage.characterImage.url,
@@ -542,52 +558,50 @@ exports.generateStorybook = async (req, res) => {
           }
         : null;
 
-      const wantsCharacter = normalizeBoolean(
-        typeof inputPage.useCharacter === 'undefined' ? true : inputPage.useCharacter
-      );
       let characterSource = null;
-      if (wantsCharacter) {
-        if (normalizeBoolean(inputPage.hasCharacterUpload)) {
-          const file = characterFiles[characterCursor];
-          if (!file) {
-            throw new Error(`Missing character image for page ${index + 1}`);
-          }
-          characterCursor += 1;
-          const characterKey = generateBookCharacterOverlayKey(bookSlug, order, file.originalname);
-          const { url } = await uploadBufferToS3(file.buffer, characterKey, file.mimetype, {
-            acl: 'public-read',
-          });
-          temporaryUploads.push(characterKey);
+      if (normalizeBoolean(inputPage.hasCharacterUpload)) {
+        const file = characterFiles[characterCursor];
+        if (!file) {
+          throw new Error(`Missing character image for page ${index + 1}`);
+        }
+        characterCursor += 1;
+        const characterKey = generateBookCharacterOverlayKey(bookSlug, order, file.originalname);
+        const { url } = await uploadBufferToS3(file.buffer, characterKey, file.mimetype, {
+          acl: 'public-read',
+        });
+        temporaryUploads.push(characterKey);
+        characterSource = {
+          key: characterKey,
+          url,
+          contentType: file.mimetype,
+          originalName: file.originalname,
+        };
+      } else if (inputPage.characterUrl) {
+        const rawUrl = typeof inputPage.characterUrl === 'string' ? inputPage.characterUrl.trim() : '';
+        if (rawUrl) {
           characterSource = {
-            key: characterKey,
-            url,
-            contentType: file.mimetype,
-            originalName: file.originalname,
+            url: rawUrl,
           };
-        } else if (inputPage.characterUrl) {
-          const rawUrl = typeof inputPage.characterUrl === 'string' ? inputPage.characterUrl.trim() : '';
-          if (rawUrl) {
-            characterSource = {
-              url: rawUrl,
-            };
-          }
         }
       }
-      const includeCharacter = wantsCharacter && characterSource;
+      const includeCharacter = Boolean(characterSource);
 
       const pageText =
         typeof inputPage.text === 'string' && inputPage.text.trim().length > 0
           ? inputPage.text
           : bookPage.text || '';
 
-      storyPages.push({
+      const storyPage = {
         order,
         text: pageText,
+        quote: inputPage.hebrewQuote || inputPage.quote || '',
         background: backgroundSource,
         character: includeCharacter ? characterSource : null,
-        useCharacter: Boolean(includeCharacter),
+        useCharacter: includeCharacter,
         characterPosition: inputPage.characterPosition || 'auto',
-      });
+      };
+
+      storyPages.push(storyPage);
     }
 
     if (characterCursor !== characterFiles.length) {

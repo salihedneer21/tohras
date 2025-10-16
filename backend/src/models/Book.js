@@ -24,6 +24,10 @@ const pageSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    backgroundImage: {
+      type: imageAssetSchema,
+      default: null,
+    },
     characterImage: {
       type: imageAssetSchema,
       default: null,

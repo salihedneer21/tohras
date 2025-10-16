@@ -2,10 +2,12 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Navbar from './components/Navbar';
 import Books from './pages/Books';
+import Prompts from './pages/Prompts';
 import Users from './pages/Users';
 import Training from './pages/Training';
 import Generate from './pages/Generate';
 import Evaluate from './pages/Evaluate';
+import Storybooks from './pages/Storybooks';
 
 function App() {
   return (
@@ -43,10 +45,12 @@ function App() {
             <Routes>
               <Route path="/" element={<Books />} />
               <Route path="/books" element={<Books />} />
+              <Route path="/prompts" element={<Prompts />} />
               <Route path="/users" element={<Users />} />
               <Route path="/training" element={<Training />} />
               <Route path="/generate" element={<Generate />} />
               <Route path="/evaluate" element={<Evaluate />} />
+              <Route path="/storybooks" element={<Storybooks />} />
             </Routes>
           </div>
         </main>
