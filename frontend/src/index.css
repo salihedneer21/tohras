@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background text-foreground min-h-screen antialiased overflow-x-hidden;
+}
+
+.glass-panel {
+  @apply bg-card border border-border/80 shadow-subtle;
+}
+
+.page-wrapper {
+  @apply container py-8 sm:py-10 lg:py-12 space-y-8;
+}
+
+.section-card {
+  @apply glass-panel rounded-lg px-6 py-6 sm:px-8 sm:py-8 space-y-6;
+}
+
+.grid-responsive {
+  @apply grid gap-4 sm:gap-6 lg:gap-8;
+}
