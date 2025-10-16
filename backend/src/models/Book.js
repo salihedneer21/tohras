@@ -32,6 +32,19 @@ const pageSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const pdfAssetSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    url: { type: String, required: true },
+    size: { type: Number, default: 0 },
+    contentType: { type: String, default: 'application/pdf' },
+    title: { type: String, default: '' },
+    pageCount: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const bookSchema = new mongoose.Schema(
   {
     name: {
@@ -67,6 +80,10 @@ const bookSchema = new mongoose.Schema(
     },
     pages: {
       type: [pageSchema],
+      default: [],
+    },
+    pdfAssets: {
+      type: [pdfAssetSchema],
       default: [],
     },
   },

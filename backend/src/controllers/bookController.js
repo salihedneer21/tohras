@@ -5,7 +5,10 @@ const {
   deleteFromS3,
   generateBookCoverKey,
   generateBookPageImageKey,
+  generateBookCharacterOverlayKey,
+  generateBookPdfKey,
 } = require('../config/s3');
+const { generateStorybookPdf } = require('../utils/pdfGenerator');
 
 const slugify = (value) =>
   (value || '')
@@ -415,6 +418,11 @@ exports.deleteBook = async (req, res) => {
         keysToDelete.push(page.characterImage.key);
       }
     });
+    book.pdfAssets.forEach((asset) => {
+      if (asset.key) {
+        keysToDelete.push(asset.key);
+      }
+    });
 
     await Book.findByIdAndDelete(id);
     await cleanupKeys(keysToDelete);
@@ -429,6 +437,200 @@ exports.deleteBook = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete book',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route GET /api/books/:id/storybooks
+ */
+exports.getBookStorybooks = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const book = await Book.findById(id);
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      count: book.pdfAssets.length,
+      data: book.pdfAssets,
+    });
+  } catch (error) {
+    console.error('Error fetching storybooks:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch storybooks',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/books/:id/storybooks
+ */
+exports.generateStorybook = async (req, res) => {
+  const temporaryUploads = [];
+  try {
+    const { id } = req.params;
+    const { title } = req.body;
+    const pagesPayload = parsePagesPayload(req.body.pages);
+
+    const book = await Book.findById(id);
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    if (!pagesPayload.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide at least one page definition to generate the storybook',
+      });
+    }
+
+    if (!book.pages.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Book has no pages to build a story from',
+      });
+    }
+
+    const characterFiles = req.files?.characterImages || [];
+    let characterCursor = 0;
+    const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
+    const pagesById = new Map(book.pages.map((page) => [page._id.toString(), page]));
+
+    const storyPages = [];
+
+    for (let index = 0; index < pagesPayload.length; index += 1) {
+      const inputPage = pagesPayload[index];
+      const pageId = inputPage.id || inputPage._id || inputPage.bookPageId;
+      const requestedOrder = Number(inputPage.order) || 0;
+
+      let bookPage = null;
+      if (pageId) {
+        bookPage = pagesById.get(String(pageId));
+      }
+      if (!bookPage && requestedOrder > 0) {
+        bookPage = book.pages.find((page) => page.order === requestedOrder) || null;
+      }
+      if (!bookPage) {
+        bookPage = book.pages[index] || null;
+      }
+
+      if (!bookPage) {
+        throw new Error(`Unable to locate book page for entry at position ${index + 1}`);
+      }
+
+      const order = requestedOrder || bookPage.order || index + 1;
+
+      const backgroundSource = bookPage.characterImage
+        ? {
+            key: bookPage.characterImage.key,
+            url: bookPage.characterImage.url,
+            contentType: bookPage.characterImage.contentType,
+            originalName: bookPage.characterImage.originalName,
+          }
+        : null;
+
+      const wantsCharacter = normalizeBoolean(
+        typeof inputPage.useCharacter === 'undefined' ? true : inputPage.useCharacter
+      );
+      let characterSource = null;
+      if (wantsCharacter) {
+        if (normalizeBoolean(inputPage.hasCharacterUpload)) {
+          const file = characterFiles[characterCursor];
+          if (!file) {
+            throw new Error(`Missing character image for page ${index + 1}`);
+          }
+          characterCursor += 1;
+          const characterKey = generateBookCharacterOverlayKey(bookSlug, order, file.originalname);
+          const { url } = await uploadBufferToS3(file.buffer, characterKey, file.mimetype, {
+            acl: 'public-read',
+          });
+          temporaryUploads.push(characterKey);
+          characterSource = {
+            key: characterKey,
+            url,
+            contentType: file.mimetype,
+            originalName: file.originalname,
+          };
+        } else if (inputPage.characterUrl) {
+          const rawUrl = typeof inputPage.characterUrl === 'string' ? inputPage.characterUrl.trim() : '';
+          if (rawUrl) {
+            characterSource = {
+              url: rawUrl,
+            };
+          }
+        }
+      }
+      const includeCharacter = wantsCharacter && characterSource;
+
+      const pageText =
+        typeof inputPage.text === 'string' && inputPage.text.trim().length > 0
+          ? inputPage.text
+          : bookPage.text || '';
+
+      storyPages.push({
+        order,
+        text: pageText,
+        background: backgroundSource,
+        character: includeCharacter ? characterSource : null,
+        useCharacter: Boolean(includeCharacter),
+        characterPosition: inputPage.characterPosition || 'auto',
+      });
+    }
+
+    if (characterCursor !== characterFiles.length) {
+      throw new Error(
+        `Received ${characterFiles.length} character images but only ${characterCursor} were mapped. Ensure files align with pages.`
+      );
+    }
+
+    const finalTitle = title || `${book.name} Storybook`;
+
+    const { buffer: pdfBuffer, pageCount } = await generateStorybookPdf({
+      title: finalTitle,
+      pages: storyPages,
+    });
+
+    const pdfKey = generateBookPdfKey(bookSlug, finalTitle);
+    const { url } = await uploadBufferToS3(pdfBuffer, pdfKey, 'application/pdf', { acl: 'public-read' });
+
+    const pdfAsset = {
+      key: pdfKey,
+      url,
+      size: pdfBuffer.length,
+      contentType: 'application/pdf',
+      title: finalTitle,
+      pageCount,
+      createdAt: new Date(),
+    };
+
+    book.pdfAssets.push(pdfAsset);
+    await book.save();
+    await cleanupKeys(temporaryUploads);
+
+    res.status(201).json({
+      success: true,
+      message: 'Storybook generated successfully',
+      data: pdfAsset,
+    });
+  } catch (error) {
+    console.error('Error generating storybook:', error);
+    await cleanupKeys(temporaryUploads);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate storybook',
       error: error.message,
     });
   }

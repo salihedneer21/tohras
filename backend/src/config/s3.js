@@ -118,6 +118,23 @@ const generateBookPageImageKey = (bookSlug, order, originalName) => {
   return buildKey('books', bookSlug, 'pages', `${order}-${timestamp}-${safeName}`);
 };
 
+const generateBookCharacterOverlayKey = (bookSlug, order, originalName) => {
+  const timestamp = Date.now();
+  const safeName = sanitizeFileName(originalName, `character-${order}-${timestamp}.png`);
+  return buildKey('books', bookSlug, 'story', 'characters', `${order}-${timestamp}-${safeName}`);
+};
+
+const ensurePdfExtension = (value) => {
+  if (!value) return 'storybook.pdf';
+  return value.toLowerCase().endsWith('.pdf') ? value : `${value}.pdf`;
+};
+
+const generateBookPdfKey = (bookSlug, title) => {
+  const timestamp = Date.now();
+  const safeName = sanitizeFileName(title, `storybook-${timestamp}.pdf`);
+  return buildKey('books', bookSlug, 'pdfs', `${timestamp}-${ensurePdfExtension(safeName)}`);
+};
+
 module.exports = {
   s3Client,
   uploadBufferToS3,
@@ -127,6 +144,8 @@ module.exports = {
   generateTrainingZipKey,
   generateBookCoverKey,
   generateBookPageImageKey,
+  generateBookCharacterOverlayKey,
+  generateBookPdfKey,
   getPublicUrl,
   downloadFromS3,
   BUCKET,

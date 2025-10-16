@@ -17,7 +17,18 @@ const uploadFields = upload.fields([
   { name: 'pageImages', maxCount: 100 },
 ]);
 
+const storybookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB per background
+  },
+});
+
+const storybookFields = storybookUpload.fields([{ name: 'characterImages', maxCount: 100 }]);
+
 router.get('/', bookController.getAllBooks);
+router.get('/:id/storybooks', bookController.getBookStorybooks);
+router.post('/:id/storybooks', storybookFields, bookController.generateStorybook);
 router.get('/:id', bookController.getBookById);
 router.post('/', uploadFields, validateBookCreate, bookController.createBook);
 router.put('/:id', uploadFields, validateBookUpdate, bookController.updateBook);
