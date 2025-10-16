@@ -8,28 +8,11 @@ const { validateTraining } = require('../middleware/validators');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 200 * 1024 * 1024, // 200MB limit for training ZIP uploads
+    fileSize: 15 * 1024 * 1024, // 15MB per image
   },
 });
 
 const normalizeTrainingPayload = (req, res, next) => {
-  try {
-    if (typeof req.body.imageUrls === 'string') {
-      const trimmed = req.body.imageUrls.trim();
-      req.body.imageUrls = trimmed ? JSON.parse(trimmed) : [];
-    }
-  } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: 'Image URLs must be provided as a JSON array',
-      error: error.message,
-    });
-  }
-
-  if (!Array.isArray(req.body.imageUrls)) {
-    req.body.imageUrls = [];
-  }
-
   try {
     if (typeof req.body.trainingConfig === 'string') {
       const trimmed = req.body.trainingConfig.trim();
@@ -71,7 +54,7 @@ router.get('/:id', trainingController.getTrainingById);
  */
 router.post(
   '/',
-  upload.single('trainingZip'),
+  upload.array('trainingImages', 25),
   normalizeTrainingPayload,
   validateTraining,
   trainingController.startTraining

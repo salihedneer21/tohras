@@ -45,15 +45,52 @@ exports.validateUser = [
     .matches(/^\d{6,15}$/)
     .withMessage('Phone number must be 6-15 digits'),
 
-  body('imageUrls')
-    .optional()
-    .isArray()
-    .withMessage('Image URLs must be an array'),
+];
 
-  body('imageUrls.*')
+const BOOK_GENDERS = ['male', 'female', 'both'];
+const BOOK_STATUSES = ['active', 'inactive'];
+
+exports.validateBookCreate = [
+  body('name')
+    .trim()
+    .notEmpty()
+    .withMessage('Book name is required')
+    .isLength({ min: 3, max: 120 })
+    .withMessage('Book name must be between 3 and 120 characters'),
+  body('description')
     .optional()
-    .isURL()
-    .withMessage('Each image URL must be a valid URL'),
+    .isLength({ max: 1000 })
+    .withMessage('Description cannot exceed 1000 characters'),
+  body('gender')
+    .optional()
+    .isIn(BOOK_GENDERS)
+    .withMessage('Gender must be male, female, or both'),
+  body('status')
+    .optional()
+    .isIn(BOOK_STATUSES)
+    .withMessage('Status must be active or inactive'),
+];
+
+exports.validateBookUpdate = [
+  body('name')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Book name cannot be empty')
+    .isLength({ min: 3, max: 120 })
+    .withMessage('Book name must be between 3 and 120 characters'),
+  body('description')
+    .optional()
+    .isLength({ max: 1000 })
+    .withMessage('Description cannot exceed 1000 characters'),
+  body('gender')
+    .optional()
+    .isIn(BOOK_GENDERS)
+    .withMessage('Gender must be male, female, or both'),
+  body('status')
+    .optional()
+    .isIn(BOOK_STATUSES)
+    .withMessage('Status must be active or inactive'),
 ];
 
 /**
@@ -61,25 +98,6 @@ exports.validateUser = [
  */
 exports.validateTraining = [
   body('userId').notEmpty().withMessage('User ID is required').isMongoId().withMessage('Invalid user ID'),
-
-  body('imageUrls')
-    .custom((value, { req }) => {
-      if (!Array.isArray(value)) {
-        throw new Error('Image URLs must be provided as an array');
-      }
-
-      const hasZipUpload = !!req.file;
-      if (value.length === 0 && !hasZipUpload) {
-        throw new Error('Provide at least one image URL or upload a ZIP file');
-      }
-
-      return true;
-    }),
-
-  body('imageUrls.*')
-    .optional()
-    .isURL()
-    .withMessage('Each image URL must be a valid URL'),
 
   body('modelName')
     .optional()

@@ -1,5 +1,16 @@
 const mongoose = require('mongoose');
 
+const imageAssetSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    url: { type: String, required: true },
+    size: { type: Number, default: 0 },
+    contentType: { type: String, default: null },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 /**
  * User Schema for storing student/child information
  */
@@ -48,22 +59,9 @@ const userSchema = new mongoose.Schema(
       trim: true,
       match: [/^\d{6,15}$/, 'Please enter a valid phone number'],
     },
-    imageUrls: {
-      type: [String],
+    imageAssets: {
+      type: [imageAssetSchema],
       default: [],
-      validate: {
-        validator: function (urls) {
-          return urls.every((url) => {
-            try {
-              new URL(url);
-              return true;
-            } catch (error) {
-              return false;
-            }
-          });
-        },
-        message: 'All image URLs must be valid URLs',
-      },
     },
     status: {
       type: String,
@@ -76,14 +74,17 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Index for faster queries (unique email index)
-userSchema.index({ email: 1 }, { unique: true });
+// Index for faster queries
 userSchema.index({ status: 1 });
 
 // Virtual for full phone number
 userSchema.virtual('fullPhoneNumber').get(function () {
   return `${this.countryCode}${this.phoneNumber}`;
 });
+
+userSchema.methods.removeImageAsset = function (assetId) {
+  this.imageAssets = this.imageAssets.filter((asset) => asset._id.toString() !== assetId.toString());
+};
 
 // Ensure virtuals are included in JSON
 userSchema.set('toJSON', { virtuals: true });

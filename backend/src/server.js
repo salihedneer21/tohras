@@ -10,6 +10,7 @@ const userRoutes = require('./routes/userRoutes');
 const trainingRoutes = require('./routes/trainingRoutes');
 const generationRoutes = require('./routes/generationRoutes');
 const evalRoutes = require('./routes/evalRoutes');
+const bookRoutes = require('./routes/bookRoutes');
 
 // Initialize express app
 const app = express();
@@ -29,6 +30,7 @@ app.use((req, res, next) => {
 });
 
 // API Routes
+app.use('/api/books', bookRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/trainings', trainingRoutes);
 app.use('/api/generations', generationRoutes);
@@ -51,6 +53,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       users: '/api/users',
+      books: '/api/books',
       trainings: '/api/trainings',
       generations: '/api/generations',
       evals: '/api/evals',

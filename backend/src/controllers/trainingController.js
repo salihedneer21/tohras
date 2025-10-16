@@ -1,69 +1,100 @@
 const Training = require('../models/Training');
 const User = require('../models/User');
 const { replicate } = require('../config/replicate');
+const fetch = require('node-fetch');
 const fs = require('fs-extra');
 const path = require('path');
-const fetch = require('node-fetch');
+const os = require('os');
 const archiver = require('archiver');
+const {
+  uploadBufferToS3,
+  deleteFromS3,
+  generateTrainingImageKey,
+  generateTrainingZipKey,
+  downloadFromS3,
+} = require('../config/s3');
 
-/**
- * Download images from URLs and create a ZIP file
- */
-async function createZipFromUrls(imageUrls, outputPath) {
-  const tempDir = path.join(__dirname, '../../temp-images');
-  await fs.ensureDir(tempDir);
+const MAX_TRAINING_IMAGES = 25;
 
-  console.log(`📥 Downloading ${imageUrls.length} images...`);
+const guessContentType = (fileName = '') => {
+  const ext = path.extname(fileName).toLowerCase();
+  switch (ext) {
+    case '.png':
+      return 'image/png';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.bmp':
+      return 'image/bmp';
+    case '.tiff':
+    case '.tif':
+      return 'image/tiff';
+    case '.jpeg':
+    case '.jpg':
+    default:
+      return 'image/jpeg';
+  }
+};
 
-  // Download all images
-  const downloadPromises = imageUrls.map(async (url, index) => {
+const buildFileNameFromAsset = (asset, index) => {
+  if (!asset) {
+    return `training-image-${index + 1}.jpg`;
+  }
+
+  if (asset.originalName) {
+    return asset.originalName;
+  }
+
+  if (asset.key) {
+    return path.basename(asset.key);
+  }
+
+  if (asset.name) {
+    return asset.name;
+  }
+
+  return `training-image-${index + 1}.jpg`;
+};
+
+const normaliseUrl = (url) => {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.toString();
+  } catch (error) {
+    return encodeURI(url);
+  }
+};
+
+const downloadAssetBuffer = async (asset, index) => {
+  if (!asset) return null;
+
+  if (asset.key) {
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to download: ${response.statusText}`);
+      const buffer = await downloadFromS3(asset.key);
+      if (buffer && buffer.length > 0) {
+        return buffer;
       }
-      const buffer = await response.buffer();
-      const ext = path.extname(new URL(url).pathname) || '.jpg';
-      const filename = `image_${index + 1}${ext}`;
-      const filepath = path.join(tempDir, filename);
-      await fs.writeFile(filepath, buffer);
-      console.log(`  ✅ Downloaded: ${filename}`);
-      return filepath;
     } catch (error) {
-      console.error(`  ❌ Failed to download image ${index + 1}:`, error.message);
-      throw error;
+      console.warn(`⚠️  Failed to download asset ${asset.key} from S3: ${error.message}`);
     }
-  });
+  }
 
-  const downloadedFiles = await Promise.all(downloadPromises);
+  if (asset.url) {
+    const targetUrl = normaliseUrl(asset.url);
+    if (!targetUrl) return null;
+    const response = await fetch(targetUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download image from ${targetUrl} (status ${response.status})`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
 
-  // Create ZIP file
-  console.log('📦 Creating ZIP file...');
-  return new Promise((resolve, reject) => {
-    const output = fs.createWriteStream(outputPath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
-
-    output.on('close', async () => {
-      console.log(`✅ ZIP created: ${archive.pointer()} bytes`);
-      // Cleanup temp directory
-      await fs.remove(tempDir);
-      resolve(outputPath);
-    });
-
-    archive.on('error', (err) => {
-      reject(err);
-    });
-
-    archive.pipe(output);
-
-    // Add all downloaded files to ZIP
-    downloadedFiles.forEach((filepath) => {
-      archive.file(filepath, { name: path.basename(filepath) });
-    });
-
-    archive.finalize();
-  });
-}
+  console.warn(`⚠️  Asset at index ${index} had neither key nor URL. Skipping.`);
+  return null;
+};
 
 /**
  * Get all training jobs
@@ -133,17 +164,19 @@ exports.getTrainingById = async (req, res) => {
  * @route POST /api/trainings
  */
 exports.startTraining = async (req, res) => {
-  try {
-    const uploadedZip = req.file;
-    const { userId } = req.body;
-    const imageUrls = Array.isArray(req.body.imageUrls) ? req.body.imageUrls : [];
-    const modelName = req.body.modelName;
-    const trainingConfig = req.body.trainingConfig && typeof req.body.trainingConfig === 'object'
-      ? req.body.trainingConfig
-      : {};
-    const hasZipUpload = Boolean(uploadedZip);
+  const incomingFiles = Array.isArray(req.files) ? req.files : [];
+  let uploadedAssets = [];
+  let generatedZipKey = null;
+  let localZipPath;
 
-    // Validate user exists
+  try {
+    const { userId } = req.body;
+    const modelName = req.body.modelName;
+    const trainingConfigInput =
+      req.body.trainingConfig && typeof req.body.trainingConfig === 'object'
+        ? req.body.trainingConfig
+        : {};
+
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -152,117 +185,157 @@ exports.startTraining = async (req, res) => {
       });
     }
 
-    // Validate image URLs
-    if (!hasZipUpload && imageUrls.length === 0) {
+    const useUserAssets = incomingFiles.length === 0;
+    let sourceAssets = [];
+    let userAssetIdsUsed = [];
+
+    if (useUserAssets) {
+      const userAssets = Array.isArray(user.imageAssets) ? user.imageAssets : [];
+      if (!userAssets.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected user has no uploaded images. Add reference photos before starting training.',
+        });
+      }
+
+      const assetsToProcess = userAssets.slice(0, MAX_TRAINING_IMAGES);
+      userAssetIdsUsed = assetsToProcess.map((asset) => asset._id);
+
+      for (let index = 0; index < assetsToProcess.length; index += 1) {
+        const asset = assetsToProcess[index];
+        try {
+          const buffer = await downloadAssetBuffer(asset, index);
+
+          if (!buffer || buffer.length === 0) {
+            console.warn(`⚠️  Skipping empty buffer for asset index ${index} (user ${userId})`);
+            continue;
+          }
+
+          const originalName = buildFileNameFromAsset(asset, index);
+          sourceAssets.push({
+            buffer,
+            originalName,
+            contentType: asset.contentType || guessContentType(originalName),
+            size: buffer.length,
+          });
+        } catch (downloadError) {
+          throw new Error(
+            `Failed to load user asset "${asset?.originalName || asset?.key || index}" for training: ${downloadError.message}`
+          );
+        }
+      }
+
+      if (!sourceAssets.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Unable to load user images for training. Please verify the uploaded files and try again.',
+        });
+      }
+    } else {
+      sourceAssets = incomingFiles.map((file, index) => ({
+        buffer: file.buffer,
+        originalName: file.originalname || buildFileNameFromAsset(file, index),
+        contentType: file.mimetype || guessContentType(file.originalname),
+        size: file.size,
+      }));
+    }
+
+    if (!sourceAssets.length) {
       return res.status(400).json({
         success: false,
-        message: 'Provide at least one image URL or upload a ZIP file',
+        message: 'No training images available. Upload reference photos for the user before starting training.',
       });
     }
 
-    if (hasZipUpload) {
-      const extension = path.extname(uploadedZip.originalname || '').toLowerCase();
-      if (extension !== '.zip') {
-        return res.status(400).json({
-          success: false,
-          message: 'Uploaded file must be a ZIP archive',
-        });
-      }
-    }
-
-    // Recommend at least 10 images for better results
-    if (!hasZipUpload && imageUrls.length < 10) {
-      console.log(`⚠️  Warning: Only ${imageUrls.length} images provided. Replicate recommends at least 10 images for best results.`);
-    }
-
-    // Create unique model name with timestamp
     const timestamp = Date.now();
     const baseModelName = (modelName || user.name.toLowerCase()).replace(/[^a-z0-9-]/g, '-');
     const uniqueModelName = `${baseModelName}-${timestamp}`;
 
-    // Create ZIP file from image URLs (store permanently)
-    const zipsDir = path.join(__dirname, '../../training-zips');
-    await fs.ensureDir(zipsDir);
-    const zipPath = path.join(zipsDir, `${uniqueModelName}.zip`);
-
-    if (hasZipUpload) {
-      console.log('📦 Using uploaded ZIP file for training images');
-      await fs.writeFile(zipPath, uploadedZip.buffer);
-      console.log(`✅ Uploaded ZIP saved: ${zipPath} (${uploadedZip.size} bytes)`);
-    } else {
-      console.log('🎯 Creating ZIP file from image URLs...');
-      console.log(`📁 ZIP will be saved to: ${zipPath}`);
-      await createZipFromUrls(imageUrls, zipPath);
+    if (sourceAssets.length < 10) {
+      console.log(
+        `⚠️  Only ${sourceAssets.length} training images provided for ${uniqueModelName}. More images improve fine-tuning quality.`
+      );
     }
 
-    // Read the ZIP file as a buffer for Replicate
-    console.log('📤 Reading ZIP file for upload...');
-    const zipBuffer = await fs.readFile(zipPath);
-    console.log(`✅ ZIP file read: ${zipBuffer.length} bytes`);
+    console.log(
+      `📸 Preparing ${sourceAssets.length} training images for ${uniqueModelName} (source: ${
+        useUserAssets ? 'user-library' : 'direct-upload'
+      })`
+    );
 
-    // Upload ZIP file to Replicate Files API to get URL
-    console.log('🌐 Uploading ZIP to Replicate Files API...');
-    const uploadedFile = await replicate.files.create(zipBuffer);
-    const zipUrl = uploadedFile.urls.get;
-    console.log(`✅ ZIP uploaded to Replicate: ${zipUrl}`);
+    const tempDir = path.join(os.tmpdir(), 'training-zips');
+    await fs.ensureDir(tempDir);
+    localZipPath = path.join(tempDir, `${uniqueModelName}.zip`);
 
-    // Use same trigger word as model name for consistency
+    const zipOutput = fs.createWriteStream(localZipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archivePromise = new Promise((resolve, reject) => {
+      zipOutput.on('close', resolve);
+      archive.on('error', reject);
+    });
+    archive.pipe(zipOutput);
+
+    const uploadPromises = sourceAssets.map((asset, index) => {
+      const fileName = asset.originalName || `training-image-${index + 1}.jpg`;
+      archive.append(asset.buffer, { name: fileName });
+      const key = generateTrainingImageKey(uniqueModelName, fileName, index);
+      return uploadBufferToS3(asset.buffer, key, asset.contentType, { acl: 'public-read' }).then(({ url }) => ({
+        key,
+        url,
+        size: asset.size ?? asset.buffer.length,
+        contentType: asset.contentType,
+        uploadedAt: new Date(),
+        originalName: fileName,
+      }));
+    });
+
+    await archive.finalize();
+    await archivePromise;
+
+    uploadedAssets = await Promise.all(uploadPromises);
+
+    const zipBuffer = await fs.readFile(localZipPath);
+    generatedZipKey = generateTrainingZipKey(uniqueModelName);
+    const { url: zipUrl } = await uploadBufferToS3(zipBuffer, generatedZipKey, 'application/zip', { acl: 'public-read' });
+    await fs.remove(localZipPath);
+
+    console.log('🌐 Uploaded dataset ZIP to S3:', zipUrl);
+
     const triggerWord = baseModelName;
-
-    // Prepare training input for Replicate
     const trainingInput = {
-      input_images: zipUrl, // Use URL from Files API
-      steps: trainingConfig?.steps ? Number(trainingConfig.steps) : 1000,
-      lora_rank: trainingConfig?.loraRank ? Number(trainingConfig.loraRank) : 16,
-      batch_size: trainingConfig?.batchSize ? Number(trainingConfig.batchSize) : 1,
-      learning_rate: trainingConfig?.learningRate ? Number(trainingConfig.learningRate) : 0.0004,
+      input_images: zipUrl,
+      steps: trainingConfigInput?.steps ? Number(trainingConfigInput.steps) : 1000,
+      lora_rank: trainingConfigInput?.loraRank ? Number(trainingConfigInput.loraRank) : 16,
+      batch_size: trainingConfigInput?.batchSize ? Number(trainingConfigInput.batchSize) : 1,
+      learning_rate: trainingConfigInput?.learningRate ? Number(trainingConfigInput.learningRate) : 0.0004,
       trigger_word: triggerWord,
     };
 
     console.log('🚀 Starting training with Replicate...');
-    console.log('Training Config:', {
-      steps: trainingInput.steps,
-      lora_rank: trainingInput.lora_rank,
-      batch_size: trainingInput.batch_size,
-      learning_rate: trainingInput.learning_rate,
-      trigger_word: trainingInput.trigger_word,
-    });
+    console.log('Training Config:', trainingInput);
 
-    // Prepare training configuration
     const trainingOptions = {
       input: trainingInput,
     };
 
-    // Add destination if REPLICATE_USERNAME is configured
     if (process.env.REPLICATE_USERNAME) {
       const destinationPath = `${process.env.REPLICATE_USERNAME}/${uniqueModelName}`;
       trainingOptions.destination = destinationPath;
-      console.log('📦 Destination:', destinationPath);
-      console.log('🔤 Trigger word:', triggerWord);
-
-      // Try to create the model first with unique name (allows multiple trainings)
       try {
-        console.log('🔨 Creating new model on Replicate...');
-        await replicate.models.create(
-          process.env.REPLICATE_USERNAME,
-          uniqueModelName,
-          {
-            visibility: 'private',
-            hardware: 'gpu-t4',
-            description: `Fine-tuned Flux model for ${user.name} (trigger: ${triggerWord})`,
-          }
-        );
-        console.log('✅ Model created successfully');
+        await replicate.models.create(process.env.REPLICATE_USERNAME, uniqueModelName, {
+          visibility: 'private',
+          hardware: 'gpu-t4',
+          description: `Fine-tuned Flux model for ${user.name} (trigger: ${triggerWord})`,
+        });
+        console.log('✅ Model created on Replicate');
       } catch (modelError) {
         console.error('❌ Model creation failed:', modelError.message);
-        // If model creation fails, throw error to prevent training
         throw new Error(`Failed to create model: ${modelError.message}`);
       }
     } else {
       console.log('⚠️  No REPLICATE_USERNAME set - training will not be saved to account');
     }
 
-    // Start training on Replicate
     const training = await replicate.trainings.create(
       'ostris',
       'flux-dev-lora-trainer',
@@ -271,25 +344,30 @@ exports.startTraining = async (req, res) => {
     );
 
     console.log('✅ Training started:', training.id);
-    console.log(`💾 ZIP file saved permanently at: ${zipPath}`);
 
-    // Save training to database
+    const trainingConfigRecord = {
+      steps: trainingInput.steps,
+      learningRate: trainingInput.learning_rate,
+      batchSize: trainingInput.batch_size,
+      triggerWord,
+      source: useUserAssets ? 'user-library' : 'upload',
+      zipPath: generatedZipKey,
+      zipUrl,
+    };
+
+    if (useUserAssets && userAssetIdsUsed.length) {
+      trainingConfigRecord.userAssetIds = userAssetIdsUsed;
+    }
+
     const newTraining = await Training.create({
       userId,
       replicateTrainingId: training.id,
       modelName: uniqueModelName,
-      imageUrls,
+      imageUrls: uploadedAssets.map((asset) => asset.url),
+      imageAssets: uploadedAssets,
       status: training.status,
       logsUrl: training.logs,
-      trainingConfig: {
-        steps: trainingInput.steps,
-        learningRate: trainingInput.learning_rate,
-        batchSize: trainingInput.batch_size,
-        triggerWord: triggerWord,
-        zipPath: zipPath,
-        source: hasZipUpload ? 'upload' : 'urls',
-        originalZipName: hasZipUpload ? uploadedZip.originalname : null,
-      },
+      trainingConfig: trainingConfigRecord,
     });
 
     res.status(201).json({
@@ -299,6 +377,25 @@ exports.startTraining = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error starting training:', error);
+    if (generatedZipKey) {
+      try {
+        await deleteFromS3(generatedZipKey);
+      } catch (cleanupError) {
+        console.warn('⚠️  Failed to delete zip from S3 after error:', cleanupError.message);
+      }
+    }
+    if (uploadedAssets.length) {
+      await Promise.all(
+        uploadedAssets.map((asset) =>
+          deleteFromS3(asset.key).catch((cleanupError) =>
+            console.warn('⚠️  Failed to delete image from S3 after error:', cleanupError.message)
+          )
+        )
+      );
+    }
+    if (localZipPath) {
+      await fs.remove(localZipPath).catch(() => {});
+    }
     res.status(500).json({
       success: false,
       message: 'Failed to start training',

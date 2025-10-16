@@ -3,6 +3,18 @@ const mongoose = require('mongoose');
 /**
  * Generation Schema for storing image generation history
  */
+const generationImageAssetSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    url: { type: String, required: true },
+    size: { type: Number, default: 0 },
+    contentType: { type: String, default: null },
+    uploadedAt: { type: Date, default: Date.now },
+    originalName: { type: String, default: null },
+  },
+  { _id: true }
+);
+
 const generationSchema = new mongoose.Schema(
   {
     userId: {
@@ -96,6 +108,10 @@ const generationSchema = new mongoose.Schema(
     },
     imageUrls: {
       type: [String],
+      default: [],
+    },
+    imageAssets: {
+      type: [generationImageAssetSchema],
       default: [],
     },
     error: {

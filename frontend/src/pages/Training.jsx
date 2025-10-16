@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   Boxes,
   CloudUpload,
-  FileInput,
   RefreshCw,
   Rocket,
   Ban,
   DownloadCloud,
   ExternalLink,
+  Maximize2,
+  Loader2,
 } from 'lucide-react';
 import { userAPI, trainingAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -30,11 +31,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import ImageViewer from '@/components/ImageViewer';
+import { formatFileSize } from '@/utils/file';
 
 const createInitialForm = () => ({
   userId: '',
-  imageUrls: [],
   modelName: '',
+  trainingConfig: {},
 });
 
 const STATUS_VARIANTS = {
@@ -50,9 +53,9 @@ function Training() {
   const [trainings, setTrainings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [zipFile, setZipFile] = useState(null);
   const [formData, setFormData] = useState(createInitialForm);
-  const [imageUrl, setImageUrl] = useState('');
+  const [viewerImage, setViewerImage] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -64,6 +67,23 @@ function Training() {
   const completedCount = useMemo(
     () => trainings.filter((t) => t.status === 'succeeded').length,
     [trainings]
+  );
+
+  const selectedUser = useMemo(
+    () => users.find((candidate) => candidate._id === formData.userId),
+    [users, formData.userId]
+  );
+
+  const selectedUserAssets = selectedUser?.imageAssets ?? [];
+  const selectedUserAssetCount = selectedUserAssets.length;
+
+  const totalDatasetSize = useMemo(
+    () =>
+      selectedUserAssets.reduce(
+        (sum, asset) => sum + (typeof asset.size === 'number' ? asset.size : 0),
+        0
+      ),
+    [selectedUserAssets]
   );
 
   const fetchData = async (withSpinner = true) => {
@@ -87,68 +107,67 @@ function Training() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleAddImageUrl = () => {
-    const trimmed = imageUrl.trim();
-    if (!trimmed) return;
-    setFormData((prev) => ({
-      ...prev,
-      imageUrls: [...prev.imageUrls, trimmed],
-    }));
-    setImageUrl('');
-  };
-
-  const handleRemoveImageUrl = (index) => {
-    setFormData((prev) => ({
-      ...prev,
-      imageUrls: prev.imageUrls.filter((_, idx) => idx !== index),
-    }));
-  };
-
-  const handleLoadUserImages = () => {
-    const selectedUser = users.find((user) => user._id === formData.userId);
-    if (!selectedUser || !(selectedUser.imageUrls?.length > 0)) {
-      toast.error('No stored images found for this user');
-      return;
-    }
-
-    setFormData((prev) => ({
-      ...prev,
-      imageUrls: Array.from(new Set([...prev.imageUrls, ...selectedUser.imageUrls])),
-    }));
-    toast.success('User gallery imported');
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
-
+    if (isSubmitting) return;
     if (!formData.userId) {
       toast.error('Select a user before starting training');
       return;
     }
 
-    if (formData.imageUrls.length === 0 && !zipFile) {
-      toast.error('Add image URLs or upload a ZIP of training images');
+    if (!selectedUser) {
+      toast.error('Unable to locate the selected user. Refresh and try again.');
+      return;
+    }
+
+    if (selectedUserAssetCount === 0) {
+      toast.error('This user has no reference photos yet. Upload images on the Users page first.');
       return;
     }
 
     try {
-      let payload = formData;
-      if (zipFile) {
-        payload = new FormData();
-        payload.append('userId', formData.userId);
-        payload.append('modelName', formData.modelName);
-        payload.append('imageUrls', JSON.stringify(formData.imageUrls));
-        payload.append('trainingZip', zipFile);
+      setIsSubmitting(true);
+      const payload = {
+        userId: formData.userId,
+      };
+
+      if (formData.modelName) {
+        payload.modelName = formData.modelName;
+      }
+      if (Object.keys(formData.trainingConfig || {}).length > 0) {
+        payload.trainingConfig = formData.trainingConfig;
       }
 
       await trainingAPI.create(payload);
       toast.success('Training kicked off');
       resetForm();
-      fetchData();
+      fetchData(false);
     } catch (error) {
       toast.error(`Failed to start training: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
+
+  const openTrainingAsset = (asset) => {
+    if (!asset?.url) return;
+    setViewerImage({
+      src: asset.url,
+      title: asset.originalName || asset.key || 'Training image',
+      downloadUrl: asset.url,
+      sizeLabel:
+        typeof asset.size === 'number'
+          ? formatFileSize(asset.size)
+          : undefined,
+    });
+  };
+
+  const handleViewerClose = useCallback(() => {
+    if (viewerImage?.shouldRevoke && viewerImage?.src?.startsWith('blob:')) {
+      URL.revokeObjectURL(viewerImage.src);
+    }
+    setViewerImage(null);
+  }, [viewerImage]);
 
   const handleRefreshTraining = async (id) => {
     try {
@@ -173,10 +192,13 @@ function Training() {
   };
 
   const resetForm = () => {
+    if (viewerImage?.shouldRevoke && viewerImage?.src?.startsWith('blob:')) {
+      URL.revokeObjectURL(viewerImage.src);
+    }
     setFormData(createInitialForm());
-    setImageUrl('');
-    setZipFile(null);
+    setViewerImage(null);
     setShowForm(false);
+    setIsSubmitting(false);
   };
 
   if (loading) {
@@ -198,7 +220,7 @@ function Training() {
             Model Training
           </h2>
           <p className="mt-1 text-sm text-foreground/60">
-            Upload curated datasets or a ready-made ZIP to fine-tune your characters.
+            Upload curated portrait datasets to fine-tune your characters.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -220,7 +242,7 @@ function Training() {
           <CardHeader>
             <CardTitle>Start a new fine-tune</CardTitle>
             <CardDescription>
-              Combine stored gallery links or upload a zipped dataset. ZIP uploads take precedence.
+              Pick a user and we’ll bundle their uploaded reference photos into a ZIP for Replicate automatically.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -258,124 +280,148 @@ function Training() {
 
               <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <Label>Training image URLs</Label>
+                  <div className="space-y-2">
+                    <Label>Training dataset</Label>
                     <p className="text-xs text-foreground/45">
-                      Replicate recommends at least 10 diverse portraits for best results.
+                      We’ll compress the selected user’s reference photos into a training-ready ZIP automatically.
                     </p>
+                    {selectedUser ? (
+                      <>
+                        {selectedUserAssetCount < 10 && (
+                          <p className="text-xs text-amber-300">
+                            Fewer than 10 images uploaded. Add more variety for better results.
+                          </p>
+                        )}
+                        <p className="text-xs text-foreground/45">
+                          Selected: {selectedUserAssetCount} · Total size {formatFileSize(totalDatasetSize)}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-foreground/45">
+                        Choose a user to review the dataset that will be sent for training.
+                      </p>
+                    )}
                   </div>
-                  <Badge variant="outline">
-                    {formData.imageUrls.length} URLs attached
-                  </Badge>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-                  <Input
-                    name="imageUrl"
-                    placeholder="https://cdn.domain.com/dataset/image-01.jpg"
-                    value={imageUrl}
-                    onChange={(event) => setImageUrl(event.target.value)}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="gap-2"
-                    onClick={handleAddImageUrl}
-                  >
-                    <FileInput className="h-4 w-4" />
-                    Add URL
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="gap-2"
-                    disabled={!formData.userId}
-                    onClick={handleLoadUserImages}
-                  >
-                    <DownloadCloud className="h-4 w-4" />
-                    Load user images
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{selectedUserAssetCount} images</Badge>
+                  </div>
                 </div>
 
-                {formData.imageUrls.length > 0 && (
-                  <div className="grid gap-2">
-                    {formData.imageUrls.map((url, index) => (
-                      <div
-                        key={`${url}-${index}`}
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/50 bg-card px-3 py-2 text-xs text-foreground/70"
-                      >
-                        <span className="flex-1 truncate">{url}</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-8 px-2 text-red-300 hover:bg-red-500/10 hover:text-red-200"
-                          onClick={() => handleRemoveImageUrl(index)}
-                        >
-                          Remove
-                        </Button>
+                {selectedUser ? (
+                  selectedUserAssetCount > 0 ? (
+                    <div className="overflow-hidden rounded-xl border border-border/60">
+                      <div className="hidden bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-foreground/45 sm:grid sm:grid-cols-[auto,1fr,auto]">
+                        <span className="pl-2">Preview</span>
+                        <span>File</span>
+                        <span className="text-right">Size</span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3 rounded-xl border border-border/60 bg-muted p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label htmlFor="trainingZip">Upload training ZIP</Label>
-                    <p className="text-xs text-foreground/45">
-                      Overrides image URLs when provided. Max 200MB.
+                      <ul className="divide-y divide-border/60">
+                        {selectedUserAssets.map((asset, index) => {
+                          if (!asset?.url) {
+                            return null;
+                          }
+                          const displayName =
+                            asset?.originalName ||
+                            asset?.key?.split('/').pop() ||
+                            `image-${index + 1}.jpg`;
+                          const sizeLabel =
+                            typeof asset?.size === 'number'
+                              ? formatFileSize(asset.size)
+                              : '—';
+                          const uploadedAt =
+                            asset?.uploadedAt && !Number.isNaN(new Date(asset.uploadedAt)?.getTime())
+                              ? new Date(asset.uploadedAt)
+                              : null;
+                          const uploadedLabel = uploadedAt ? uploadedAt.toLocaleDateString() : null;
+                          return (
+                            <li
+                              key={asset?._id || asset?.key || index}
+                              className="flex flex-col gap-3 px-4 py-3 sm:grid sm:grid-cols-[auto,1fr,auto] sm:items-center sm:gap-4"
+                            >
+                              <button
+                                type="button"
+                                className="group relative h-28 w-full overflow-hidden rounded-lg border border-border/40 bg-card sm:h-16 sm:w-28"
+                                onClick={() =>
+                                  openTrainingAsset({
+                                    ...asset,
+                                    originalName: displayName,
+                                  })
+                                }
+                              >
+                                <img
+                                  src={asset?.url}
+                                  alt={displayName}
+                                  className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+                                />
+                                <span className="absolute inset-0 bg-black/30 opacity-0 transition group-hover:opacity-100" />
+                                <Maximize2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition group-hover:opacity-100" />
+                              </button>
+                              <div className="min-w-0 space-y-1">
+                                <p className="truncate text-sm font-medium text-foreground">
+                                  {displayName}
+                                </p>
+                                {uploadedLabel ? (
+                                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">
+                                    Uploaded {uploadedLabel}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs uppercase tracking-[0.2em] text-foreground/45">
+                                    Source: user library
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 sm:justify-end">
+                                <span className="text-xs font-medium text-foreground/60">
+                                  {sizeLabel}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-foreground hover:text-accent"
+                                  onClick={() =>
+                                    openTrainingAsset({
+                                      ...asset,
+                                      originalName: displayName,
+                                    })
+                                  }
+                                >
+                                  <Maximize2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-foreground/50">
+                      This user has no uploaded images yet. Add reference photos from the Users page before training.
                     </p>
-                  </div>
-                  {zipFile && (
-                    <Badge
-                      variant="outline"
-                      className="max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap text-xs"
-                    >
-                      {zipFile.name}
-                    </Badge>
-                  )}
-                </div>
-
-                <Input
-                  id="trainingZip"
-                  type="file"
-                  accept=".zip"
-                  className="cursor-pointer"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    const allowed = [
-                      'application/zip',
-                      'application/x-zip-compressed',
-                      'multipart/x-zip',
-                      'application/octet-stream',
-                    ];
-                    if (file && !allowed.includes(file.type) && !file.name.toLowerCase().endsWith('.zip')) {
-                      toast.error('Please choose a valid .zip archive');
-                      event.target.value = '';
-                      return;
-                    }
-                    setZipFile(file || null);
-                  }}
-                />
-                {zipFile && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="h-8 w-fit px-3 text-xs text-foreground/60 hover:text-foreground"
-                    onClick={() => setZipFile(null)}
-                  >
-                    Remove ZIP
-                  </Button>
+                  )
+                ) : (
+                  <p className="text-xs text-foreground/50">
+                    Select a user to preview the images that will be packaged.
+                  </p>
                 )}
               </div>
 
               <CardFooter className="flex flex-col-reverse gap-3 border-none p-0 sm:flex-row sm:justify-end">
-                <Button type="button" variant="secondary" onClick={resetForm}>
+                <Button type="button" variant="secondary" onClick={resetForm} disabled={isSubmitting}>
                   Cancel
                 </Button>
-                <Button type="submit" className="gap-2">
-                  <Rocket className="h-4 w-4" />
-                  Launch training
+                <Button type="submit" className="gap-2" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Launching…
+                    </>
+                  ) : (
+                    <>
+                      <Rocket className="h-4 w-4" />
+                      Launch training
+                    </>
+                  )}
                 </Button>
               </CardFooter>
             </form>
@@ -415,7 +461,7 @@ function Training() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-foreground/50">
                     <Boxes className="h-3.5 w-3.5" />
-                    <span>{training.imageUrls?.length || 0} URLs</span>
+                    <span>{training.imageAssets?.length || training.imageUrls?.length || 0} images</span>
                     {training.trainingConfig?.source === 'upload' && (
                       <span className="rounded-full bg-foreground/10 px-2 py-1 text-[11px] uppercase tracking-wide text-foreground/55">
                         ZIP upload
@@ -427,10 +473,16 @@ function Training() {
                   <p>
                     User · {training.userId?.name} ({training.userId?.email})
                   </p>
-                  {training.trainingConfig?.originalZipName && (
-                    <p className="break-words text-foreground/60">
-                      Uploaded archive: {training.trainingConfig.originalZipName}
-                    </p>
+                  {training.trainingConfig?.zipUrl && (
+                    <a
+                      href={training.trainingConfig.zipUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex w-fit items-center gap-2 text-xs text-accent hover:text-accent/80"
+                    >
+                      <DownloadCloud className="h-3.5 w-3.5" />
+                      Download dataset ZIP
+                    </a>
                   )}
                   {training.completedAt && (
                     <p>Completed {new Date(training.completedAt).toLocaleString()}</p>
@@ -456,6 +508,48 @@ function Training() {
                       View training logs
                     </a>
                   )}
+                  {training.imageAssets?.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-foreground/50">
+                        <p className="uppercase tracking-[0.25em] text-foreground/45">Dataset preview</p>
+                        <span className="font-medium">{training.imageAssets.length} files</span>
+                      </div>
+                      <div className="grid max-h-64 grid-cols-3 gap-2 overflow-y-auto pr-1">
+                        {training.imageAssets.map((asset, index) => {
+                          if (!asset?.url) return null;
+                          return (
+                            <button
+                              type="button"
+                              key={asset._id || asset.key || index}
+                              className="group relative h-20 overflow-hidden rounded-md border border-border/40"
+                              onClick={() => openTrainingAsset(asset)}
+                            >
+                              <img
+                                src={asset.url}
+                                alt={asset.originalName || asset.key || `training-${index + 1}`}
+                                className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                              />
+                              <span className="absolute inset-0 bg-black/35 opacity-0 transition group-hover:opacity-100" />
+                              <Maximize2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition group-hover:opacity-100" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : training.imageUrls?.length > 0 ? (
+                    <div className="space-y-1 text-xs text-foreground/50">
+                      <p className="uppercase tracking-[0.25em]">Dataset links</p>
+                      <ul className="space-y-1">
+                        {training.imageUrls.slice(0, 6).map((url) => (
+                          <li key={url} className="truncate">
+                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-accent/80">
+                              {url}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </CardContent>
                 <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-card py-4">
                   <Button
@@ -502,6 +596,8 @@ function Training() {
           </Card>
         )}
       </div>
+
+      <ImageViewer open={Boolean(viewerImage)} image={viewerImage} onClose={handleViewerClose} />
     </div>
   );
 }

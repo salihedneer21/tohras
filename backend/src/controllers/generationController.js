@@ -2,8 +2,10 @@ const Generation = require('../models/Generation');
 const Training = require('../models/Training');
 const User = require('../models/User');
 const { replicate } = require('../config/replicate');
+const fetch = require('node-fetch');
 const fs = require('fs-extra');
 const path = require('path');
+const { uploadBufferToS3, generateImageKey, downloadFromS3 } = require('../config/s3');
 
 /**
  * Get all generations
@@ -210,17 +212,83 @@ async function runGeneration(generationId, modelVersion, input) {
 
     console.log('✅ Generation completed:', output);
 
-    // Extract image URLs
-    const imageUrls = Array.isArray(output) ? output.map((item) => item.url()) : [output.url()];
+    const generation = await Generation.findById(generationId);
+    if (!generation) {
+      throw new Error(`Generation ${generationId} no longer exists`);
+    }
+
+    const outputs = Array.isArray(output) ? output : [output];
+    if (!outputs.length) {
+      throw new Error('No output images returned from Replicate');
+    }
+
+    const targetFormat = generation.generationConfig?.outputFormat || 'webp';
+    const formatToMime = {
+      webp: 'image/webp',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+    };
+    const contentType = formatToMime[targetFormat.toLowerCase()] || 'application/octet-stream';
+
+    const resolveUrl = (item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return item;
+      if (typeof item.url === 'function') {
+        try {
+          return item.url();
+        } catch (err) {
+          console.warn('⚠️  Failed to resolve url() from output item', err);
+          return null;
+        }
+      }
+      if (typeof item.url === 'string') return item.url;
+      if (item.href) return item.href;
+      return null;
+    };
+
+    const uploadedImageUrls = [];
+    const uploadedAssets = [];
+
+    for (let index = 0; index < outputs.length; index++) {
+      const imageUrl = resolveUrl(outputs[index]);
+      if (!imageUrl) {
+        throw new Error(`Unable to resolve image URL for output index ${index}`);
+      }
+
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download image ${index + 1}: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const key = generateImageKey(generation.userId, `${generationId}-${index + 1}.${targetFormat}`);
+      const { url: s3Url } = await uploadBufferToS3(buffer, key, response.headers.get('content-type') || contentType, {
+        acl: 'public-read',
+      });
+
+      uploadedImageUrls.push(s3Url);
+      uploadedAssets.push({
+        key,
+        url: s3Url,
+        size: buffer.length,
+        contentType: response.headers.get('content-type') || contentType,
+        originalName: `${generationId}-${index + 1}.${targetFormat}`,
+        uploadedAt: new Date(),
+      });
+    }
 
     // Update generation record
     await Generation.findByIdAndUpdate(generationId, {
       status: 'succeeded',
-      imageUrls,
+      imageUrls: uploadedImageUrls,
+      imageAssets: uploadedAssets,
       completedAt: new Date(),
     });
 
-    console.log('📸 Images saved:', imageUrls);
+    console.log('📸 Images saved to S3:', uploadedImageUrls);
   } catch (error) {
     console.error('❌ Generation failed:', error);
     await Generation.findByIdAndUpdate(generationId, {
@@ -258,21 +326,57 @@ exports.downloadImage = async (req, res) => {
     await fs.ensureDir(imagesFolder);
 
     const downloadedFiles = [];
+    const assets = generation.imageAssets || [];
+    const defaultFormat = generation.generationConfig?.outputFormat || 'webp';
 
-    for (let i = 0; i < generation.imageUrls.length; i++) {
-      const imageUrl = generation.imageUrls[i];
-      const fileName = `${generation._id}_${i}.${generation.generationConfig.outputFormat}`;
+    const inferContentType = (value) => {
+      if (!value) return null;
+      const lowered = value.toLowerCase();
+      if (lowered.includes('jpeg') || lowered.endsWith('.jpg') || lowered.endsWith('.jpeg')) return 'image/jpeg';
+      if (lowered.includes('png') || lowered.endsWith('.png')) return 'image/png';
+      if (lowered.includes('webp') || lowered.endsWith('.webp')) return 'image/webp';
+      return null;
+    };
+
+    const urls = generation.imageUrls?.length
+      ? generation.imageUrls
+      : assets.map((asset) => asset?.url).filter(Boolean);
+
+    for (let i = 0; i < urls.length; i++) {
+      const asset = assets[i];
+      const imageUrl = asset?.url || urls[i];
+      const extensionFromOriginal = asset?.originalName ? path.extname(asset.originalName) : '';
+      const extension = extensionFromOriginal || `.${defaultFormat}`;
+      const safeExtension = extension.startsWith('.') ? extension : `.${extension}`;
+      const fileName = `${generation._id}_${i}${safeExtension}`;
       const filePath = path.join(imagesFolder, fileName);
 
-      // Download and save the image
-      const response = await fetch(imageUrl);
-      const buffer = await response.arrayBuffer();
-      await fs.writeFile(filePath, Buffer.from(buffer));
+      let buffer;
+      let contentType = asset?.contentType || inferContentType(extension) || 'application/octet-stream';
+
+      if (asset?.key) {
+        buffer = await downloadFromS3(asset.key);
+        if (!buffer) {
+          throw new Error(`Failed to fetch S3 object for key ${asset.key}`);
+        }
+      } else {
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to download image ${i + 1}: ${response.status} ${response.statusText}`);
+        }
+        contentType = response.headers.get('content-type') || contentType;
+        const arrayBuffer = await response.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
+      }
+
+      await fs.writeFile(filePath, buffer);
 
       downloadedFiles.push({
         fileName,
         filePath,
         url: imageUrl,
+        contentType,
+        size: buffer.length,
       });
     }
 

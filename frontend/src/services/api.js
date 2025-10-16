@@ -27,6 +27,30 @@ api.interceptors.response.use(
   }
 );
 
+// Book API
+export const bookAPI = {
+  getAll: (params) => api.get('/books', { params }),
+  getById: (id) => api.get(`/books/${id}`),
+  create: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/books', data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    }
+    return api.post('/books', data);
+  },
+  update: (id, data) => {
+    if (data instanceof FormData) {
+      return api.put(`/books/${id}`, data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    }
+    return api.put(`/books/${id}`, data);
+  },
+  delete: (id) => api.delete(`/books/${id}`),
+  updateStatus: (id, status) => api.patch(`/books/${id}/status`, { status }),
+};
+
 // User API
 export const userAPI = {
   getAll: () => api.get('/users'),
@@ -34,8 +58,15 @@ export const userAPI = {
   create: (data) => api.post('/users', data),
   update: (id, data) => api.put(`/users/${id}`, data),
   delete: (id) => api.delete(`/users/${id}`),
-  addImageUrls: (id, imageUrls) => api.post(`/users/${id}/images`, { imageUrls }),
-  removeImageUrl: (id, imageUrl) => api.delete(`/users/${id}/images`, { data: { imageUrl } }),
+  uploadImage: (id, file, onUploadProgress) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    return api.post(`/users/${id}/images/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress,
+    });
+  },
+  deleteImage: (id, assetId) => api.delete(`/users/${id}/images/${assetId}`),
 };
 
 // Training API

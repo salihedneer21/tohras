@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
+const { uploadBufferToS3, deleteFromS3, generateImageKey } = require('../config/s3');
 
 /**
  * Get all users
@@ -72,16 +73,7 @@ exports.createUser = async (req, res) => {
       });
     }
 
-    const { name, age, gender, email, countryCode, phoneNumber, imageUrls } = req.body;
-
-    // Check if user with email already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email already exists',
-      });
-    }
+    const { name, age, gender, email, countryCode, phoneNumber } = req.body;
 
     const user = await User.create({
       name,
@@ -90,7 +82,7 @@ exports.createUser = async (req, res) => {
       email,
       countryCode,
       phoneNumber,
-      imageUrls: imageUrls || [],
+      imageAssets: [],
     });
 
     res.status(201).json({
@@ -123,7 +115,7 @@ exports.updateUser = async (req, res) => {
       });
     }
 
-    const { name, age, gender, email, countryCode, phoneNumber, imageUrls, status } = req.body;
+    const { name, age, gender, email, countryCode, phoneNumber, status } = req.body;
 
     // Check if user exists
     let user = await User.findById(req.params.id);
@@ -132,17 +124,6 @@ exports.updateUser = async (req, res) => {
         success: false,
         message: 'User not found',
       });
-    }
-
-    // Check if email is being changed and if it's already taken
-    if (email && email !== user.email) {
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email already in use by another user',
-        });
-      }
     }
 
     // Update user fields
@@ -155,7 +136,6 @@ exports.updateUser = async (req, res) => {
         email,
         countryCode,
         phoneNumber,
-        imageUrls,
         status,
       },
       { new: true, runValidators: true }
@@ -191,6 +171,16 @@ exports.deleteUser = async (req, res) => {
       });
     }
 
+    if (Array.isArray(user.imageAssets) && user.imageAssets.length > 0) {
+      await Promise.all(
+        user.imageAssets.map((asset) =>
+          deleteFromS3(asset.key).catch((err) =>
+            console.warn('⚠️  Failed to delete image from S3 during user removal:', err.message)
+          )
+        )
+      );
+    }
+
     await User.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
@@ -209,17 +199,15 @@ exports.deleteUser = async (req, res) => {
 };
 
 /**
- * Add image URLs to user
- * @route POST /api/users/:id/images
+ * Upload user image asset
+ * @route POST /api/users/:id/images/upload
  */
-exports.addImageUrls = async (req, res) => {
+exports.uploadImageAsset = async (req, res) => {
   try {
-    const { imageUrls } = req.body;
-
-    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+    if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide an array of image URLs',
+        message: 'Please provide an image file',
       });
     }
 
@@ -232,39 +220,45 @@ exports.addImageUrls = async (req, res) => {
       });
     }
 
-    // Add new URLs to existing ones
-    user.imageUrls = [...new Set([...user.imageUrls, ...imageUrls])];
+    const { uploadBufferToS3, generateImageKey } = require('../config/s3');
+
+    const key = generateImageKey(user._id, req.file.originalname);
+    const { url } = await uploadBufferToS3(req.file.buffer, key, req.file.mimetype);
+
+    const asset = {
+      key,
+      url,
+      size: req.file.size,
+      contentType: req.file.mimetype,
+      uploadedAt: new Date(),
+      originalName: req.file.originalname,
+    };
+
+    user.imageAssets.push(asset);
     await user.save();
 
     res.status(200).json({
       success: true,
-      message: 'Image URLs added successfully',
-      data: user,
+      message: 'Image uploaded successfully',
+      data: asset,
     });
   } catch (error) {
-    console.error('Error adding image URLs:', error);
+    console.error('Error uploading image asset:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to add image URLs',
+      message: 'Failed to upload image',
       error: error.message,
     });
   }
 };
 
 /**
- * Remove image URL from user
- * @route DELETE /api/users/:id/images
+ * Remove user image asset
+ * @route DELETE /api/users/:id/images/:assetId
  */
-exports.removeImageUrl = async (req, res) => {
+exports.removeImageAsset = async (req, res) => {
   try {
-    const { imageUrl } = req.body;
-
-    if (!imageUrl) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide an image URL to remove',
-      });
-    }
+    const { assetId } = req.params;
 
     const user = await User.findById(req.params.id);
 
@@ -275,19 +269,30 @@ exports.removeImageUrl = async (req, res) => {
       });
     }
 
-    user.imageUrls = user.imageUrls.filter((url) => url !== imageUrl);
+    const asset = user.imageAssets.id(assetId);
+    if (!asset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Image not found for this user',
+      });
+    }
+
+    const { deleteFromS3 } = require('../config/s3');
+    await deleteFromS3(asset.key);
+
+    user.removeImageAsset(assetId);
     await user.save();
 
     res.status(200).json({
       success: true,
-      message: 'Image URL removed successfully',
-      data: user,
+      message: 'Image removed successfully',
+      data: user.imageAssets,
     });
   } catch (error) {
-    console.error('Error removing image URL:', error);
+    console.error('Error removing image asset:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to remove image URL',
+      message: 'Failed to remove image',
       error: error.message,
     });
   }

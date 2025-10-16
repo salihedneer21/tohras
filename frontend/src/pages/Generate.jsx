@@ -385,6 +385,10 @@ function Generate() {
         <div className="grid gap-4">
           {generations.map((generation) => {
             const statusMeta = STATUS_LABEL[generation.status] ?? STATUS_LABEL.processing;
+            const imageItems = (generation.imageAssets?.length
+              ? generation.imageAssets
+              : generation.imageUrls || []
+            ).map((item) => (typeof item === 'string' ? { url: item } : item));
             return (
               <Card key={generation._id} className="flex flex-col">
                 <CardHeader className="space-y-3">
@@ -416,15 +420,15 @@ function Generate() {
                 </CardHeader>
 
                 <CardContent className="space-y-4">
-                  {generation.imageUrls && generation.imageUrls.length > 0 ? (
+                  {imageItems.length > 0 ? (
                     <div className="grid gap-3 sm:grid-cols-2">
-                      {generation.imageUrls.map((url, index) => (
+                      {imageItems.map((image, index) => (
                         <div
                           key={`${generation._id}-${index}`}
                           className="overflow-hidden rounded-xl border border-border/70 bg-card"
                         >
                           <img
-                            src={url}
+                            src={image.url}
                             alt={`Generation ${index + 1}`}
                             className="h-48 w-full object-cover"
                             loading="lazy"
@@ -434,7 +438,7 @@ function Generate() {
                               Output {index + 1}
                             </span>
                             <a
-                              href={url}
+                              href={image.downloadUrl || image.url}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="inline-flex items-center gap-1 text-accent hover:text-accent/80"

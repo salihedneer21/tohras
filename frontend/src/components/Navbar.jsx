@@ -5,7 +5,8 @@ import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
 
 const NAV_LINKS = [
-  { path: '/', label: 'Users' },
+  { path: '/books', label: 'Books' },
+  { path: '/users', label: 'Users' },
   { path: '/training', label: 'Training' },
   { path: '/generate', label: 'Generate' },
   { path: '/evaluate', label: 'Evaluate' },
@@ -19,13 +20,18 @@ function Navbar() {
     setIsMenuOpen(false);
   }, [location.pathname]);
 
-  const isActive = (path) => location.pathname === path;
+  const isActive = (path) => {
+    if (path === '/books') {
+      return location.pathname === '/' || location.pathname === '/books';
+    }
+    return location.pathname === path;
+  };
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-border/60 bg-background/95 backdrop-blur">
       <div className="container flex h-16 items-center justify-between gap-4 sm:h-20">
         <Link
-          to="/"
+          to="/books"
           className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground/90 transition hover:text-foreground"
         >
           <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent text-base font-bold text-accent-foreground shadow-subtle sm:h-11 sm:w-11">

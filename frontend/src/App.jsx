@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Navbar from './components/Navbar';
+import Books from './pages/Books';
 import Users from './pages/Users';
 import Training from './pages/Training';
 import Generate from './pages/Generate';
@@ -40,7 +41,9 @@ function App() {
         <main className="pt-24 sm:pt-28">
           <div className="page-wrapper">
             <Routes>
-              <Route path="/" element={<Users />} />
+              <Route path="/" element={<Books />} />
+              <Route path="/books" element={<Books />} />
+              <Route path="/users" element={<Users />} />
               <Route path="/training" element={<Training />} />
               <Route path="/generate" element={<Generate />} />
               <Route path="/evaluate" element={<Evaluate />} />

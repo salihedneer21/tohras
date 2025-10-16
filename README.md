@@ -7,6 +7,7 @@ A complete full-stack application for fine-tuning Flux LoRA models using Replica
 - **User Management**: Add, edit, and manage multiple users (children) with their information
 - **Model Fine-Tuning**: Train custom Flux LoRA models for each user using their images
 - **Image Generation**: Generate custom images using fine-tuned models with customizable parameters
+- **Image Asset Management**: Upload, preview, and curate training photos stored securely on Amazon S3
 - **Multi-User Support**: Manage and generate images for multiple users simultaneously
 - **Real-time Status Tracking**: Monitor training and generation progress
 - **Modern UI**: Clean, responsive React interface with beautiful gradients and animations
@@ -90,6 +91,10 @@ REPLICATE_API_TOKEN=your_replicate_api_token_here
 OPENROUTER_API_KEY=your_openrouter_key_here
 # Optional: override default model
 # OPENROUTER_MODEL=openai/gpt-4.1-mini
+AWS_ACCESS_KEY_ID=your_aws_access_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret
+AWS_REGION=your_bucket_region
+AWS_S3_BUCKET=book-story-ai-generate
 CORS_ORIGIN=http://localhost:3000
 ```
 
@@ -103,6 +108,8 @@ npm start
 ```
 
 The backend API will be available at `http://localhost:5000`
+
+> ℹ️ The AWS credentials must have `s3:PutObject` and `s3:DeleteObject` permissions for the bucket specified by `AWS_S3_BUCKET` (default `book-story-ai-generate`).
 
 ### Frontend Setup
 
@@ -147,11 +154,10 @@ The frontend will be available at `http://localhost:3000`
 1. Navigate to the "Training" page
 2. Click "+ Start Training" button
 3. Select a user from the dropdown
-4. Add training image URLs:
-   - Manually add URLs one by one, OR
-   - Click "Load User Images" to use images associated with the user
-5. Optionally provide a custom model name
-6. Click "Start Training"
+4. Upload 10-15 clear portrait photos (drag in multiple at once)
+5. Review the thumbnails and remove any image that doesn’t meet the guidelines
+6. Optionally provide a custom model name
+7. Click "Start Training" – the app automatically zips the photos, stores them in S3, and kicks off the Replicate job
 
 **Monitor Training:**
 - Training status will be displayed in the training list
@@ -197,13 +203,13 @@ The frontend will be available at `http://localhost:3000`
 - `POST /api/users` - Create new user
 - `PUT /api/users/:id` - Update user
 - `DELETE /api/users/:id` - Delete user
-- `POST /api/users/:id/images` - Add image URLs
-- `DELETE /api/users/:id/images` - Remove image URL
+- `POST /api/users/:id/images/upload` - Upload an image to S3 for the user
+- `DELETE /api/users/:id/images/:assetId` - Remove an uploaded image
 
 ### Training
 - `GET /api/trainings` - Get all trainings
 - `GET /api/trainings/:id` - Get training by ID
-- `POST /api/trainings` - Start new training
+- `POST /api/trainings` - Start new training (uploads images, zips to S3, kicks off Replicate job)
 - `GET /api/trainings/:id/status` - Check training status
 - `POST /api/trainings/:id/cancel` - Cancel training
 - `GET /api/trainings/user/:userId/successful` - Get successful trainings for user

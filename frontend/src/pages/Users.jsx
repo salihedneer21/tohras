@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Users as UsersIcon, UserPlus, UserCircle2, Trash2, Pencil } from 'lucide-react';
+import { Users as UsersIcon, UserPlus, UserCircle2, Trash2, Pencil, UploadCloud, Loader2, Maximize2 } from 'lucide-react';
 import { userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,6 +20,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import ImageViewer from '@/components/ImageViewer';
+import { formatFileSize } from '@/utils/file';
 
 const createEmptyForm = () => ({
   name: '',
@@ -28,7 +30,7 @@ const createEmptyForm = () => ({
   email: '',
   countryCode: '+1',
   phoneNumber: '',
-  imageUrls: [],
+  images: [],
 });
 
 function Users() {
@@ -37,14 +39,25 @@ function Users() {
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState(createEmptyForm);
   const [editingId, setEditingId] = useState(null);
-  const [imageUrl, setImageUrl] = useState('');
+  const [viewerAsset, setViewerAsset] = useState(null);
+  const [uploadingUserId, setUploadingUserId] = useState(null);
+  const [formImages, setFormImages] = useState([]);
+  const [isSavingUser, setIsSavingUser] = useState(false);
+  const [userUploadStatus, setUserUploadStatus] = useState({});
+
+  const handleViewerClose = useCallback(() => {
+    if (viewerAsset?.shouldRevoke && viewerAsset?.src?.startsWith('blob:')) {
+      URL.revokeObjectURL(viewerAsset.src);
+    }
+    setViewerAsset(null);
+  }, [viewerAsset]);
 
   useEffect(() => {
     fetchUsers();
   }, []);
 
   const totalImages = useMemo(
-    () => users.reduce((sum, user) => sum + (user.imageUrls?.length || 0), 0),
+    () => users.reduce((sum, user) => sum + (user.imageAssets?.length || 0), 0),
     [users]
   );
 
@@ -69,38 +82,78 @@ function Users() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleAddImageUrl = () => {
-    const trimmed = imageUrl.trim();
-    if (!trimmed) return;
-
-    setFormData((prev) => ({
-      ...prev,
-      imageUrls: [...prev.imageUrls, trimmed],
-    }));
-    setImageUrl('');
-  };
-
-  const handleRemoveImageUrl = (index) => {
-    setFormData((prev) => ({
-      ...prev,
-      imageUrls: prev.imageUrls.filter((_, idx) => idx !== index),
-    }));
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
+    setIsSavingUser(true);
     try {
       if (editingId) {
         await userAPI.update(editingId, formData);
         toast.success('User updated successfully');
+        resetForm();
+        fetchUsers();
+        return;
+      }
+
+      const response = await userAPI.create(formData);
+      const newUserId = response.data._id;
+
+      if (formImages.length > 0) {
+        for (const imageItem of formImages) {
+          try {
+            setFormImages((prev) =>
+              prev.map((img) =>
+                img.id === imageItem.id
+                  ? { ...img, status: 'uploading', progress: 0 }
+                  : img
+              )
+            );
+
+            await userAPI.uploadImage(newUserId, imageItem.file, (progressEvent) => {
+              const total = progressEvent.total ?? imageItem.file.size ?? 1;
+              const fraction = total ? progressEvent.loaded / total : 0;
+              const percent = Math.round(Math.min(fraction * 100, 100));
+
+              setFormImages((prev) =>
+                prev.map((img) =>
+                  img.id === imageItem.id ? { ...img, progress: percent } : img
+                )
+              );
+            });
+
+            setFormImages((prev) =>
+              prev.map((img) =>
+                img.id === imageItem.id
+                  ? { ...img, status: 'done', progress: 100 }
+                  : img
+              )
+            );
+          } catch (error) {
+            setFormImages((prev) =>
+              prev.map((img) =>
+                img.id === imageItem.id
+                  ? { ...img, status: 'error' }
+                  : img
+              )
+            );
+            throw error;
+          }
+        }
+
+        toast.success(
+          `User created with ${formImages.length} image${
+            formImages.length > 1 ? 's' : ''
+          }`
+        );
       } else {
-        await userAPI.create(formData);
         toast.success('User created successfully');
       }
+
       resetForm();
       fetchUsers();
     } catch (error) {
       toast.error(`Failed to save user: ${error.message}`);
+    } finally {
+      setIsSavingUser(false);
     }
   };
 
@@ -112,7 +165,6 @@ function Users() {
       email: user.email,
       countryCode: user.countryCode,
       phoneNumber: user.phoneNumber,
-      imageUrls: user.imageUrls || [],
     });
     setEditingId(user._id);
     setShowForm(true);
@@ -133,8 +185,148 @@ function Users() {
   const resetForm = () => {
     setFormData(createEmptyForm());
     setEditingId(null);
-    setImageUrl('');
     setShowForm(false);
+    formImages.forEach((img) => URL.revokeObjectURL(img.preview));
+    setFormImages([]);
+    if (viewerAsset?.shouldRevoke && viewerAsset?.src?.startsWith('blob:')) {
+      URL.revokeObjectURL(viewerAsset.src);
+    }
+    setViewerAsset(null);
+    setIsSavingUser(false);
+  };
+
+  const handleUploadImages = async (userId, fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    setUploadingUserId(userId);
+    const total = files.length;
+    setUserUploadStatus((prev) => ({
+      ...prev,
+      [userId]: {
+        status: 'preparing',
+        total,
+        completed: 0,
+        progress: 0,
+        currentFile: files[0]?.name || null,
+        currentPercent: 0,
+      },
+    }));
+
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+
+        setUserUploadStatus((prev) => ({
+          ...prev,
+          [userId]: {
+            ...(prev[userId] || {}),
+            status: 'uploading',
+            total,
+            completed: index,
+            currentFile: file.name,
+            currentPercent: 0,
+            progress: Math.round((index / total) * 100),
+          },
+        }));
+
+        await userAPI.uploadImage(userId, file, (progressEvent) => {
+          const totalBytes = progressEvent.total ?? file.size ?? 1;
+          const fraction = totalBytes ? progressEvent.loaded / totalBytes : 0;
+          const percent = Math.round(Math.min(fraction * 100, 100));
+          const overallPercent = Math.round(
+            Math.min(((index + fraction) / total) * 100, 100)
+          );
+
+          setUserUploadStatus((prev) => ({
+            ...prev,
+            [userId]: {
+              ...(prev[userId] || {}),
+              status: 'uploading',
+              total,
+              completed: index,
+              currentFile: file.name,
+              currentPercent: percent,
+              progress: overallPercent,
+            },
+          }));
+        });
+      }
+
+      setUserUploadStatus((prev) => ({
+        ...prev,
+        [userId]: {
+          ...(prev[userId] || {}),
+          status: 'done',
+          total,
+          completed: total,
+          currentFile: null,
+          currentPercent: 100,
+          progress: 100,
+        },
+      }));
+
+      toast.success(`Uploaded ${files.length} image${files.length > 1 ? 's' : ''}`);
+      fetchUsers();
+    } catch (error) {
+      setUserUploadStatus((prev) => ({
+        ...prev,
+        [userId]: {
+          ...(prev[userId] || {}),
+          status: 'error',
+        },
+      }));
+      toast.error(`Failed to upload images: ${error.message}`);
+    } finally {
+      setUploadingUserId(null);
+      setTimeout(() => {
+        setUserUploadStatus((prev) => {
+          const copy = { ...prev };
+          delete copy[userId];
+          return copy;
+        });
+      }, 2000);
+    }
+  };
+
+  const handleDeleteImage = async (userId, assetId) => {
+    if (!window.confirm('Remove this image?')) return;
+    try {
+      await userAPI.deleteImage(userId, assetId);
+      toast.success('Image removed');
+      fetchUsers();
+    } catch (error) {
+      toast.error(`Failed to remove image: ${error.message}`);
+    }
+  };
+
+  const handleFormImageUpload = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    const mapped = files.map((file, index) => ({
+      id: `${file.name}-${Date.now()}-${index}`,
+      file,
+      preview: URL.createObjectURL(file),
+      status: 'pending',
+      progress: 0,
+    }));
+
+    setFormImages((prev) => [...prev, ...mapped]);
+    event.target.value = '';
+  };
+
+  const handleRemoveFormImage = (id) => {
+    setFormImages((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target?.status === 'uploading') {
+        return prev;
+      }
+      if (target) {
+        URL.revokeObjectURL(target.preview);
+      }
+      return prev.filter((item) => item.id !== id);
+    });
   };
 
   if (loading) {
@@ -264,54 +456,142 @@ function Users() {
                 </div>
               </div>
 
-              <div className="grid gap-3">
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-                  <div className="grid gap-2">
-                    <Label htmlFor="imageUrl">Training image URL</Label>
-                    <Input
-                      id="imageUrl"
-                      type="url"
-                      value={imageUrl}
-                      onChange={(event) => setImageUrl(event.target.value)}
-                      placeholder="https://assets.domain.com/photo.jpg"
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="h-11 sm:mt-6"
-                    onClick={handleAddImageUrl}
-                  >
-                    Add URL
-                  </Button>
-                </div>
-
-                {formData.imageUrls.length > 0 && (
-                  <div className="grid gap-2 rounded-xl border border-border/60 bg-muted p-4">
-                    <p className="text-xs uppercase tracking-[0.25em] text-foreground/40">
-                      Attached images ({formData.imageUrls.length})
-                    </p>
-                    <div className="grid gap-2">
-                      {formData.imageUrls.map((url, index) => (
-                        <div
-                          key={url + index}
-                          className="flex min-w-0 items-center justify-between gap-4 rounded-lg border border-border/40 bg-card px-3 py-2 text-sm text-foreground/70"
-                        >
-                          <span className="flex-1 truncate">{url}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-8 px-2 text-xs text-red-300 hover:bg-red-500/10 hover:text-red-200"
-                            onClick={() => handleRemoveImageUrl(index)}
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
+              {!editingId && (
+                <div className="space-y-3 rounded-xl border border-border/60 bg-muted p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <Label>Upload images (optional)</Label>
+                      <p className="text-xs text-foreground/45">
+                        Add reference photos now, or upload them later
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{formImages.length} images</Badge>
+                      <label
+                        htmlFor="formImages"
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border/60 bg-card px-3 py-2 text-xs font-semibold text-foreground/70 hover:bg-card/80"
+                      >
+                        <UploadCloud className="h-4 w-4" />
+                        Upload
+                      </label>
+                      <input
+                        id="formImages"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handleFormImageUpload}
+                      />
                     </div>
                   </div>
-                )}
-              </div>
+
+                  {formImages.length > 0 && (
+                    <div className="overflow-hidden rounded-xl border border-border/60">
+                      <div className="hidden bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-foreground/45 sm:grid sm:grid-cols-[auto,1fr,auto]">
+                        <span className="pl-2">Preview</span>
+                        <span>File</span>
+                        <span className="text-right">Status</span>
+                      </div>
+                      <ul className="divide-y divide-border/60">
+                        {formImages.map((item) => {
+                          const statusLabel =
+                            item.status === 'uploading'
+                              ? 'Uploading'
+                              : item.status === 'done'
+                              ? 'Uploaded'
+                              : item.status === 'error'
+                              ? 'Failed'
+                              : 'Ready';
+                          const progressColor =
+                            item.status === 'error'
+                              ? 'bg-red-400'
+                              : item.status === 'done'
+                              ? 'bg-emerald-400'
+                              : 'bg-accent';
+
+                          return (
+                            <li
+                              key={item.id}
+                              className="flex flex-col gap-3 px-4 py-3 sm:grid sm:grid-cols-[auto,1fr,auto] sm:items-center sm:gap-4"
+                            >
+                              <button
+                                type="button"
+                                className="group relative h-24 w-full overflow-hidden rounded-lg border border-border/40 bg-card sm:h-16 sm:w-24"
+                                onClick={() =>
+                                  setViewerAsset({
+                                    src: item.preview,
+                                    title: item.file.name,
+                                    sizeLabel: formatFileSize(item.file.size),
+                                    shouldRevoke: true,
+                                  })
+                                }
+                              >
+                                <img
+                                  src={item.preview}
+                                  alt={item.file.name}
+                                  className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                                />
+                                <span className="absolute inset-0 bg-black/20 opacity-0 transition group-hover:opacity-100" />
+                                <Maximize2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition group-hover:opacity-100" />
+                              </button>
+                              <div className="min-w-0 space-y-2">
+                                <div>
+                                  <p className="truncate text-sm font-medium text-foreground">
+                                    {item.file.name}
+                                  </p>
+                                  <p className="text-xs text-foreground/50">
+                                    {formatFileSize(item.file.size)}
+                                  </p>
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-foreground/45">
+                                    <span>{statusLabel}</span>
+                                    <span>{item.progress}%</span>
+                                  </div>
+                                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/10">
+                                    <div
+                                      className={`h-full ${progressColor} transition-all`}
+                                      style={{ width: `${item.progress}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 sm:justify-end">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-foreground hover:text-accent"
+                                  onClick={() =>
+                                    setViewerAsset({
+                                      src: item.preview,
+                                      title: item.file.name,
+                                      sizeLabel: formatFileSize(item.file.size),
+                                      shouldRevoke: true,
+                                    })
+                                  }
+                                >
+                                  <Maximize2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  disabled={item.status === 'uploading'}
+                                  className="h-8 w-8 text-red-300 transition hover:text-red-200 disabled:text-foreground/30 disabled:hover:text-foreground/30"
+                                  onClick={() => handleRemoveFormImage(item.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
                 <Button
@@ -322,8 +602,19 @@ function Users() {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" className="sm:w-auto">
-                  {editingId ? 'Update user' : 'Create user'}
+                <Button
+                  type="submit"
+                  className="sm:w-auto gap-2"
+                  disabled={isSavingUser}
+                >
+                  {isSavingUser && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {editingId
+                    ? isSavingUser
+                      ? 'Updating...'
+                      : 'Update user'
+                    : isSavingUser
+                    ? 'Creating...'
+                    : 'Create user'}
                 </Button>
               </div>
             </form>
@@ -332,8 +623,10 @@ function Users() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {users.map((user) => (
-          <Card key={user._id} className="flex flex-col justify-between">
+        {users.map((user) => {
+          const uploadState = userUploadStatus[user._id];
+          return (
+            <Card key={user._id} className="flex flex-col justify-between">
             <CardHeader className="flex flex-row items-start justify-between space-y-0">
               <div className="space-y-1">
                 <CardTitle className="text-lg">{user.name}</CardTitle>
@@ -343,7 +636,7 @@ function Users() {
                 </CardDescription>
               </div>
               <Badge variant="outline" className="text-xs">
-                {user.imageUrls?.length || 0} images
+                {user.imageAssets?.length || 0} images
               </Badge>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -356,6 +649,126 @@ function Users() {
                 <p className="text-foreground/60">
                   {user.countryCode} {user.phoneNumber}
                 </p>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-foreground/80">Reference photos</p>
+                  <div className="flex items-center gap-2">
+                    {uploadingUserId === user._id && <Loader2 className="h-4 w-4 animate-spin text-accent" />}
+                    <label
+                      htmlFor={`upload-${user._id}`}
+                      className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border/60 bg-muted px-3 py-2 text-xs font-semibold text-foreground/70 hover:bg-muted/80"
+                    >
+                      <UploadCloud className="h-4 w-4" />
+                      Upload
+                    </label>
+                    <input
+                      id={`upload-${user._id}`}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => {
+                        handleUploadImages(user._id, event.target.files);
+                        event.target.value = '';
+                      }}
+                      disabled={uploadingUserId === user._id}
+                    />
+                  </div>
+                </div>
+                {uploadState && (
+                  <div className="rounded-lg border border-border/60 bg-muted/60 px-3 py-2 text-xs text-foreground/60">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate">
+                        {uploadState.status === 'uploading'
+                          ? uploadState.currentFile || 'Uploading...'
+                          : uploadState.status === 'done'
+                          ? 'Upload complete'
+                          : uploadState.status === 'error'
+                          ? 'Upload failed'
+                          : 'Preparing upload'}
+                      </span>
+                      <span>{uploadState.progress}%</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-background/40">
+                      <div
+                        className={`h-full ${
+                          uploadState.status === 'error' ? 'bg-red-400' : 'bg-accent'
+                        } transition-all`}
+                        style={{ width: `${uploadState.progress}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-[11px] uppercase tracking-[0.25em] text-foreground/45">
+                      {Math.min(uploadState.completed, uploadState.total)} of {uploadState.total} uploaded
+                    </p>
+                  </div>
+                )}
+                {user.imageAssets?.length ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    {user.imageAssets.map((asset) => (
+                      <div
+                        key={asset._id || asset.key}
+                        className="group relative overflow-hidden rounded-md border border-border/40 bg-card"
+                      >
+                        <button
+                          type="button"
+                          className="group relative block h-20 w-full overflow-hidden"
+                          onClick={() =>
+                            setViewerAsset({
+                              src: asset.url,
+                              title: asset.originalName || asset.key || 'Reference photo',
+                              downloadUrl: asset.url,
+                              sizeLabel:
+                                typeof asset.size === 'number'
+                                  ? formatFileSize(asset.size)
+                                  : undefined,
+                            })
+                          }
+                        >
+                          <img
+                            src={asset.url}
+                            alt={asset.originalName || asset.key}
+                            className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                          />
+                          <span className="absolute inset-0 bg-black/25 opacity-0 transition group-hover:opacity-100" />
+                          <Maximize2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition group-hover:opacity-100" />
+                        </button>
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="pointer-events-auto h-7 w-7 text-foreground hover:text-accent"
+                            onClick={() =>
+                              setViewerAsset({
+                                src: asset.url,
+                                title: asset.originalName || asset.key || 'Reference photo',
+                                downloadUrl: asset.url,
+                                sizeLabel:
+                                  typeof asset.size === 'number'
+                                    ? formatFileSize(asset.size)
+                                    : undefined,
+                              })
+                            }
+                          >
+                            <Maximize2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="pointer-events-auto h-7 w-7 text-red-300 hover:text-red-200"
+                            onClick={() => handleDeleteImage(user._id, asset._id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-foreground/50">No images uploaded yet.</p>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -381,7 +794,8 @@ function Users() {
               </div>
             </CardContent>
           </Card>
-        ))}
+        );
+      })}
       </div>
 
       {users.length === 0 && (
@@ -401,6 +815,7 @@ function Users() {
           </CardContent>
         </Card>
       )}
+      <ImageViewer open={Boolean(viewerAsset)} image={viewerAsset} onClose={handleViewerClose} />
     </div>
   );
 }

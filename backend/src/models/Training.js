@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+const trainingImageAssetSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    url: { type: String, required: true },
+    size: { type: Number, default: 0 },
+    contentType: { type: String, default: null },
+    uploadedAt: { type: Date, default: Date.now },
+    originalName: { type: String, default: null },
+  },
+  { _id: true }
+);
+
 /**
  * Training Schema for storing fine-tuning jobs
  */
@@ -24,6 +36,10 @@ const trainingSchema = new mongoose.Schema(
     },
     imageUrls: {
       type: [String],
+      default: [],
+    },
+    imageAssets: {
+      type: [trainingImageAssetSchema],
       default: [],
     },
     status: {
@@ -72,13 +88,22 @@ const trainingSchema = new mongoose.Schema(
       },
       source: {
         type: String,
-        enum: ['urls', 'upload'],
+        enum: ['urls', 'upload', 'user-library'],
         default: 'urls',
       },
       originalZipName: {
         type: String,
         default: null,
       },
+      zipUrl: {
+        type: String,
+        default: null,
+      },
+      userAssetIds: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+        },
+      ],
     },
   },
   {
