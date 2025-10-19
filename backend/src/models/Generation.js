@@ -15,6 +15,76 @@ const generationImageAssetSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const rankingEntrySchema = new mongoose.Schema(
+  {
+    imageIndex: { type: Number, required: true, min: 1 },
+    rank: { type: Number, required: true, min: 1 },
+    score: { type: Number, required: true, min: 0, max: 100 },
+    verdict: {
+      type: String,
+      enum: ['excellent', 'good', 'fair', 'poor'],
+      default: 'good',
+    },
+    notes: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
+const rankingChildProfileSchema = new mongoose.Schema(
+  {
+    name: { type: String, default: '' },
+    gender: { type: String, default: '' },
+    age: { type: Number, default: null },
+  },
+  { _id: false }
+);
+
+const generationLogEntrySchema = new mongoose.Schema(
+  {
+    message: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const generationEventSchema = new mongoose.Schema(
+  {
+    type: { type: String, required: true },
+    message: { type: String, default: '' },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: null },
+    timestamp: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const generationRankingSchema = new mongoose.Schema(
+  {
+    summary: { type: String, default: '' },
+    promptReflection: { type: String, default: '' },
+    winners: {
+      type: [Number],
+      default: [],
+    },
+    ranked: {
+      type: [rankingEntrySchema],
+      default: [],
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+    raw: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    childProfile: {
+      type: rankingChildProfileSchema,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
 const generationSchema = new mongoose.Schema(
   {
     userId: {
@@ -103,8 +173,8 @@ const generationSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['processing', 'succeeded', 'failed'],
-      default: 'processing',
+      enum: ['queued', 'processing', 'succeeded', 'failed'],
+      default: 'queued',
     },
     imageUrls: {
       type: [String],
@@ -114,12 +184,48 @@ const generationSchema = new mongoose.Schema(
       type: [generationImageAssetSchema],
       default: [],
     },
+    ranking: {
+      type: generationRankingSchema,
+      default: null,
+    },
     error: {
       type: String,
       default: null,
     },
     completedAt: {
       type: Date,
+      default: null,
+    },
+    startedAt: {
+      type: Date,
+      default: null,
+    },
+    progress: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 0,
+    },
+    replicatePredictionId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    attempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    logs: {
+      type: [generationLogEntrySchema],
+      default: [],
+    },
+    events: {
+      type: [generationEventSchema],
+      default: [],
+    },
+    replicateInput: {
+      type: mongoose.Schema.Types.Mixed,
       default: null,
     },
   },
@@ -133,6 +239,7 @@ generationSchema.index({ userId: 1 });
 generationSchema.index({ trainingId: 1 });
 generationSchema.index({ status: 1 });
 generationSchema.index({ createdAt: -1 });
+generationSchema.index({ replicatePredictionId: 1 });
 
 const Generation = mongoose.model('Generation', generationSchema);
 

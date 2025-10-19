@@ -11,6 +11,13 @@ const { validateGeneration } = require('../middleware/validators');
 router.get('/', generationController.getAllGenerations);
 
 /**
+ * @route   GET /api/generations/stream/live
+ * @desc    Subscribe to generation updates (SSE)
+ * @access  Public
+ */
+router.get('/stream/live', generationController.streamGenerations);
+
+/**
  * @route   GET /api/generations/:id
  * @desc    Get generation by ID
  * @access  Public
@@ -23,6 +30,7 @@ router.get('/:id', generationController.getGenerationById);
  * @access  Public
  */
 router.post('/', validateGeneration, generationController.generateImage);
+router.post('/ranked', validateGeneration, generationController.generateRankedImages);
 
 /**
  * @route   POST /api/generations/:id/download

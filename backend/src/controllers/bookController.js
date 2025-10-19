@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
 const Book = require('../models/Book');
+const User = require('../models/User');
 const {
   uploadBufferToS3,
   deleteFromS3,
@@ -7,6 +8,7 @@ const {
   generateBookPageImageKey,
   generateBookCharacterOverlayKey,
   generateBookPdfKey,
+  getSignedUrlForKey,
 } = require('../config/s3');
 const { generateStorybookPdf } = require('../utils/pdfGenerator');
 
@@ -32,6 +34,17 @@ const parsePagesPayload = (pages) => {
 const normalizeBoolean = (value) =>
   typeof value === 'string' ? value === 'true' || value === '1' : Boolean(value);
 
+const normalizeString = (value) =>
+  typeof value === 'string' ? value.trim() : '';
+
+const replaceReaderPlaceholders = (value, readerName) => {
+  if (!value || typeof value !== 'string') {
+    return value || '';
+  }
+  if (!readerName) return value;
+  return value.replace(/\{name\}/gi, readerName);
+};
+
 const buildImageResponse = (file, key, url) => ({
   key,
   url,
@@ -50,6 +63,20 @@ const cleanupKeys = async (keys = []) => {
       )
     )
   );
+};
+
+const buildAssetPayload = async (asset) => {
+  if (!asset) return null;
+  const signedUrl = await getSignedUrlForKey(asset.key).catch(() => null);
+  return {
+    key: asset.key,
+    url: asset.url,
+    signedUrl,
+    size: asset.size,
+    contentType: asset.contentType,
+    uploadedAt: asset.uploadedAt,
+    originalName: asset.originalName,
+  };
 };
 
 /**
@@ -132,11 +159,17 @@ exports.createBook = async (req, res) => {
       });
     }
 
-    const pagesPayload = pagesRaw.map((page, index) => ({
-      order: Number(page.order) || index + 1,
-      text: page.text || '',
-      hasNewImage: normalizeBoolean(page.hasNewImage),
-    }));
+    const pagesPayload = pagesRaw.map((page, index) => {
+      const promptValue =
+        normalizeString(page?.prompt) || normalizeString(page?.characterPrompt);
+
+      return {
+        order: Number(page.order) || index + 1,
+        text: typeof page.text === 'string' ? page.text : '',
+        characterPrompt: promptValue,
+        hasNewImage: normalizeBoolean(page.hasNewImage),
+      };
+    });
 
     if (!pagesPayload.length) {
       return res.status(400).json({
@@ -167,6 +200,7 @@ exports.createBook = async (req, res) => {
       const pageData = {
         order: pageDefinition.order,
         text: pageDefinition.text,
+        characterPrompt: normalizeString(pageDefinition.characterPrompt),
       };
 
       if (pageDefinition.hasNewImage) {
@@ -299,8 +333,12 @@ exports.updateBook = async (req, res) => {
       const hasNewImage = normalizeBoolean(incoming.hasNewImage);
       const removeImage = normalizeBoolean(incoming.removeImage);
       const order = Number(incoming.order) || index + 1;
-      const text = incoming.text || '';
+      const text = typeof incoming.text === 'string' ? incoming.text : '';
       const existing = pageId ? existingPagesMap.get(pageId) : null;
+      const incomingPrompt =
+        normalizeString(incoming.prompt) ||
+        normalizeString(incoming.characterPrompt) ||
+        normalizeString(existing?.characterPrompt);
 
       if (pageId) {
         providedPageIds.add(pageId);
@@ -309,6 +347,7 @@ exports.updateBook = async (req, res) => {
       const pageData = {
         order,
         text,
+        characterPrompt: incomingPrompt,
       };
 
       if (pageId && existing) {
@@ -339,7 +378,7 @@ exports.updateBook = async (req, res) => {
           keysToDelete.push(backgroundImage.key);
         }
         backgroundImage = null;
-      } else if (existing?.characterImage) {
+      } else if (!backgroundImage && existing?.characterImage) {
         backgroundImage = existing.characterImage; // compatibility fallback
       }
 
@@ -362,8 +401,12 @@ exports.updateBook = async (req, res) => {
 
     for (const existingPage of book.pages) {
       const idString = existingPage._id.toString();
-      if (!providedPageIds.has(idString) && existingPage.characterImage?.key) {
-        keysToDelete.push(existingPage.characterImage.key);
+      if (!providedPageIds.has(idString)) {
+        if (existingPage.backgroundImage?.key) {
+          keysToDelete.push(existingPage.backgroundImage.key);
+        } else if (existingPage.characterImage?.key) {
+          keysToDelete.push(existingPage.characterImage.key);
+        }
       }
     }
 
@@ -423,7 +466,9 @@ exports.deleteBook = async (req, res) => {
       keysToDelete.push(book.coverImage.key);
     }
     book.pages.forEach((page) => {
-      if (page.characterImage?.key) {
+      if (page.backgroundImage?.key) {
+        keysToDelete.push(page.backgroundImage.key);
+      } else if (page.characterImage?.key) {
         keysToDelete.push(page.characterImage.key);
       }
     });
@@ -490,6 +535,8 @@ exports.generateStorybook = async (req, res) => {
     const { id } = req.params;
     const { title } = req.body;
     const pagesPayload = parsePagesPayload(req.body.pages);
+    const readerId = normalizeString(req.body.readerId);
+    let readerName = normalizeString(req.body.readerName);
 
     const book = await Book.findById(id);
     if (!book) {
@@ -511,6 +558,13 @@ exports.generateStorybook = async (req, res) => {
         success: false,
         message: 'Book has no pages to build a story from',
       });
+    }
+
+    if (!readerName && readerId) {
+      const reader = await User.findById(readerId).select('name').lean();
+      if (reader?.name) {
+        readerName = normalizeString(reader.name);
+      }
     }
 
     const characterFiles = req.files?.characterImages || [];
@@ -542,21 +596,9 @@ exports.generateStorybook = async (req, res) => {
 
       const order = requestedOrder || bookPage.order || index + 1;
 
-      const backgroundSource = bookPage.backgroundImage
-        ? {
-            key: bookPage.backgroundImage.key,
-            url: bookPage.backgroundImage.url,
-            contentType: bookPage.backgroundImage.contentType,
-            originalName: bookPage.backgroundImage.originalName,
-          }
-        : bookPage.characterImage
-        ? {
-            key: bookPage.characterImage.key,
-            url: bookPage.characterImage.url,
-            contentType: bookPage.characterImage.contentType,
-            originalName: bookPage.characterImage.originalName,
-          }
-        : null;
+      const backgroundSource = await buildAssetPayload(
+        bookPage.backgroundImage || bookPage.characterImage || null
+      );
 
       let characterSource = null;
       if (normalizeBoolean(inputPage.hasCharacterUpload)) {
@@ -569,37 +611,53 @@ exports.generateStorybook = async (req, res) => {
         const { url } = await uploadBufferToS3(file.buffer, characterKey, file.mimetype, {
           acl: 'public-read',
         });
-        temporaryUploads.push(characterKey);
-        characterSource = {
+        characterSource = await buildAssetPayload({
           key: characterKey,
           url,
           contentType: file.mimetype,
           originalName: file.originalname,
-        };
+          size: file.size,
+        });
+        temporaryUploads.push(characterKey);
       } else if (inputPage.characterUrl) {
         const rawUrl = typeof inputPage.characterUrl === 'string' ? inputPage.characterUrl.trim() : '';
         if (rawUrl) {
           characterSource = {
             url: rawUrl,
+            signedUrl: rawUrl,
+            contentType: 'image/png',
           };
         }
       }
       const includeCharacter = Boolean(characterSource);
 
-      const pageText =
+      const baseText =
         typeof inputPage.text === 'string' && inputPage.text.trim().length > 0
           ? inputPage.text
           : bookPage.text || '';
+      const pageText = replaceReaderPlaceholders(baseText, readerName);
+      const baseQuote = inputPage.hebrewQuote || inputPage.quote || '';
+      const resolvedQuote = replaceReaderPlaceholders(baseQuote, readerName);
 
       const storyPage = {
         order,
         text: pageText,
-        quote: inputPage.hebrewQuote || inputPage.quote || '',
+        quote: resolvedQuote,
         background: backgroundSource,
         character: includeCharacter ? characterSource : null,
         useCharacter: includeCharacter,
         characterPosition: inputPage.characterPosition || 'auto',
       };
+
+      console.log('[storybook] Prepared page', {
+        order: storyPage.order,
+        hasBackground: Boolean(storyPage.background),
+        backgroundUrl: storyPage.background?.url,
+        hasCharacter: Boolean(storyPage.character),
+        characterUrl: storyPage.character?.url,
+        quote: storyPage.quote,
+        readerName,
+      });
 
       storyPages.push(storyPage);
     }

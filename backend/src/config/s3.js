@@ -1,5 +1,6 @@
 const { S3Client, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const path = require('path');
 
 const requiredEnv = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
@@ -57,6 +58,20 @@ async function deleteFromS3(key) {
       Key: key,
     })
   );
+}
+
+async function getSignedUrlForKey(key, expiresIn = 60 * 5) {
+  if (!key) return null;
+  try {
+    const command = new GetObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+    });
+    return await getSignedUrl(s3Client, command, { expiresIn });
+  } catch (error) {
+    console.warn(`⚠️  Failed to sign URL for ${key}: ${error.message}`);
+    return null;
+  }
 }
 
 async function downloadFromS3(key) {
@@ -139,6 +154,7 @@ module.exports = {
   s3Client,
   uploadBufferToS3,
   deleteFromS3,
+  getSignedUrlForKey,
   generateImageKey,
   generateTrainingImageKey,
   generateTrainingZipKey,

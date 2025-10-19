@@ -1,54 +1,14 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { UploadCloud, Trash2, CheckCircle2, XCircle, AlertTriangle, Loader2, Target } from 'lucide-react';
+import { UploadCloud, Trash2, Loader2, Target } from 'lucide-react';
 import { evalAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-
-const TIPS = [
-  'Upload 10-15 high-resolution images; the more variety the better.',
-  'Ensure the child’s face is clearly visible with no sunglasses, hats, or obstructions.',
-  'Use torso-up, front-facing photos that capture head and shoulders.',
-  'Only the child should be in the frame.',
-  'Include multiple expressions (smile, neutral, etc.) and varied lighting/backgrounds.',
-];
-
-const CRITERIA_LABELS = {
-  clarity: 'Clarity & Resolution',
-  framing: 'Framing & Composition',
-  expression: 'Expression Diversity',
-  lighting: 'Lighting & Background',
-  safety: 'Safety & Compliance',
-};
-
-const VERDICT_BADGES = {
-  accept: { label: 'Accept', variant: 'success', icon: CheckCircle2 },
-  needs_more: { label: 'Needs More', variant: 'warning', icon: AlertTriangle },
-  reject: { label: 'Reject', variant: 'destructive', icon: XCircle },
-};
-
-function clampPercent(value) {
-  if (typeof value !== 'number') return 0;
-  if (Number.isNaN(value)) return 0;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function ScoreBar({ value }) {
-  const percent = clampPercent(value);
-  return (
-    <div className="flex items-center gap-2">
-      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted/60">
-        <div
-          className="h-2 rounded-full bg-accent transition-all"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      <span className="w-10 text-right text-xs text-foreground/60">{percent}%</span>
-    </div>
-  );
-}
+import EvaluationSummary from '@/components/evaluation/EvaluationSummary';
+import EvaluationImageCard from '@/components/evaluation/EvaluationImageCard';
+import { EVALUATION_TIPS } from '@/components/evaluation/constants';
 
 function Evaluate() {
   const [image, setImage] = useState(null);
@@ -163,7 +123,7 @@ function Evaluate() {
               <div className="rounded-xl border border-border/60 bg-muted p-4">
                 <p className="text-xs uppercase tracking-[0.25em] text-foreground/40">Tips</p>
                 <ul className="mt-2 space-y-2 text-xs text-foreground/65">
-                  {TIPS.map((tip) => (
+                  {EVALUATION_TIPS.map((tip) => (
                     <li key={tip} className="flex items-start gap-2">
                       <span className="mt-1 h-1.5 w-1.5 rounded-full bg-accent" />
                       <span>{tip}</span>
@@ -220,96 +180,14 @@ function Evaluate() {
         </CardContent>
       </Card>
 
-      {result && (
+      {result ? (
         <div className="grid gap-6">
-          {overall && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Overall verdict</CardTitle>
-                <CardDescription>{overall.summary}</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-wrap items-center gap-4">
-                <div className="flex gap-2">
-                  <Badge variant="outline">Acceptable: {overall.acceptedCount || 0}</Badge>
-                  <Badge variant="outline">Rejected: {overall.rejectedCount || 0}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const meta = VERDICT_BADGES[overall.verdict] || VERDICT_BADGES.needs_more;
-                    const Icon = meta.icon;
-                    return (
-                      <Badge variant={meta.variant}>
-                        <Icon className="mr-1 h-3.5 w-3.5" />
-                        {meta.label}
-                      </Badge>
-                    );
-                  })()}
-                  <span className="text-sm text-foreground/60">
-                    Confidence {clampPercent(overall.confidencePercent)}%
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {evaluation && (
-            <Card className="flex flex-col gap-4">
-              <CardHeader className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle className="text-base">{evaluation.name}</CardTitle>
-                  {(() => {
-                    const meta = VERDICT_BADGES[evaluation.verdict] || VERDICT_BADGES.needs_more;
-                    const Icon = meta.icon;
-                    return (
-                      <Badge variant={meta.variant} className="gap-1">
-                        <Icon className="h-3.5 w-3.5" />
-                        {meta.label}
-                      </Badge>
-                    );
-                  })()}
-                </div>
-                <div className="text-xs text-foreground/60">
-                  Overall score {clampPercent(evaluation.overallScorePercent)}% · Confidence{' '}
-                  {clampPercent(evaluation.confidencePercent)}%
-                </div>
-                <ScoreBar value={evaluation.overallScorePercent} />
-              </CardHeader>
-              <CardContent className="space-y-4 text-sm text-foreground/70">
-                <div className="space-y-3">
-                  {Object.entries(CRITERIA_LABELS).map(([key, label]) => {
-                    const detail = evaluation.criteria?.[key] || {};
-                    return (
-                      <div key={key} className="space-y-1">
-                        <div className="flex items-center justify-between text-xs text-foreground/50">
-                          <span>{label}</span>
-                          <span className="uppercase text-[10px] tracking-wide">
-                            {(detail.verdict || 'no').toUpperCase()}
-                          </span>
-                        </div>
-                        <ScoreBar value={detail.scorePercent} />
-                        {detail.notes && <p className="text-xs text-foreground/50">{detail.notes}</p>}
-                      </div>
-                    );
-                  })}
-                </div>
-                {Array.isArray(evaluation.recommendations) && evaluation.recommendations.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-foreground/45">Recommendations</p>
-                    <ul className="space-y-1 text-xs text-foreground/60">
-                      {evaluation.recommendations.map((rec, idx) => (
-                        <li key={idx} className="flex items-start gap-2">
-                          <span className="mt-1 h-1 w-1 rounded-full bg-accent/70" />
-                          <span>{rec}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+          {overall ? <EvaluationSummary overall={overall} /> : null}
+          {evaluation ? (
+            <EvaluationImageCard evaluation={evaluation} summary={overall?.summary} />
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

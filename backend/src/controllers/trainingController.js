@@ -13,6 +13,7 @@ const {
   generateTrainingZipKey,
   downloadFromS3,
 } = require('../config/s3');
+const { extractProgressFromReplicate } = require('../utils/replicate');
 
 const MAX_TRAINING_IMAGES = 25;
 
@@ -366,6 +367,7 @@ exports.startTraining = async (req, res) => {
       imageUrls: uploadedAssets.map((asset) => asset.url),
       imageAssets: uploadedAssets,
       status: training.status,
+      progress: extractProgressFromReplicate(training) ?? 0,
       logsUrl: training.logs,
       trainingConfig: trainingConfigRecord,
     });
@@ -426,12 +428,24 @@ exports.checkTrainingStatus = async (req, res) => {
     training.status = replicateTraining.status;
     training.logsUrl = replicateTraining.logs;
 
+    const computedProgress = extractProgressFromReplicate(replicateTraining);
+    if (computedProgress !== null) {
+      training.progress =
+        training.progress !== undefined && training.progress !== null
+          ? Math.max(training.progress, computedProgress)
+          : computedProgress;
+    }
+
     if (replicateTraining.status === 'succeeded') {
       training.modelVersion = replicateTraining.output?.version;
       training.completedAt = new Date();
+      training.progress = 100;
     } else if (replicateTraining.status === 'failed') {
       training.error = replicateTraining.error || 'Training failed';
       training.completedAt = new Date();
+      if (training.progress === undefined || training.progress === null) {
+        training.progress = computedProgress ?? 0;
+      }
     }
 
     await training.save();

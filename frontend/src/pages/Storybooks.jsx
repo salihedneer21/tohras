@@ -8,7 +8,7 @@ import {
   RefreshCw,
   Upload,
 } from 'lucide-react';
-import { bookAPI } from '@/services/api';
+import { bookAPI, userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -35,8 +35,22 @@ const CHARACTER_POSITION_OPTIONS = [
   { value: 'right', label: 'Right' },
 ];
 
+const NAME_PLACEHOLDER_DETECTION = /\{name\}/i;
+
+const containsNamePlaceholder = (value) =>
+  typeof value === 'string' ? NAME_PLACEHOLDER_DETECTION.test(value) : false;
+
+const replaceNamePlaceholders = (value, replacement) => {
+  if (!value || typeof value !== 'string') {
+    return value || '';
+  }
+  if (!replacement) return value;
+  return value.replace(/\{name\}/gi, replacement);
+};
+
 function Storybooks() {
   const [books, setBooks] = useState([]);
+  const [users, setUsers] = useState([]);
   const [selectedBookId, setSelectedBookId] = useState('');
   const [selectedBook, setSelectedBook] = useState(null);
   const [pages, setPages] = useState([]);
@@ -44,22 +58,40 @@ function Storybooks() {
   const [loading, setLoading] = useState(true);
   const [loadingBook, setLoadingBook] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState('');
+
+  const selectedReader = useMemo(
+    () => users.find((user) => user._id === selectedUserId) || null,
+    [selectedUserId, users]
+  );
 
   useEffect(() => {
-    const fetchBooks = async () => {
+    const fetchInitialData = async () => {
       try {
         setLoading(true);
-        const response = await bookAPI.getAll();
-        setBooks(response.data);
+        const [booksResponse, usersResponse] = await Promise.all([
+          bookAPI.getAll(),
+          userAPI.getAll(),
+        ]);
+        setBooks(booksResponse.data);
+        setUsers(usersResponse.data);
       } catch (error) {
-        toast.error(`Failed to load books: ${error.message}`);
+        toast.error(`Failed to load storybook data: ${error.message}`);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchBooks();
+    fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    if (!selectedUserId) return;
+    const stillExists = users.some((user) => user._id === selectedUserId);
+    if (!stillExists) {
+      setSelectedUserId('');
+    }
+  }, [selectedUserId, users]);
 
   useEffect(() => {
     if (!selectedBookId) {
@@ -81,6 +113,7 @@ function Storybooks() {
             id: page._id,
             order: page.order,
             text: page.text || '',
+            prompt: page.characterPrompt || page.prompt || '',
             useCharacter: true,
             characterPosition: 'auto',
             backgroundImageUrl: page.backgroundImage?.url || page.characterImage?.url || '',
@@ -173,23 +206,47 @@ function Storybooks() {
       return;
     }
 
+    const hasNamePlaceholder = pages.some((page) => {
+      if (containsNamePlaceholder(page.text)) return true;
+      if (!selectedBook) return false;
+      const sourcePage =
+        selectedBook.pages?.find((bookPage) => {
+          if (page.id && bookPage._id) {
+            return bookPage._id === page.id;
+          }
+          return bookPage.order === page.order;
+        }) || null;
+      return containsNamePlaceholder(sourcePage?.text);
+    });
+
+    if (hasNamePlaceholder && !selectedReader?.name) {
+      toast.error('Select a reader to replace {name} placeholders before generating.');
+      return;
+    }
+
     try {
       setIsGenerating(true);
       const formData = new FormData();
       if (storyTitle) {
-      formData.append('title', storyTitle);
-    }
+        formData.append('title', storyTitle);
+      }
+      if (selectedReader?._id) {
+        formData.append('readerId', selectedReader._id);
+      }
+      if (selectedReader?.name) {
+        formData.append('readerName', selectedReader.name);
+      }
 
-    const pagesPayload = pages.map((page) => ({
-      bookPageId: page.id,
-      order: page.order,
-      text: page.text,
-      useCharacter: page.useCharacter,
-      characterPosition: page.characterPosition,
-      hasCharacterUpload: Boolean(page.characterFile),
-      characterUrl: page.useCharacter && !page.characterFile ? page.characterUrl : undefined,
-      hebrewQuote: page.quote || '',
-    }));
+      const pagesPayload = pages.map((page) => ({
+        bookPageId: page.id,
+        order: page.order,
+        text: page.text,
+        useCharacter: page.useCharacter,
+        characterPosition: page.characterPosition,
+        hasCharacterUpload: Boolean(page.characterFile),
+        characterUrl: page.useCharacter && !page.characterFile ? page.characterUrl : undefined,
+        hebrewQuote: page.quote || '',
+      }));
 
       formData.append('pages', JSON.stringify(pagesPayload));
 
@@ -270,7 +327,7 @@ function Storybooks() {
             Choose a book to pull in its characters and page content.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="space-y-2">
             <Label htmlFor="book">Book</Label>
             <Select
@@ -299,6 +356,29 @@ function Storybooks() {
               onChange={(event) => setStoryTitle(event.target.value)}
               disabled={!selectedBook}
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="reader">Reader</Label>
+            <Select
+              value={selectedUserId || '__none'}
+              onValueChange={(value) => setSelectedUserId(value === '__none' ? '' : value)}
+              disabled={!users.length}
+            >
+              <SelectTrigger id="reader">
+                <SelectValue placeholder="Select a reader" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No reader</SelectItem>
+                {users.map((user) => (
+                  <SelectItem key={user._id} value={user._id}>
+                    {user.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-foreground/50">
+              Replaces any {'{name}'} placeholders in the story text.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -414,6 +494,12 @@ function Storybooks() {
                         rows={6}
                         className="resize-none"
                       />
+                      {selectedReader?.name && containsNamePlaceholder(page.text) ? (
+                        <p className="text-xs text-foreground/50">
+                          Preview with {selectedReader.name}:{' '}
+                          {replaceNamePlaceholders(page.text, selectedReader.name)}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="space-y-4">
@@ -467,6 +553,16 @@ function Storybooks() {
                             </label>
                           </div>
                         </div>
+                        {page.prompt ? (
+                          <div className="mb-3 rounded-lg border border-border/50 bg-background/60 p-3 text-left">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/60">
+                              Saved prompt
+                            </p>
+                            <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-foreground/65">
+                              {page.prompt}
+                            </p>
+                          </div>
+                        ) : null}
                         {page.characterPreview || page.characterUrl ? (
                           <img
                             src={page.characterPreview || page.characterUrl}

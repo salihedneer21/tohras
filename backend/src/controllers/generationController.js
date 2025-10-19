@@ -5,7 +5,52 @@ const { replicate } = require('../config/replicate');
 const fetch = require('node-fetch');
 const fs = require('fs-extra');
 const path = require('path');
-const { uploadBufferToS3, generateImageKey, downloadFromS3 } = require('../config/s3');
+const { downloadFromS3 } = require('../config/s3');
+const { uploadGenerationOutputs } = require('../services/generationOutputs');
+const fetchOpenRouter = require('node-fetch');
+const { subscribeToGenerationUpdates } = require('../services/generationEvents');
+const {
+  dispatchGenerationAttempt,
+  populateForClient,
+  broadcastGeneration,
+} = require('../services/generationWorkflow');
+
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const RANKING_SYSTEM_PROMPT = `You are an art director for a children's storytelling studio. Given a user prompt, the child's reference details (name, gender, age), and four candidate images of the same child, rank the images best to worst.
+
+Evaluate each image on these equally weighted criteria:
+1. Facial likeness — the child's face must be clear, realistic, and consistent with the profile.
+2. Body anatomy & proportions — limbs, posture, and scale should be natural and child-appropriate.
+3. Wardrobe suitability — clothing should fit the prompt context, be neat, and appropriate for a child.
+4. Composition & framing — the child should be centered or artfully framed, with minimal clipping.
+5. Identity fidelity — the child must align with the provided gender and approximate age. Penalize any mismatched gender presentation or age-inappropriate depiction (e.g., toddler vs teenager).
+6. Technical quality — lighting, background coherence, and absence of AI artifacts or hallucinated elements.
+
+Return strict JSON with this schema:
+{
+  "summary": "short paragraph",
+  "promptReflection": "one sentence about prompt alignment",
+  "ranked": [
+    {
+      "imageIndex": <1-4>,
+      "rank": <1-4>,
+      "score": <0-100 integer>,
+      "verdict": "excellent" | "good" | "fair" | "poor",
+      "notes": "<=160 characters describing strengths/weaknesses"
+    }
+  ],
+  "winners": [<imageIndex of best image>]
+}
+
+Rules:
+- Ranks must be unique integers: 1 is best.
+- Scores must correlate with rank (higher rank => higher score, no ties).
+- Always provide notes for each image referencing at least one criterion.
+- Call out any mismatches with the child's profile (gender, age) explicitly in the notes and lower the score accordingly.
+- If you detect fatal issues (severe distortions, wrong subject, multiple people) lower the score drastically and explain why.
+- You must base every judgment strictly on the actual visual evidence. Avoid assumptions or invented details not present in the image.
+- Use the provided image indices (1..4) exactly.
+`;
 
 /**
  * Get all generations
@@ -98,6 +143,169 @@ const toBoolean = (value, defaultValue = false) => {
   return Boolean(value);
 };
 
+const FORMAT_MIME_MAP = {
+  webp: 'image/webp',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+};
+
+const clampScore = (value, fallback = 0) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  if (num < 0) return 0;
+  if (num > 100) return 100;
+  return Math.round(num);
+};
+
+async function rankGeneratedImages({ prompt, assets, childProfile }) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is not configured for ranking');
+  }
+
+  const rankingModel =
+    process.env.OPENROUTER_RANK_MODEL || process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini-2024-07-18';
+
+  const normalizedChildProfile = childProfile
+    ? {
+        name: childProfile.name || '',
+        gender: childProfile.gender || '',
+        age: typeof childProfile.age === 'number' ? childProfile.age : childProfile.age ? Number(childProfile.age) : null,
+      }
+    : null;
+
+  const childDescriptorParts = [];
+  if (normalizedChildProfile?.name) {
+    childDescriptorParts.push(`Name: ${normalizedChildProfile.name}`);
+  }
+  if (normalizedChildProfile?.gender) {
+    childDescriptorParts.push(`Gender: ${normalizedChildProfile.gender}`);
+  }
+  if (Number.isFinite(normalizedChildProfile?.age)) {
+    childDescriptorParts.push(`Age: ${normalizedChildProfile.age}`);
+  }
+
+  const childDescriptor = childDescriptorParts.length
+    ? `Child profile — ${childDescriptorParts.join(', ')}. Images must match this profile.`
+    : 'Child profile not provided; prefer images that present a child consistent with the prompt.';
+
+  const userContent = [
+    {
+      type: 'text',
+      text: `${childDescriptor}`,
+    },
+    {
+      type: 'text',
+      text: `User prompt: "${prompt}". Evaluate and rank the following ${assets.length} images with emphasis on matching the child profile.`,
+    },
+  ];
+
+  assets.forEach((asset, index) => {
+    const label = `Image ${index + 1}`;
+    userContent.push({ type: 'text', text: label });
+    userContent.push({
+      type: 'image_url',
+      image_url: {
+        url: asset.signedUrl || asset.url,
+      },
+    });
+  });
+
+  const payload = {
+    model: rankingModel,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: RANKING_SYSTEM_PROMPT },
+      { role: 'user', content: userContent },
+    ],
+  };
+
+  const response = await fetchOpenRouter(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+      'X-Title': 'AI Book Story - Ranked Generator',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const errMessage = data?.error?.message || data?.error || JSON.stringify(data);
+    throw new Error(`Ranking model error: ${errMessage}`);
+  }
+
+  const messageContent = data?.choices?.[0]?.message?.content;
+  if (!messageContent) {
+    throw new Error('Ranking model returned empty content');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(messageContent);
+  } catch (error) {
+    throw new Error('Ranking model returned invalid JSON');
+  }
+
+  const ranked = Array.isArray(parsed?.ranked) ? parsed.ranked : [];
+  if (!ranked.length) {
+    throw new Error('Ranking model did not return any results');
+  }
+
+  const cleanedRanked = ranked.map((entry, idx) => {
+    const imageIndexRaw = entry.imageIndex ?? entry.index ?? idx + 1;
+    const imageIndex = clampScore(imageIndexRaw, idx + 1);
+    const rankRaw = entry.rank ?? idx + 1;
+    const rank = clampScore(rankRaw, idx + 1);
+    const scoreRaw = entry.score ?? entry.scorePercent ?? 70 - idx * 5;
+    const score = clampScore(scoreRaw, 70 - idx * 5);
+    const verdictRaw = (entry.verdict || '').toString().toLowerCase();
+    const verdict = ['excellent', 'good', 'fair', 'poor'].includes(verdictRaw)
+      ? verdictRaw
+      : score >= 85
+      ? 'excellent'
+      : score >= 70
+      ? 'good'
+      : score >= 55
+      ? 'fair'
+      : 'poor';
+    const notes = (entry.notes || '').toString().slice(0, 200);
+
+    return {
+      imageIndex,
+      rank,
+      score,
+      verdict,
+      notes,
+    };
+  });
+
+  // Ensure ranks are unique and sequential by sorting
+  const sorted = cleanedRanked.slice().sort((a, b) => a.rank - b.rank);
+  sorted.forEach((entry, idx) => {
+    entry.rank = idx + 1;
+    if (!Number.isInteger(entry.imageIndex) || entry.imageIndex < 1 || entry.imageIndex > assets.length) {
+      entry.imageIndex = idx + 1;
+    }
+  });
+
+  const winners = Array.isArray(parsed?.winners) && parsed.winners.length
+    ? parsed.winners.map((item) => clampScore(item, 1)).filter((item) => item >= 1 && item <= assets.length)
+    : [sorted[0].imageIndex];
+
+  return {
+    summary: parsed.summary || '',
+    promptReflection: parsed.promptReflection || parsed.prompt_reflection || '',
+    ranked: sorted,
+    winners,
+    raw: parsed,
+    childProfile: normalizedChildProfile,
+  };
+}
+
 /**
  * Generate images using fine-tuned model
  * @route POST /api/generations
@@ -160,6 +368,7 @@ exports.generateImage = async (req, res) => {
     console.log('Generation Input:', generationInput);
 
     // Create generation record
+    const createdAt = new Date();
     const generation = await Generation.create({
       userId,
       trainingId,
@@ -179,16 +388,59 @@ exports.generateImage = async (req, res) => {
         extraLoraScale: generationInput.extra_lora_scale,
         numInferenceSteps: generationInput.num_inference_steps,
       },
-      status: 'processing',
+      status: 'queued',
+      progress: 0,
+      attempts: 0,
+      replicateInput: generationInput,
+      events: [
+        {
+          type: 'created',
+          message: 'Generation queued',
+          metadata: {
+            userId,
+            trainingId,
+          },
+          timestamp: createdAt,
+        },
+      ],
     });
 
-    // Run generation asynchronously
-    runGeneration(generation._id, training.modelVersion, generationInput);
+    await broadcastGeneration(generation._id);
+
+    try {
+      await dispatchGenerationAttempt({
+        generationId: generation._id,
+        modelVersion: training.modelVersion,
+        input: generationInput,
+        reason: 'initial',
+      });
+    } catch (dispatchError) {
+      const failureTime = new Date();
+      await Generation.findByIdAndUpdate(generation._id, {
+        $set: {
+          status: 'failed',
+          error: dispatchError.message,
+          completedAt: failureTime,
+        },
+        $push: {
+          events: {
+            type: 'error',
+            message: `Failed to dispatch generation: ${dispatchError.message}`,
+            metadata: { attempt: 1 },
+            timestamp: failureTime,
+          },
+        },
+      });
+      await broadcastGeneration(generation._id);
+      throw dispatchError;
+    }
+
+    const populatedGeneration = await populateForClient(generation._id);
 
     res.status(202).json({
       success: true,
       message: 'Image generation started',
-      data: generation,
+      data: populatedGeneration,
     });
   } catch (error) {
     console.error('❌ Error generating image:', error);
@@ -200,104 +452,141 @@ exports.generateImage = async (req, res) => {
   }
 };
 
-/**
- * Run generation asynchronously
- */
-async function runGeneration(generationId, modelVersion, input) {
+exports.generateRankedImages = async (req, res) => {
+  const { userId, trainingId, prompt } = req.body;
+
   try {
-    console.log('🚀 Running generation for:', generationId);
-
-    // Run the model
-    const output = await replicate.run(modelVersion, { input });
-
-    console.log('✅ Generation completed:', output);
-
-    const generation = await Generation.findById(generationId);
-    if (!generation) {
-      throw new Error(`Generation ${generationId} no longer exists`);
-    }
-
-    const outputs = Array.isArray(output) ? output : [output];
-    if (!outputs.length) {
-      throw new Error('No output images returned from Replicate');
-    }
-
-    const targetFormat = generation.generationConfig?.outputFormat || 'webp';
-    const formatToMime = {
-      webp: 'image/webp',
-      jpg: 'image/jpeg',
-      jpeg: 'image/jpeg',
-      png: 'image/png',
-    };
-    const contentType = formatToMime[targetFormat.toLowerCase()] || 'application/octet-stream';
-
-    const resolveUrl = (item) => {
-      if (!item) return null;
-      if (typeof item === 'string') return item;
-      if (typeof item.url === 'function') {
-        try {
-          return item.url();
-        } catch (err) {
-          console.warn('⚠️  Failed to resolve url() from output item', err);
-          return null;
-        }
-      }
-      if (typeof item.url === 'string') return item.url;
-      if (item.href) return item.href;
-      return null;
-    };
-
-    const uploadedImageUrls = [];
-    const uploadedAssets = [];
-
-    for (let index = 0; index < outputs.length; index++) {
-      const imageUrl = resolveUrl(outputs[index]);
-      if (!imageUrl) {
-        throw new Error(`Unable to resolve image URL for output index ${index}`);
-      }
-
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to download image ${index + 1}: ${response.status} ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      const key = generateImageKey(generation.userId, `${generationId}-${index + 1}.${targetFormat}`);
-      const { url: s3Url } = await uploadBufferToS3(buffer, key, response.headers.get('content-type') || contentType, {
-        acl: 'public-read',
-      });
-
-      uploadedImageUrls.push(s3Url);
-      uploadedAssets.push({
-        key,
-        url: s3Url,
-        size: buffer.length,
-        contentType: response.headers.get('content-type') || contentType,
-        originalName: `${generationId}-${index + 1}.${targetFormat}`,
-        uploadedAt: new Date(),
+    if (!prompt || !prompt.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Prompt is required',
       });
     }
 
-    // Update generation record
-    await Generation.findByIdAndUpdate(generationId, {
-      status: 'succeeded',
-      imageUrls: uploadedImageUrls,
-      imageAssets: uploadedAssets,
-      completedAt: new Date(),
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const training = await Training.findById(trainingId);
+    if (!training) {
+      return res.status(404).json({
+        success: false,
+        message: 'Training not found',
+      });
+    }
+
+    if (training.status !== 'succeeded' || !training.modelVersion) {
+      return res.status(400).json({
+        success: false,
+        message: 'Training must be completed successfully before generating images',
+      });
+    }
+
+    const generationInput = {
+      prompt: prompt.trim(),
+      guidance_scale: 2,
+      output_quality: 100,
+      output_format: 'png',
+      num_outputs: 4,
+      go_fast: false,
+      num_inference_steps: 28,
+      megapixels: '1',
+      lora_scale: 1,
+      extra_lora_scale: 1,
+    };
+
+    const generation = await Generation.create({
+      userId,
+      trainingId,
+      modelVersion: training.modelVersion,
+      prompt: prompt.trim(),
+      generationConfig: {
+        model: 'ranked',
+        goFast: Boolean(generationInput.go_fast),
+        loraScale: generationInput.lora_scale,
+        megapixels: generationInput.megapixels,
+        numOutputs: generationInput.num_outputs,
+        aspectRatio: generationInput.aspect_ratio || '1:1',
+        outputFormat: generationInput.output_format,
+        guidanceScale: generationInput.guidance_scale,
+        outputQuality: generationInput.output_quality,
+        promptStrength: generationInput.prompt_strength || 0.8,
+        extraLoraScale: generationInput.extra_lora_scale,
+        numInferenceSteps: generationInput.num_inference_steps,
+      },
+      status: 'processing',
     });
 
-    console.log('📸 Images saved to S3:', uploadedImageUrls);
+    try {
+      const output = await replicate.run(training.modelVersion, { input: generationInput });
+      const outputs = Array.isArray(output) ? output : [output];
+      if (!outputs.length) {
+        throw new Error('No output images returned from Replicate');
+      }
+
+      const { imageUrls, imageAssets } = await uploadGenerationOutputs({
+        outputs,
+        userId,
+        generationId: generation._id,
+        targetFormat: 'png',
+        fallbackContentType: FORMAT_MIME_MAP.png,
+      });
+
+      const ranking = await rankGeneratedImages({
+        prompt: prompt.trim(),
+        assets: imageAssets,
+        childProfile: {
+          name: user.name,
+          gender: user.gender,
+          age: user.age,
+        },
+      });
+
+      generation.status = 'succeeded';
+      generation.imageUrls = imageUrls;
+      generation.imageAssets = imageAssets;
+      generation.ranking = {
+        summary: ranking.summary,
+        promptReflection: ranking.promptReflection || '',
+        winners: ranking.winners && ranking.winners.length ? ranking.winners : [ranking.ranked[0]?.imageIndex || 1],
+        ranked: ranking.ranked,
+        createdAt: new Date(),
+        raw: ranking.raw || null,
+        childProfile: ranking.childProfile || {
+          name: user.name,
+          gender: user.gender,
+          age: user.age,
+        },
+      };
+      generation.completedAt = new Date();
+      await generation.save();
+
+      return res.status(201).json({
+        success: true,
+        message: 'Ranked images generated successfully',
+        data: generation,
+      });
+    } catch (generationError) {
+      generation.status = 'failed';
+      generation.error = generationError.message;
+      generation.completedAt = new Date();
+      await generation.save().catch(() => {});
+
+      throw generationError;
+    }
   } catch (error) {
-    console.error('❌ Generation failed:', error);
-    await Generation.findByIdAndUpdate(generationId, {
-      status: 'failed',
+    console.error('❌ Error generating ranked images:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate ranked images',
       error: error.message,
-      completedAt: new Date(),
     });
   }
-}
+};
 
 /**
  * Download generated image to local storage
@@ -418,4 +707,40 @@ exports.getGenerationsByUser = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+const serialiseGeneration = (payload) => {
+  if (!payload) return null;
+  if (typeof payload.toJSON === 'function') {
+    return payload.toJSON();
+  }
+  return payload;
+};
+
+exports.streamGenerations = (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  if (res.flushHeaders) {
+    res.flushHeaders();
+  }
+
+  res.write(': stream-start\n\n');
+
+  const send = (payload) => {
+    const data = serialiseGeneration(payload);
+    if (!data) return;
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const unsubscribe = subscribeToGenerationUpdates(send);
+  const heartbeat = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 };

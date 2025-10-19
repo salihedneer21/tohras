@@ -51,6 +51,7 @@ const STATUS_OPTIONS = [
 const createEmptyPage = () => ({
   id: null,
   text: '',
+  prompt: '',
   file: null,
   preview: null,
   previewIsObject: false,
@@ -154,6 +155,7 @@ function Books() {
           ? sortedPages.map((page) => ({
               id: page._id || null,
               text: page.text || '',
+              prompt: page.characterPrompt || page.prompt || '',
               file: null,
               preview: page.backgroundImage?.url || page.characterImage?.url || null,
               previewIsObject: false,
@@ -244,6 +246,14 @@ function Books() {
     });
   };
 
+  const handlePagePromptChange = (index, value) => {
+    setFormState((prev) => {
+      const nextPages = [...prev.pages];
+      nextPages[index] = { ...nextPages[index], prompt: value };
+      return { ...prev, pages: nextPages };
+    });
+  };
+
   const handlePageImageChange = (index, event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -289,12 +299,14 @@ function Books() {
       return;
     }
 
-    const filteredPages = formState.pages.filter(
-      (page) => page.text.trim() || page.file || page.existingImage
-    );
+    const filteredPages = formState.pages.filter((page) => {
+      const hasText = page.text?.trim?.();
+      const hasPrompt = page.prompt?.trim?.();
+      return hasText || hasPrompt || page.file || page.existingImage;
+    });
 
     if (!filteredPages.length) {
-      toast.error('Add at least one page with text or an image');
+      toast.error('Add at least one page with text, a prompt, or an image');
       return;
     }
 
@@ -323,6 +335,7 @@ function Books() {
       id: page.id,
       order: index + 1,
       text: page.text,
+      prompt: page.prompt?.trim?.() || '',
       hasNewImage: Boolean(page.file),
       removeImage: Boolean(page.removeImage) && !page.file,
     }));
@@ -410,7 +423,7 @@ function Books() {
             Story Books
           </h2>
           <p className="mt-1 text-sm text-foreground/60">
-            Curate interactive storybooks with character imagery for personalised adventures.
+            Curate interactive storybooks with rich background art for personalised adventures.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -579,7 +592,7 @@ function Books() {
                   <div>
                     <Label>Pages</Label>
                     <p className="text-xs text-foreground/50">
-                      Add story beats with accompanying character visuals for each page.
+                      Add story beats with accompanying background visuals for each page.
                     </p>
                   </div>
                   <Button type="button" variant="outline" className="gap-2" onClick={handleAddPage}>
@@ -644,7 +657,7 @@ function Books() {
                       </div>
 
                       <div className="space-y-2">
-                        <Label>Character image</Label>
+                        <Label>Background image</Label>
                         <div className="flex items-center gap-2">
                           <Button
                             type="button"
@@ -682,7 +695,7 @@ function Books() {
                           <div className="group relative overflow-hidden rounded-lg border border-border/60 bg-muted/40">
                             <img
                               src={page.preview}
-                              alt={`Page ${index + 1} character`}
+                              alt={`Page ${index + 1} background`}
                               className="h-48 w-full object-cover transition group-hover:scale-[1.02]"
                               onClick={() =>
                                 openImageViewer(
@@ -693,16 +706,32 @@ function Books() {
                                         originalName: page.file.name,
                                       }
                                     : page.existingImage,
-                                  `Page ${index + 1} image`
+                                  `Page ${index + 1} background`
                                 )
                               }
                             />
                           </div>
                         ) : (
                           <p className="text-xs text-foreground/50">
-                            No character image attached.
+                            No background image attached.
                           </p>
                         )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`page-prompt-${index}`}>Character prompt</Label>
+                        <Textarea
+                          id={`page-prompt-${index}`}
+                          minRows={2}
+                          placeholder="Describe the character you want to generate for this scene."
+                          value={page.prompt}
+                          onChange={(event) =>
+                            handlePagePromptChange(index, event.target.value)
+                          }
+                        />
+                        <p className="text-xs text-foreground/50">
+                          Saved for future character image generation.
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -790,7 +819,11 @@ function Books() {
                     Highlights
                   </p>
                   <p className="text-xs text-foreground/60">
-                    Includes {book.pages.filter((page) => page.characterImage?.url).length} illustrated pages.
+                    Includes{' '}
+                    {book.pages.filter(
+                      (page) => page.backgroundImage?.url || page.characterImage?.url
+                    ).length}{' '}
+                    pages with background art.
                   </p>
                 </div>
               ) : null}

@@ -63,9 +63,16 @@ export const userAPI = {
   create: (data) => api.post('/users', data),
   update: (id, data) => api.put(`/users/${id}`, data),
   delete: (id) => api.delete(`/users/${id}`),
-  uploadImage: (id, file, onUploadProgress) => {
+  uploadImage: (id, file, options = {}) => {
+    const { onUploadProgress, override = false, evaluation } = options;
     const formData = new FormData();
     formData.append('image', file);
+    if (override) {
+      formData.append('override', 'true');
+    }
+    if (evaluation) {
+      formData.append('evaluation', JSON.stringify(evaluation));
+    }
     return api.post(`/users/${id}/images/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress,
@@ -96,6 +103,7 @@ export const generationAPI = {
   getAll: (params) => api.get('/generations', { params }),
   getById: (id) => api.get(`/generations/${id}`),
   create: (data) => api.post('/generations', data),
+  createRanked: (data) => api.post('/generations/ranked', data),
   download: (id) => api.post(`/generations/${id}/download`),
   getByUser: (userId) => api.get(`/generations/user/${userId}`),
 };

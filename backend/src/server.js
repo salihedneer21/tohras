@@ -12,6 +12,7 @@ const generationRoutes = require('./routes/generationRoutes');
 const evalRoutes = require('./routes/evalRoutes');
 const bookRoutes = require('./routes/bookRoutes');
 const promptRoutes = require('./routes/promptRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 
 // Initialize express app
 const app = express();
@@ -37,6 +38,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/trainings', trainingRoutes);
 app.use('/api/generations', generationRoutes);
 app.use('/api/evals', evalRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {

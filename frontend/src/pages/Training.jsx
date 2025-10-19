@@ -445,6 +445,17 @@ function Training() {
         <div className="grid gap-4 md:grid-cols-2">
           {trainings.map((training) => {
             const statusMeta = STATUS_VARIANTS[training.status] ?? STATUS_VARIANTS.processing;
+            const hasNumericProgress =
+              typeof training.progress === 'number' && Number.isFinite(training.progress);
+            const clampedProgress = hasNumericProgress
+              ? Math.min(100, Math.max(0, training.progress))
+              : null;
+            const progressLabel =
+              clampedProgress !== null
+                ? Number.isInteger(clampedProgress)
+                  ? clampedProgress.toString()
+                  : clampedProgress.toFixed(1)
+                : null;
             return (
               <Card key={training._id} className="flex flex-col justify-between">
                 <CardHeader className="space-y-3">
@@ -473,6 +484,24 @@ function Training() {
                   <p>
                     User · {training.userId?.name} ({training.userId?.email})
                   </p>
+                  {clampedProgress !== null && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-foreground/50">
+                        <span className="uppercase tracking-[0.25em] text-foreground/45">
+                          Progress
+                        </span>
+                        <span className="font-mono text-foreground">
+                          {progressLabel}%
+                        </span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-foreground/10">
+                        <div
+                          className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
+                          style={{ width: `${clampedProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {training.trainingConfig?.zipUrl && (
                     <a
                       href={training.trainingConfig.zipUrl}
