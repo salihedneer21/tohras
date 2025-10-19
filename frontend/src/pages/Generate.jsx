@@ -157,7 +157,7 @@ function Generate() {
     }
 
     const streamUrl = `${API_BASE_URL}/generations/stream/live`;
-    const source = new EventSource(streamUrl, { withCredentials: true });
+    const source = new EventSource(streamUrl);
     eventSourceRef.current = source;
 
     source.onopen = () => {

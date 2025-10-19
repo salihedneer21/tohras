@@ -1,0 +1,834 @@
+const mongoose = require('mongoose');
+const Book = require('../models/Book');
+const User = require('../models/User');
+const Training = require('../models/Training');
+const Generation = require('../models/Generation');
+const StorybookJob = require('../models/StorybookJob');
+const { uploadBufferToS3, generateBookCharacterOverlayKey, generateBookPdfKey, getSignedUrlForKey, downloadFromS3 } = require('../config/s3');
+const { generateStorybookPdf } = require('../utils/pdfGenerator');
+const { emitStorybookUpdate } = require('./storybookEvents');
+const { dispatchGenerationAttempt, populateForClient, broadcastGeneration } = require('./generationWorkflow');
+const { subscribeToGenerationUpdates } = require('./generationEvents');
+
+const MAX_GENERATION_WAIT_TIME_MS = Number(process.env.STORYBOOK_PAGE_TIMEOUT_MS || 15 * 60 * 1000);
+const PAGE_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.STORYBOOK_PAGE_CONCURRENCY || 2)
+);
+
+const generationWaiters = new Map();
+
+subscribeToGenerationUpdates((payload) => {
+  if (!payload?._id) return;
+  const generationId = String(payload._id);
+  const entry = generationWaiters.get(generationId);
+  if (!entry) return;
+  try {
+    entry.onUpdate(payload);
+    if (payload.status === 'succeeded') {
+      generationWaiters.delete(generationId);
+      entry.resolve(payload);
+    } else if (payload.status === 'failed') {
+      generationWaiters.delete(generationId);
+      const errorMessage = payload.error || 'Generation failed';
+      entry.reject(new Error(errorMessage));
+    }
+  } catch (error) {
+    console.warn(`[storybook] watcher for generation ${generationId} threw:`, error);
+  }
+});
+
+const clamp = (value, min, max) => {
+  const num = Number(value);
+  if (Number.isNaN(num)) return min;
+  if (num < min) return min;
+  if (num > max) return max;
+  return num;
+};
+
+const slugify = (value) =>
+  (value || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const replaceReaderPlaceholders = (value, readerName) => {
+  if (!value || typeof value !== 'string') return value || '';
+  if (!readerName) return value;
+  return value.replace(/\{name\}/gi, readerName);
+};
+
+const createEvent = (type, message, metadata = null) => ({
+  type,
+  message,
+  metadata,
+  timestamp: new Date(),
+});
+
+const computeAveragePageProgress = (pages = []) => {
+  if (!pages.length) return 0;
+  const total = pages.reduce((sum, page) => sum + (page?.progress || 0), 0);
+  return clamp(total / pages.length, 0, 100);
+};
+
+const computeJobProgress = (job) => {
+  if (!job) return 0;
+  if (job.status === 'succeeded') return 100;
+  if (job.status === 'failed') return clamp(job.progress || 0, 0, 100);
+
+  const average = computeAveragePageProgress(job.pages);
+  if (job.status === 'assembling') {
+    const assemblyProgress =
+      (job.metadata && typeof job.metadata.assemblyProgress === 'number'
+        ? clamp(job.metadata.assemblyProgress, 0, 10)
+        : 0) || 0;
+    return clamp(90 + assemblyProgress, 0, 100);
+  }
+
+  return Math.floor((average * 0.9) / 1);
+};
+
+const computeEtaSeconds = (job, progress) => {
+  if (!job?.startedAt) return null;
+  if (!Number.isFinite(progress) || progress <= 0 || progress >= 100) return null;
+  const elapsedSeconds = (Date.now() - new Date(job.startedAt).getTime()) / 1000;
+  if (elapsedSeconds <= 0) return null;
+  const rate = progress / elapsedSeconds; // percent per second
+  if (rate <= 0) return null;
+  const remaining = (100 - progress) / rate;
+  if (!Number.isFinite(remaining) || remaining < 0) return null;
+  return Math.round(remaining);
+};
+
+const syncComputedFields = async (jobDoc) => {
+  if (!jobDoc) return null;
+  const jobPlain = jobDoc.toObject({ depopulate: true });
+  const progress = computeJobProgress(jobPlain);
+  const eta = computeEtaSeconds(jobPlain, progress);
+  let needsSave = false;
+
+  if (jobDoc.progress !== progress) {
+    jobDoc.progress = progress;
+    needsSave = true;
+  }
+  if (
+    (eta === null && jobDoc.estimatedSecondsRemaining !== null) ||
+    (eta !== null && jobDoc.estimatedSecondsRemaining !== eta)
+  ) {
+    jobDoc.estimatedSecondsRemaining = eta;
+    needsSave = true;
+  }
+
+  if (needsSave) {
+    await jobDoc.save();
+  }
+
+  const snapshot = jobDoc.toObject({ depopulate: true });
+  snapshot.progress = progress;
+  snapshot.estimatedSecondsRemaining = eta;
+  return snapshot;
+};
+
+const emitJob = (jobDoc) => {
+  if (!jobDoc) return null;
+  const snapshot =
+    typeof jobDoc.toObject === 'function' ? jobDoc.toObject({ depopulate: true }) : jobDoc;
+  const progress = computeJobProgress(snapshot);
+  const eta = computeEtaSeconds(snapshot, progress);
+  snapshot.progress = progress;
+  snapshot.estimatedSecondsRemaining = eta;
+  emitStorybookUpdate(snapshot);
+  return snapshot;
+};
+
+const updateJobAndEmit = async ({ jobId, update, arrayFilters }) => {
+  const options = { new: true };
+  if (Array.isArray(arrayFilters)) {
+    options.arrayFilters = arrayFilters;
+  }
+
+  const jobDoc = await StorybookJob.findOneAndUpdate({ _id: jobId }, update, options);
+  if (!jobDoc) return null;
+  const snapshot = await syncComputedFields(jobDoc);
+  emitStorybookUpdate(snapshot);
+  return snapshot;
+};
+
+const registerGenerationWaiter = ({ generationId, jobId, pageId, pageOrder }) => {
+  const generationKey = String(generationId);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      if (generationWaiters.has(generationKey)) {
+        generationWaiters.delete(generationKey);
+        reject(new Error('Generation timed out while waiting for completion'));
+      }
+    }, MAX_GENERATION_WAIT_TIME_MS);
+
+    const clear = () => clearTimeout(timeout);
+
+    generationWaiters.set(generationKey, {
+      resolve: (payload) => {
+        clear();
+        resolve(payload);
+      },
+      reject: (error) => {
+        clear();
+        reject(error);
+      },
+      onUpdate: (payload) => handleGenerationUpdate({ payload, jobId, pageId, pageOrder }),
+    });
+  });
+};
+
+const handleGenerationUpdate = async ({ payload, jobId, pageId, pageOrder }) => {
+  const pageFilter = [];
+  if (pageId) {
+    const objectId =
+      typeof pageId === 'string' ? new mongoose.Types.ObjectId(pageId) : pageId;
+    pageFilter.push({ 'page.pageId': objectId });
+  } else if (typeof pageOrder === 'number') {
+    pageFilter.push({ 'page.order': pageOrder });
+  }
+
+  const arrayFilters = pageFilter.length
+    ? pageFilter
+    : [{ 'page.order': payload.generationConfig?.pageOrder || payload.storybookContext?.pageOrder }];
+
+  const events = [];
+
+  const progress = clamp(payload.progress || 0, 0, 100);
+
+  let status = 'generating';
+  if (payload.status === 'failed') {
+    status = 'failed';
+  } else if (payload.ranking && payload.ranking.winners && payload.ranking.winners.length) {
+    status = 'completed';
+  } else if (
+    Array.isArray(payload.events) &&
+    payload.events.some((event) => event?.type === 'ranking')
+  ) {
+    status = 'ranking';
+  }
+
+  const update = {
+    $set: {
+      'pages.$[page].progress': progress,
+      'pages.$[page].status': status,
+    },
+  };
+
+  if (payload.status === 'failed') {
+    update.$set['pages.$[page].error'] = payload.error || 'Generation failed';
+  }
+
+  update.$push = {
+    'pages.$[page].events': createEvent('generation-update', `Generation ${payload.status}`, {
+      generationId: payload._id,
+      status: payload.status,
+      progress,
+    }),
+  };
+
+  await updateJobAndEmit({
+    jobId,
+    update,
+    arrayFilters,
+  });
+};
+
+const attachJobEvent = async (jobId, event) => {
+  await updateJobAndEmit({
+    jobId,
+    update: {
+      $push: { events: event },
+    },
+  });
+};
+
+const attachPageEvent = async (jobId, pageFilter, event) => {
+  await updateJobAndEmit({
+    jobId,
+    update: {
+      $push: {
+        'pages.$[page].events': event,
+      },
+    },
+    arrayFilters: [pageFilter],
+  });
+};
+
+const resolveArrayFilterForPage = (page) => {
+  if (page.pageId) {
+    const objectId =
+      typeof page.pageId === 'string' ? new mongoose.Types.ObjectId(page.pageId) : page.pageId;
+    return { 'page.pageId': objectId };
+  }
+  return { 'page.order': page.order };
+};
+
+const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
+  if (!asset?.key) {
+    throw new Error('Generation asset is missing S3 key');
+  }
+
+  const buffer = await downloadFromS3(asset.key);
+  if (!buffer || !buffer.length) {
+    throw new Error('Failed to download asset for book character');
+  }
+
+  const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
+  const key = generateBookCharacterOverlayKey(
+    bookSlug,
+    page.order,
+    asset.originalName || `character-${page.order}.png`
+  );
+
+  const contentType = asset.contentType || 'image/png';
+  const { url } = await uploadBufferToS3(buffer, key, contentType, { acl: 'public-read' });
+  const signedUrl = await getSignedUrlForKey(key).catch(() => null);
+
+  return {
+    key,
+    url,
+    signedUrl: signedUrl || url,
+    size: buffer.length,
+    contentType,
+    uploadedAt: new Date(),
+    originalName: asset.originalName || `character-${page.order}.png`,
+  };
+};
+
+const updateBookCharacterImage = async ({ bookId, page, newAsset }) => {
+  const hasPageId = Boolean(page.pageId);
+  const arrayFilters = [];
+
+  if (hasPageId) {
+    const objectId =
+      typeof page.pageId === 'string' ? new mongoose.Types.ObjectId(page.pageId) : page.pageId;
+    arrayFilters.push({ 'page._id': objectId });
+  } else {
+    arrayFilters.push({ 'page.order': page.order });
+  }
+
+  await Book.updateOne(
+    { _id: bookId },
+    {
+      $set: {
+        'pages.$[page].characterImage': newAsset,
+      },
+    },
+    {
+      arrayFilters,
+    }
+  );
+};
+
+const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
+  const pageText = replaceReaderPlaceholders(bookPage.text || '', readerName);
+  return {
+    order: bookPage.order,
+    text: pageText,
+    background: bookPage.backgroundImage || null,
+    character: jobPage.characterAsset || null,
+    quote: '',
+    characterPosition: 'auto',
+  };
+};
+
+const buildPdfAsset = async ({ book, job, pages }) => {
+  const { buffer, pageCount } = await generateStorybookPdf({
+    title: job.title || `${book.name} Storybook`,
+    pages,
+  });
+
+  const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
+  const pdfKey = generateBookPdfKey(bookSlug, job.title || `${book.name} Storybook`);
+  const { url } = await uploadBufferToS3(buffer, pdfKey, 'application/pdf', { acl: 'public-read' });
+
+  return {
+    key: pdfKey,
+    url,
+    size: buffer.length,
+    contentType: 'application/pdf',
+    title: job.title || `${book.name} Storybook`,
+    pageCount,
+    createdAt: new Date(),
+  };
+};
+
+const waitForGeneration = async ({ generationId, job, page }) => {
+  const payload = await registerGenerationWaiter({
+    generationId,
+    jobId: job._id,
+    pageId: page.pageId,
+    pageOrder: page.order,
+  });
+  return payload;
+};
+
+const deriveWinnerAsset = (generation) => {
+  if (!generation) return null;
+  const assets = generation.imageAssets || [];
+  if (!assets.length) return null;
+  const winners = generation.ranking?.winners || [];
+  const winnerIndex = winners.length ? winners[0] - 1 : 0;
+  return {
+    asset: assets[winnerIndex] || assets[0],
+    winner: winners.length ? winners[0] : winnerIndex + 1,
+    summary: generation.ranking?.summary || '',
+    notes: Array.isArray(generation.ranking?.ranked)
+      ? generation.ranking.ranked.map((entry) => ({
+          imageIndex: entry.imageIndex,
+          score: entry.score,
+          verdict: entry.verdict,
+          notes: entry.notes,
+        }))
+      : [],
+  };
+};
+
+const processJobPage = async ({ job, page, book, training, readerName }) => {
+  const pageFilter = resolveArrayFilterForPage(page);
+  const generationPrompt = replaceReaderPlaceholders(page.prompt || page.text || '', readerName);
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        'pages.$[page].status': 'generating',
+        'pages.$[page].startedAt': new Date(),
+        'pages.$[page].progress': 5,
+      },
+      $push: {
+        'pages.$[page].events': createEvent(
+          'page-started',
+          `Started generation for page ${page.order}`,
+          { prompt: generationPrompt }
+        ),
+      },
+    },
+    arrayFilters: [pageFilter],
+  });
+
+  const generationInput = {
+    prompt: generationPrompt,
+    guidance_scale: 2,
+    output_quality: 100,
+    output_format: 'png',
+    num_outputs: 4,
+    go_fast: false,
+    num_inference_steps: 28,
+    megapixels: '1',
+    lora_scale: 1,
+    extra_lora_scale: 1,
+    pageOrder: page.order,
+  };
+
+  const createdAt = new Date();
+  const generation = await Generation.create({
+    userId: job.userId,
+    trainingId: training._id,
+    modelVersion: training.modelVersion,
+    prompt: generationPrompt,
+    generationConfig: {
+      model: 'ranked',
+      mode: 'ranked',
+      goFast: Boolean(generationInput.go_fast),
+      loraScale: generationInput.lora_scale,
+      megapixels: generationInput.megapixels,
+      numOutputs: generationInput.num_outputs,
+      aspectRatio: generationInput.aspect_ratio || '1:1',
+      outputFormat: generationInput.output_format,
+      guidanceScale: generationInput.guidance_scale,
+      outputQuality: generationInput.output_quality,
+      promptStrength: generationInput.prompt_strength || 0.8,
+      extraLoraScale: generationInput.extra_lora_scale,
+      numInferenceSteps: generationInput.num_inference_steps,
+      pageOrder: page.order,
+    },
+    status: 'queued',
+    progress: 0,
+    attempts: 0,
+    replicateInput: generationInput,
+    storybookContext: {
+      jobId: job._id,
+      bookId: job.bookId,
+      pageId: page.pageId,
+      pageOrder: page.order,
+    },
+    events: [
+      {
+        type: 'created',
+        message: 'Storybook ranked generation queued',
+        metadata: {
+          jobId: job._id,
+          pageOrder: page.order,
+        },
+        timestamp: createdAt,
+      },
+    ],
+  });
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        'pages.$[page].generationId': generation._id,
+      },
+      $push: {
+        events: createEvent('page-generation-created', `Generation created for page ${page.order}`, {
+          generationId: generation._id,
+        }),
+        'pages.$[page].events': createEvent(
+          'generation-created',
+          'Ranked generation created',
+          {
+            generationId: generation._id,
+          }
+        ),
+      },
+    },
+    arrayFilters: [pageFilter],
+  });
+
+  await broadcastGeneration(generation._id);
+
+  const generationPromise = waitForGeneration({
+    generationId: generation._id,
+    job,
+    page,
+  });
+
+  try {
+    await dispatchGenerationAttempt({
+      generationId: generation._id,
+      modelVersion: training.modelVersion,
+      input: generationInput,
+      reason: 'storybook-page',
+    });
+  } catch (error) {
+    await updateJobAndEmit({
+      jobId: job._id,
+      update: {
+        $set: {
+          'pages.$[page].status': 'failed',
+          'pages.$[page].error': error.message,
+          'pages.$[page].completedAt': new Date(),
+        },
+        $push: {
+          'pages.$[page].events': createEvent(
+            'generation-dispatch-error',
+            `Failed to dispatch generation: ${error.message}`
+          ),
+        },
+      },
+      arrayFilters: [pageFilter],
+    });
+    throw error;
+  }
+
+  const finalGeneration = await generationPromise.catch(async (error) => {
+    await updateJobAndEmit({
+      jobId: job._id,
+      update: {
+        $set: {
+          'pages.$[page].status': 'failed',
+          'pages.$[page].error': error.message,
+          'pages.$[page].completedAt': new Date(),
+        },
+        $push: {
+          'pages.$[page].events': createEvent(
+            'generation-failed',
+            `Generation failed: ${error.message}`
+          ),
+        },
+      },
+      arrayFilters: [pageFilter],
+    });
+    throw error;
+  });
+
+  const populatedGeneration = await populateForClient(generation._id);
+  const winner = deriveWinnerAsset(populatedGeneration);
+
+  if (!winner || !winner.asset) {
+    throw new Error(`No winning asset found for page ${page.order}`);
+  }
+
+  const bookCharacterAsset = await copyAssetToBookCharacterSlot({
+    book,
+    page,
+    asset: winner.asset,
+  });
+
+  await updateBookCharacterImage({
+    bookId: book._id,
+    page,
+    newAsset: bookCharacterAsset,
+  });
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        'pages.$[page].status': 'completed',
+        'pages.$[page].completedAt': new Date(),
+        'pages.$[page].characterAsset': bookCharacterAsset,
+        'pages.$[page].rankingWinner': winner.winner,
+        'pages.$[page].rankingSummary': winner.summary,
+        'pages.$[page].rankingNotes': winner.notes,
+        'pages.$[page].progress': 100,
+      },
+      $push: {
+        'pages.$[page].events': createEvent('page-completed', 'Page generation completed', {
+          generationId: generation._id,
+          winner: winner.winner,
+        }),
+      },
+    },
+    arrayFilters: [pageFilter],
+  });
+};
+
+const processStorybookJob = async (jobId) => {
+  const job = await StorybookJob.findById(jobId);
+  if (!job) {
+    throw new Error(`Storybook job ${jobId} not found`);
+  }
+
+  if (!job.startedAt) {
+    job.startedAt = new Date();
+    await job.save();
+  }
+
+  const book = await Book.findById(job.bookId);
+  if (!book) {
+    throw new Error('Book not found for storybook automation');
+  }
+
+  const training = await Training.findById(job.trainingId);
+  if (!training || training.status !== 'succeeded' || !training.modelVersion) {
+    throw new Error('Training must be successful with a model version');
+  }
+
+  const reader = job.readerId ? await User.findById(job.readerId) : null;
+  const readerName = job.readerName || reader?.name || '';
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        status: 'generating',
+      },
+      $push: {
+        events: createEvent('job-started', 'Storybook automation started'),
+      },
+    },
+  });
+
+  const errors = [];
+  let cursor = 0;
+
+  const runWorker = async () => {
+    while (cursor < job.pages.length) {
+      const index = cursor;
+      cursor += 1;
+      const page = job.pages[index];
+      try {
+        await processJobPage({
+          job,
+          page,
+          book,
+          training,
+          readerName,
+        });
+      } catch (error) {
+        errors.push({ page, error });
+        return;
+      }
+    }
+  };
+
+  const workerCount = Math.min(PAGE_CONCURRENCY, job.pages.length);
+  const workers = Array.from({ length: workerCount }, () => runWorker());
+  await Promise.all(workers);
+
+  if (errors.length) {
+    const failure = errors[0];
+    await updateJobAndEmit({
+      jobId: job._id,
+      update: {
+        $set: {
+          status: 'failed',
+          error: failure.error.message,
+          completedAt: new Date(),
+        },
+        $push: {
+          events: createEvent('job-failed', failure.error.message, {
+            pageOrder: failure.page?.order,
+          }),
+        },
+      },
+    });
+    throw failure.error;
+  }
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        status: 'assembling',
+        metadata: { assemblyProgress: 0 },
+      },
+      $push: {
+        events: createEvent('job-assembling', 'Generating final PDF'),
+      },
+    },
+  });
+
+  const refreshedJob = await StorybookJob.findById(job._id);
+  const refreshedBook = await Book.findById(job.bookId);
+
+  const pdfPages = refreshedBook.pages
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .map((bookPage) => {
+      const jobPage = refreshedJob.pages.find(
+        (entry) =>
+          (entry.pageId && entry.pageId.toString() === bookPage._id.toString()) ||
+          entry.order === bookPage.order
+      );
+      return preparePageStoryContent({
+        bookPage,
+        jobPage: jobPage || {},
+        readerName,
+      });
+    });
+
+  const pdfAsset = await buildPdfAsset({
+    book: refreshedBook,
+    job: refreshedJob,
+    pages: pdfPages,
+  });
+
+  await Book.findByIdAndUpdate(book._id, {
+    $push: {
+      pdfAssets: pdfAsset,
+    },
+  });
+
+  await updateJobAndEmit({
+    jobId: job._id,
+    update: {
+      $set: {
+        status: 'succeeded',
+        pdfAsset,
+        completedAt: new Date(),
+        metadata: { assemblyProgress: 10 },
+      },
+      $push: {
+        events: createEvent('job-completed', 'Storybook automation completed successfully', {
+          pdfKey: pdfAsset.key,
+        }),
+      },
+    },
+  });
+};
+
+const formatBookPagesForJob = (book) =>
+  (book.pages || [])
+    .slice()
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .map((page) => ({
+      pageId: page._id,
+      order: page.order,
+      prompt: page.characterPrompt || '',
+      text: page.text || '',
+      status: 'queued',
+      progress: 0,
+      events: [createEvent('page-queued', 'Page queued for generation')],
+    }));
+
+const startStorybookAutomation = async ({
+  bookId,
+  trainingId,
+  userId,
+  readerId,
+  readerName,
+  title,
+}) => {
+  const book = await Book.findById(bookId);
+  if (!book) {
+    throw new Error('Book not found');
+  }
+
+  if (!Array.isArray(book.pages) || !book.pages.length) {
+    throw new Error('Book has no pages to generate');
+  }
+
+  const training = await Training.findById(trainingId);
+  if (!training) {
+    throw new Error('Training not found');
+  }
+
+  if (training.status !== 'succeeded' || !training.modelVersion) {
+    throw new Error('Training must be completed successfully before generating images');
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new Error('User (reader) not found for generation');
+  }
+
+  const resolvedReaderId = readerId || userId;
+  const resolvedReaderName = readerName || user.name || '';
+
+  const job = await StorybookJob.create({
+    bookId,
+    trainingId,
+    userId,
+    readerId: resolvedReaderId,
+    readerName: resolvedReaderName,
+    title: title || `${book.name} Storybook`,
+    status: 'queued',
+    progress: 0,
+    pages: formatBookPagesForJob(book),
+    events: [createEvent('job-queued', 'Storybook automation queued')],
+  });
+
+  process.nextTick(() => {
+    processStorybookJob(job._id).catch((error) => {
+      console.error(`[storybook] job ${job._id} failed:`, error);
+    });
+  });
+
+  const jobDoc = await StorybookJob.findById(job._id);
+  const snapshot = await syncComputedFields(jobDoc);
+  emitStorybookUpdate(snapshot);
+  return snapshot;
+};
+
+const getStorybookJobById = async (jobId) => {
+  const job = await StorybookJob.findById(jobId);
+  if (!job) return null;
+  return emitJob(job);
+};
+
+const listStorybookJobsForBook = async (bookId, limit = 10) => {
+  const jobs = await StorybookJob.find({ bookId })
+    .sort({ createdAt: -1 })
+    .limit(limit);
+  return jobs.map((job) => {
+    const snapshot = job.toObject({ depopulate: true });
+    snapshot.progress = computeJobProgress(snapshot);
+    snapshot.estimatedSecondsRemaining = computeEtaSeconds(snapshot, snapshot.progress);
+    return snapshot;
+  });
+};
+
+module.exports = {
+  startStorybookAutomation,
+  getStorybookJobById,
+  listStorybookJobsForBook,
+};

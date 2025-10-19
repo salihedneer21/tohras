@@ -228,6 +228,26 @@ const generationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    storybookContext: {
+      jobId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'StorybookJob',
+        default: null,
+      },
+      bookId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Book',
+        default: null,
+      },
+      pageId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null,
+      },
+      pageOrder: {
+        type: Number,
+        default: null,
+      },
+    },
   },
   {
     timestamps: true,
@@ -240,6 +260,7 @@ generationSchema.index({ trainingId: 1 });
 generationSchema.index({ status: 1 });
 generationSchema.index({ createdAt: -1 });
 generationSchema.index({ replicatePredictionId: 1 });
+generationSchema.index({ 'storybookContext.jobId': 1 });
 
 const Generation = mongoose.model('Generation', generationSchema);
 

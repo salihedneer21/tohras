@@ -1,5 +1,4 @@
 const Training = require('../models/Training');
-const User = require('../models/User');
 const { replicate } = require('../config/replicate');
 const { extractProgressFromReplicate } = require('../utils/replicate');
 const { buildWebhookUrl } = require('../utils/webhook');
@@ -11,6 +10,39 @@ const TRAINING_POLL_INTERVAL_MS = Number(process.env.TRAINING_POLL_INTERVAL_MS |
 const TRAINING_MAX_POLL_INTERVAL_MS = Number(process.env.TRAINING_MAX_POLL_INTERVAL_MS || 60000);
 
 const pollers = new Map();
+
+const clampProgress = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num <= 0) return 0;
+  if (num >= 100) return 100;
+  return Math.round(num * 10) / 10;
+};
+
+const parseProgressFromLogs = (logsText) => {
+  if (!logsText || typeof logsText !== 'string') return null;
+  const lines = logsText.split('\n');
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const originalLine = lines[index];
+    if (!originalLine) continue;
+    const line = originalLine.trim();
+    if (!line) continue;
+    if (!line.toLowerCase().includes('flux_train_replicate')) {
+      continue;
+    }
+
+    const match = line.match(/(\d{1,3})%/);
+    if (match) {
+      const value = clampProgress(Number(match[1]));
+      if (value !== null) {
+        return value;
+      }
+    }
+  }
+
+  return null;
+};
 
 const populateTrainingForClient = async (trainingId) =>
   Training.findById(trainingId)
@@ -166,8 +198,18 @@ const processTrainingEvent = async ({ trainingId, replicateTraining, eventType }
   const pushLogs = [];
   const pushEvents = [];
 
+  const ensureProgress = (candidate) => {
+    if (candidate === null || candidate === undefined) return;
+    const existing =
+      set.progress !== undefined && set.progress !== null
+        ? set.progress
+        : training.progress || 0;
+    const next = Math.max(existing, candidate);
+    set.progress = clampProgress(next);
+  };
+
   if (progress !== null) {
-    set.progress = Math.max(progress, training.progress || 0);
+    ensureProgress(progress);
   }
 
   if (eventType === 'start') {
@@ -188,6 +230,11 @@ const processTrainingEvent = async ({ trainingId, replicateTraining, eventType }
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !existingMessages.has(line))
       .forEach((message) => pushLogs.push({ message, timestamp: now }));
+
+    const logProgress = parseProgressFromLogs(replicateTraining.logs);
+    if (logProgress !== null) {
+      ensureProgress(logProgress);
+    }
   }
 
   set.status = replicateTraining.status || training.status;
