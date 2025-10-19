@@ -26,7 +26,9 @@ exports.handleReplicateWebhook = async (req, res) => {
 
   const token = req.query.token;
   if (!verifyWebhookToken(resourceType, resourceId, token)) {
-    console.warn('⚠️  Webhook token verification failed');
+    console.warn(
+      `⚠️  Webhook token verification failed for ${resourceType}:${resourceId} (token=${token || 'missing'})`
+    );
     return res.status(401).json({
       success: false,
       message: 'Invalid webhook token',
@@ -45,6 +47,9 @@ exports.handleReplicateWebhook = async (req, res) => {
 
   try {
     if (resourceType === 'generation') {
+      console.log(
+        `📨 Received Replicate webhook for generation ${resourceId} (event=${eventType}, status=${prediction.status})`
+      );
       await processPredictionEvent({
         generationId: resourceId,
         prediction,

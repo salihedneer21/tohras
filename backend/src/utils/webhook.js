@@ -25,6 +25,9 @@ const buildWebhookUrl = (resourceType, resourceId) => {
   if (!baseUrl) return null;
 
   const url = new URL(`/api/webhooks/replicate/${resourceType}/${resourceId}`, baseUrl);
+  if (/\.ngrok/.test(url.hostname)) {
+    url.searchParams.set('ngrok-skip-browser-warning', 'true');
+  }
   const token = generateWebhookToken(resourceType, resourceId);
   if (token) {
     url.searchParams.set('token', token);

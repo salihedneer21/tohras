@@ -1,19 +1,23 @@
 const Generation = require('../models/Generation');
+const User = require('../models/User');
 const { replicate } = require('../config/replicate');
 const { extractProgressFromReplicate } = require('../utils/replicate');
-const { uploadGenerationOutputs } = require('./generationOutputs');
+const { uploadGenerationOutputs, getSignedDownloadUrls } = require('./generationOutputs');
 const { emitGenerationUpdate } = require('./generationEvents');
 const { buildWebhookUrl } = require('../utils/webhook');
+const { rankGeneratedImages } = require('./rankingService');
 
 const MAX_ATTEMPTS = Number(process.env.GENERATION_MAX_ATTEMPTS || 3);
 const WEBHOOK_EVENTS = ['start', 'logs', 'output', 'completed'];
-
+const POLL_INTERVAL_MS = Number(process.env.GENERATION_POLL_INTERVAL_MS || 5000);
+const MAX_POLL_INTERVAL_MS = Number(process.env.GENERATION_MAX_POLL_INTERVAL_MS || 20000);
 const FORMAT_MIME_MAP = {
   webp: 'image/webp',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   png: 'image/png',
 };
+const FINAL_PREDICTION_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 
 const populateForClient = async (generationId) =>
   Generation.findById(generationId)
@@ -26,6 +30,44 @@ const broadcastGeneration = async (generationId) => {
     emitGenerationUpdate(populated);
   }
   return populated;
+};
+
+const predictionPollers = new Map();
+
+const clearPredictionPolling = (generationId) => {
+  const timer = predictionPollers.get(generationId);
+  if (timer) {
+    clearTimeout(timer);
+    predictionPollers.delete(generationId);
+  }
+};
+
+const schedulePredictionPolling = (generationId, predictionId, delay = POLL_INTERVAL_MS) => {
+  clearPredictionPolling(generationId);
+  const timer = setTimeout(async () => {
+    try {
+      const prediction = await replicate.predictions.get(predictionId);
+      const terminal = FINAL_PREDICTION_STATUSES.has(prediction.status);
+      const eventType = terminal ? 'completed' : 'update';
+      await processPredictionEvent({
+        generationId,
+        prediction,
+        eventType,
+      });
+      if (!terminal) {
+        const nextDelay = Math.min(delay, MAX_POLL_INTERVAL_MS);
+        schedulePredictionPolling(generationId, predictionId, nextDelay);
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to poll prediction ${predictionId} for generation ${generationId}:`,
+        error.message
+      );
+      const retryDelay = Math.min(delay * 2, MAX_POLL_INTERVAL_MS);
+      schedulePredictionPolling(generationId, predictionId, retryDelay);
+    }
+  }, delay);
+  predictionPollers.set(generationId, timer);
 };
 
 const clampNumber = (value, fallback) => {
@@ -88,6 +130,7 @@ const appendUpdateOperations = ({ set, pushEvents = [], pushLogs = [] }) => {
 
 const ensureMaxAttempts = async (generation) => {
   if ((generation.attempts || 0) >= MAX_ATTEMPTS) {
+    clearPredictionPolling(generation._id);
     await Generation.findByIdAndUpdate(generation._id, {
       $set: {
         status: 'failed',
@@ -139,6 +182,10 @@ const dispatchGenerationAttempt = async ({ generationId, modelVersion, input, re
     });
 
     const now = new Date();
+    console.log(
+      `📬 Dispatched Replicate prediction ${prediction.id} for generation ${generationId} (attempt ${attemptNumber})`
+    );
+    console.log(`   ↪ Webhook: ${webhook}`);
     await Generation.findByIdAndUpdate(generationId, {
       $set: {
         replicatePredictionId: prediction.id,
@@ -164,6 +211,7 @@ const dispatchGenerationAttempt = async ({ generationId, modelVersion, input, re
     });
 
     await broadcastGeneration(generationId);
+    schedulePredictionPolling(generationId, prediction.id);
     return prediction;
   } catch (error) {
     const now = new Date();
@@ -199,6 +247,7 @@ const processPredictionEvent = async ({ generationId, prediction, eventType }) =
     console.warn(
       `⚠️  Ignoring webhook event for stale prediction ${prediction.id} (current: ${generation.replicatePredictionId})`
     );
+    clearPredictionPolling(generationId);
     return null;
   }
 
@@ -207,6 +256,10 @@ const processPredictionEvent = async ({ generationId, prediction, eventType }) =
   const set = {};
   const events = [];
   const logs = [];
+
+  console.log(
+    `🔔 Prediction update for generation ${generationId}: event=${eventType} status=${prediction.status} progress=${progress ?? 'n/a'}`
+  );
 
   if (progress !== null) {
     set.progress = Math.max(progress, generation.progress || 0);
@@ -244,9 +297,23 @@ const processPredictionEvent = async ({ generationId, prediction, eventType }) =
       },
       timestamp: now,
     });
+
+    const expectedOutputs = clampNumber(generation.generationConfig?.numOutputs, prediction.output.length);
+    if (expectedOutputs > 0) {
+      const outputProgress = Math.min(
+        100,
+        Math.round((prediction.output.length / expectedOutputs) * 100)
+      );
+      const currentProgress =
+        set.progress !== undefined ? set.progress : generation.progress || 0;
+      if (outputProgress > currentProgress) {
+        set.progress = outputProgress;
+      }
+    }
   }
 
   if (eventType === 'completed') {
+    clearPredictionPolling(generationId);
     events.push({
       type: 'completed',
       message: `Replicate completed with status ${prediction.status}`,
@@ -281,18 +348,111 @@ const processPredictionEvent = async ({ generationId, prediction, eventType }) =
           fallbackContentType,
         });
 
+        const isRankedMode =
+          generation.generationConfig?.mode === 'ranked' ||
+          generation.generationConfig?.model === 'ranked';
+
         set.status = 'succeeded';
         set.imageUrls = imageUrls;
         set.imageAssets = imageAssets;
-        set.completedAt = now;
-        set.progress = 100;
+
+        const currentProgressAfterUpload =
+          set.progress !== undefined ? set.progress : generation.progress || 0;
+        const uploadProgress = isRankedMode ? 90 : 100;
+        if (uploadProgress > currentProgressAfterUpload) {
+          set.progress = uploadProgress;
+        }
+
+        if (!isRankedMode) {
+          set.completedAt = now;
+        }
 
         events.push({
-          type: 'succeeded',
+          type: 'outputs-uploaded',
           message: `Uploaded ${imageUrls.length} generated image(s).`,
           metadata: { count: imageUrls.length },
           timestamp: now,
         });
+
+        if (isRankedMode) {
+          const rankStartTime = new Date();
+          events.push({
+            type: 'ranking',
+            message: 'Ranking generated images with LLM evaluator',
+            metadata: { count: imageAssets.length },
+            timestamp: rankStartTime,
+          });
+
+          const currentProgress =
+            set.progress !== undefined ? set.progress : generation.progress || 0;
+          if (currentProgress < 95) {
+            set.progress = 95;
+          }
+
+          try {
+            const signedAssets = await getSignedDownloadUrls(imageAssets);
+            const userDoc = await User.findById(generation.userId).select('name gender age');
+
+            const ranking = await rankGeneratedImages({
+              prompt: generation.prompt,
+              assets: signedAssets,
+              childProfile: userDoc
+                ? {
+                    name: userDoc.name,
+                    gender: userDoc.gender,
+                    age: userDoc.age,
+                  }
+                : null,
+            });
+
+            set.ranking = {
+              summary: ranking.summary,
+              promptReflection: ranking.promptReflection || '',
+              winners:
+                ranking.winners && ranking.winners.length
+                  ? ranking.winners
+                  : [ranking.ranked[0]?.imageIndex || 1],
+              ranked: ranking.ranked,
+              createdAt: new Date(),
+              raw: ranking.raw || null,
+              childProfile: ranking.childProfile,
+            };
+
+            set.progress = 100;
+            set.completedAt = new Date();
+
+            events.push({
+              type: 'ranking-complete',
+              message: 'Ranking completed successfully',
+              metadata: {
+                winners: set.ranking.winners,
+              },
+              timestamp: new Date(),
+            });
+
+            events.push({
+              type: 'succeeded',
+              message: 'Ranked generation finished',
+              metadata: {
+                totalOutputs: imageAssets.length,
+              },
+              timestamp: new Date(),
+            });
+          } catch (rankingError) {
+            events.push({
+              type: 'ranking-error',
+              message: `Ranking failed: ${rankingError.message}`,
+              metadata: {},
+              timestamp: new Date(),
+            });
+            set.status = 'failed';
+            set.error = `Ranking failed: ${rankingError.message}`;
+            set.completedAt = new Date();
+          }
+        }
+        else {
+          set.completedAt = now;
+        }
       }
     } else {
       const failureMessage = prediction.error || 'Generation failed';
