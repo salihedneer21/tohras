@@ -41,6 +41,13 @@ const normalizeTrainingPayload = (req, res, next) => {
 router.get('/', trainingController.getAllTrainings);
 
 /**
+ * @route   GET /api/trainings/stream/live
+ * @desc    Subscribe to training updates (SSE)
+ * @access  Public
+ */
+router.get('/stream/live', trainingController.streamTrainings);
+
+/**
  * @route   GET /api/trainings/:id
  * @desc    Get training by ID
  * @access  Public

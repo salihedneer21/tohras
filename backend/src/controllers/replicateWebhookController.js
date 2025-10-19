@@ -1,7 +1,8 @@
 const { verifyWebhookToken } = require('../utils/webhook');
 const { processPredictionEvent } = require('../services/generationWorkflow');
+const { processTrainingEvent } = require('../services/trainingWorkflow');
 
-const SUPPORTED_RESOURCES = new Set(['generation']);
+const SUPPORTED_RESOURCES = new Set(['generation', 'training']);
 
 const determineEventType = (req, prediction) => {
   const headerEvent = req.get('x-replicate-event');
@@ -35,24 +36,33 @@ exports.handleReplicateWebhook = async (req, res) => {
     });
   }
 
-  const prediction = req.body;
-  if (!prediction || typeof prediction !== 'object') {
+  const payload = req.body;
+  if (!payload || typeof payload !== 'object') {
     return res.status(400).json({
       success: false,
       message: 'Invalid webhook payload',
     });
   }
 
-  const eventType = determineEventType(req, prediction);
+  const eventType = determineEventType(req, payload);
 
   try {
     if (resourceType === 'generation') {
       console.log(
-        `📨 Received Replicate webhook for generation ${resourceId} (event=${eventType}, status=${prediction.status})`
+        `📨 Received Replicate webhook for generation ${resourceId} (event=${eventType}, status=${payload.status})`
       );
       await processPredictionEvent({
         generationId: resourceId,
-        prediction,
+        prediction: payload,
+        eventType,
+      });
+    } else if (resourceType === 'training') {
+      console.log(
+        `📨 Received Replicate webhook for training ${resourceId} (event=${eventType}, status=${payload.status})`
+      );
+      await processTrainingEvent({
+        trainingId: resourceId,
+        replicateTraining: payload,
         eventType,
       });
     }

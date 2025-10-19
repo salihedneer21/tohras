@@ -13,7 +13,13 @@ const {
   generateTrainingZipKey,
   downloadFromS3,
 } = require('../config/s3');
-const { extractProgressFromReplicate } = require('../utils/replicate');
+const { subscribeToTrainingUpdates } = require('../services/trainingEvents');
+const {
+  dispatchTraining,
+  processTrainingEvent,
+  broadcastTraining,
+  populateTrainingForClient,
+} = require('../services/trainingWorkflow');
 
 const MAX_TRAINING_IMAGES = 25;
 
@@ -312,16 +318,29 @@ exports.startTraining = async (req, res) => {
       trigger_word: triggerWord,
     };
 
-    console.log('🚀 Starting training with Replicate...');
+    const trainingConfigRecord = {
+      steps: trainingInput.steps,
+      learningRate: trainingInput.learning_rate,
+      batchSize: trainingInput.batch_size,
+      triggerWord,
+      source: useUserAssets ? 'user-library' : 'upload',
+      zipPath: generatedZipKey,
+      zipUrl,
+    };
+
+    if (useUserAssets && userAssetIdsUsed.length) {
+      trainingConfigRecord.userAssetIds = userAssetIdsUsed;
+    }
+    console.log('🚀 Preparing training request for Replicate...');
     console.log('Training Config:', trainingInput);
 
-    const trainingOptions = {
+    const replicateOptions = {
       input: trainingInput,
     };
 
     if (process.env.REPLICATE_USERNAME) {
       const destinationPath = `${process.env.REPLICATE_USERNAME}/${uniqueModelName}`;
-      trainingOptions.destination = destinationPath;
+      replicateOptions.destination = destinationPath;
       try {
         await replicate.models.create(process.env.REPLICATE_USERNAME, uniqueModelName, {
           visibility: 'private',
@@ -337,45 +356,73 @@ exports.startTraining = async (req, res) => {
       console.log('⚠️  No REPLICATE_USERNAME set - training will not be saved to account');
     }
 
-    const training = await replicate.trainings.create(
-      'ostris',
-      'flux-dev-lora-trainer',
-      'e440909d3512c31646ee2e0c7d6f6f4923224863a6a10c494606e79fb5844497',
-      trainingOptions
-    );
-
-    console.log('✅ Training started:', training.id);
-
-    const trainingConfigRecord = {
-      steps: trainingInput.steps,
-      learningRate: trainingInput.learning_rate,
-      batchSize: trainingInput.batch_size,
-      triggerWord,
-      source: useUserAssets ? 'user-library' : 'upload',
-      zipPath: generatedZipKey,
-      zipUrl,
-    };
-
-    if (useUserAssets && userAssetIdsUsed.length) {
-      trainingConfigRecord.userAssetIds = userAssetIdsUsed;
-    }
-
     const newTraining = await Training.create({
       userId,
-      replicateTrainingId: training.id,
       modelName: uniqueModelName,
       imageUrls: uploadedAssets.map((asset) => asset.url),
       imageAssets: uploadedAssets,
-      status: training.status,
-      progress: extractProgressFromReplicate(training) ?? 0,
-      logsUrl: training.logs,
+      status: 'queued',
+      progress: 0,
+      logsUrl: null,
       trainingConfig: trainingConfigRecord,
+      attempts: 0,
+      events: [
+        {
+          type: 'created',
+          message: 'Training dataset prepared and queued',
+          metadata: {
+            userId,
+            modelName: uniqueModelName,
+            images: uploadedAssets.length,
+            source: trainingConfigRecord.source,
+          },
+          timestamp: new Date(),
+        },
+      ],
     });
 
-    res.status(201).json({
+    await broadcastTraining(newTraining._id);
+
+    const replicateArgs = {
+      owner: 'ostris',
+      project: 'flux-dev-lora-trainer',
+      version: 'e440909d3512c31646ee2e0c7d6f6f4923224863a6a10c494606e79fb5844497',
+      ...replicateOptions,
+    };
+
+    try {
+      await dispatchTraining({
+        trainingId: newTraining._id,
+        replicateArgs,
+        reason: 'initial',
+      });
+    } catch (dispatchError) {
+      const failureTime = new Date();
+      await Training.findByIdAndUpdate(newTraining._id, {
+        $set: {
+          status: 'failed',
+          error: dispatchError.message,
+          completedAt: failureTime,
+        },
+        $push: {
+          events: {
+            type: 'error',
+            message: `Failed to dispatch training: ${dispatchError.message}`,
+            metadata: { attempt: 1 },
+            timestamp: failureTime,
+          },
+        },
+      });
+      await broadcastTraining(newTraining._id);
+      throw dispatchError;
+    }
+
+    const populatedTraining = await populateTrainingForClient(newTraining._id);
+
+    res.status(202).json({
       success: true,
       message: 'Training started successfully',
-      data: newTraining,
+      data: populatedTraining,
     });
   } catch (error) {
     console.error('❌ Error starting training:', error);
@@ -421,38 +468,29 @@ exports.checkTrainingStatus = async (req, res) => {
       });
     }
 
-    // Get status from Replicate
+    if (!training.replicateTrainingId) {
+      return res.status(200).json({
+        success: true,
+        data: training,
+      });
+    }
+
     const replicateTraining = await replicate.trainings.get(training.replicateTrainingId);
+    const eventType = ['succeeded', 'failed', 'canceled'].includes(replicateTraining.status)
+      ? 'completed'
+      : 'update';
 
-    // Update training in database
-    training.status = replicateTraining.status;
-    training.logsUrl = replicateTraining.logs;
+    await processTrainingEvent({
+      trainingId: training._id,
+      replicateTraining,
+      eventType,
+    });
 
-    const computedProgress = extractProgressFromReplicate(replicateTraining);
-    if (computedProgress !== null) {
-      training.progress =
-        training.progress !== undefined && training.progress !== null
-          ? Math.max(training.progress, computedProgress)
-          : computedProgress;
-    }
-
-    if (replicateTraining.status === 'succeeded') {
-      training.modelVersion = replicateTraining.output?.version;
-      training.completedAt = new Date();
-      training.progress = 100;
-    } else if (replicateTraining.status === 'failed') {
-      training.error = replicateTraining.error || 'Training failed';
-      training.completedAt = new Date();
-      if (training.progress === undefined || training.progress === null) {
-        training.progress = computedProgress ?? 0;
-      }
-    }
-
-    await training.save();
+    const updated = await populateTrainingForClient(training._id);
 
     res.status(200).json({
       success: true,
-      data: training,
+      data: updated,
     });
   } catch (error) {
     console.error('Error checking training status:', error);
@@ -482,14 +520,31 @@ exports.cancelTraining = async (req, res) => {
     // Cancel training on Replicate
     await replicate.trainings.cancel(training.replicateTrainingId);
 
-    training.status = 'canceled';
-    training.completedAt = new Date();
-    await training.save();
+    const now = new Date();
+    await Training.findByIdAndUpdate(training._id, {
+      $set: {
+        status: 'canceled',
+        completedAt: now,
+      },
+      $push: {
+        events: {
+          type: 'canceled',
+          message: 'Training canceled by user',
+          metadata: {
+            replicateTrainingId: training.replicateTrainingId,
+          },
+          timestamp: now,
+        },
+      },
+    });
+
+    const updatedTraining = await populateTrainingForClient(training._id);
+    await broadcastTraining(training._id);
 
     res.status(200).json({
       success: true,
       message: 'Training canceled successfully',
-      data: training,
+      data: updatedTraining,
     });
   } catch (error) {
     console.error('Error canceling training:', error);
@@ -499,6 +554,42 @@ exports.cancelTraining = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+const serialiseTraining = (payload) => {
+  if (!payload) return null;
+  if (typeof payload.toJSON === 'function') {
+    return payload.toJSON();
+  }
+  return payload;
+};
+
+exports.streamTrainings = (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  if (res.flushHeaders) {
+    res.flushHeaders();
+  }
+
+  res.write(': stream-start\n\n');
+
+  const send = (payload) => {
+    const data = serialiseTraining(payload);
+    if (!data) return;
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const unsubscribe = subscribeToTrainingUpdates(send);
+  const heartbeat = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 };
 
 /**

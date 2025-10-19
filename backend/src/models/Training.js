@@ -24,7 +24,7 @@ const trainingSchema = new mongoose.Schema(
     },
     replicateTrainingId: {
       type: String,
-      required: true,
+      default: null,
     },
     modelVersion: {
       type: String,
@@ -44,8 +44,8 @@ const trainingSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['starting', 'processing', 'succeeded', 'failed', 'canceled'],
-      default: 'starting',
+      enum: ['queued', 'starting', 'processing', 'succeeded', 'failed', 'canceled'],
+      default: 'queued',
     },
     progress: {
       type: Number,
@@ -53,6 +53,20 @@ const trainingSchema = new mongoose.Schema(
       max: 100,
       default: 0,
     },
+    logs: [
+      {
+        message: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
+    events: [
+      {
+        type: { type: String, required: true },
+        message: { type: String, default: '' },
+        metadata: { type: mongoose.Schema.Types.Mixed, default: null },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
     logsUrl: {
       type: String,
       default: null,
@@ -62,6 +76,10 @@ const trainingSchema = new mongoose.Schema(
       default: null,
     },
     completedAt: {
+      type: Date,
+      default: null,
+    },
+    startedAt: {
       type: Date,
       default: null,
     },
@@ -105,6 +123,11 @@ const trainingSchema = new mongoose.Schema(
         },
       ],
     },
+    attempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
@@ -114,7 +137,10 @@ const trainingSchema = new mongoose.Schema(
 // Index for faster queries
 trainingSchema.index({ userId: 1 });
 trainingSchema.index({ status: 1 });
-trainingSchema.index({ replicateTrainingId: 1 }, { unique: true });
+trainingSchema.index(
+  { replicateTrainingId: 1 },
+  { unique: true, partialFilterExpression: { replicateTrainingId: { $exists: true, $ne: null } } }
+);
 
 const Training = mongoose.model('Training', trainingSchema);
 

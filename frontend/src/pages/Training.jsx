@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   Boxes,
   CloudUpload,
-  RefreshCw,
   Rocket,
   Ban,
   DownloadCloud,
   ExternalLink,
   Maximize2,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { userAPI, trainingAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -41,11 +41,90 @@ const createInitialForm = () => ({
 });
 
 const STATUS_VARIANTS = {
+  queued: { variant: 'warning', label: 'Queued' },
   starting: { variant: 'warning', label: 'Starting' },
   processing: { variant: 'default', label: 'Processing' },
   succeeded: { variant: 'success', label: 'Succeeded' },
   failed: { variant: 'destructive', label: 'Failed' },
   canceled: { variant: 'outline', label: 'Canceled' },
+};
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+const MAX_TRAINING_ATTEMPTS = Number(import.meta.env.VITE_TRAINING_MAX_ATTEMPTS || 1);
+
+const sortByCreatedAtDesc = (a, b) =>
+  new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
+
+const mergeTrainingPayload = (current = {}, incoming = {}) => {
+  const merged = {
+    ...current,
+    ...incoming,
+  };
+
+  if (incoming.userId || current.userId) {
+    merged.userId = incoming.userId || current.userId;
+  }
+
+  merged.imageAssets = Array.isArray(incoming.imageAssets)
+    ? incoming.imageAssets
+    : Array.isArray(current.imageAssets)
+    ? current.imageAssets
+    : [];
+
+  merged.imageUrls = Array.isArray(incoming.imageUrls)
+    ? incoming.imageUrls
+    : Array.isArray(current.imageUrls)
+    ? current.imageUrls
+    : [];
+
+  merged.events = Array.isArray(incoming.events)
+    ? incoming.events
+    : Array.isArray(current.events)
+    ? current.events
+    : [];
+
+  merged.logs = Array.isArray(incoming.logs)
+    ? incoming.logs
+    : Array.isArray(current.logs)
+    ? current.logs
+    : [];
+
+  return merged;
+};
+
+const upsertTrainingList = (list, incoming) => {
+  if (!incoming?._id) return list;
+
+  const index = list.findIndex((item) => item._id === incoming._id);
+  if (index === -1) {
+    const next = [incoming, ...list];
+    return next.sort(sortByCreatedAtDesc);
+  }
+
+  const next = [...list];
+  next[index] = mergeTrainingPayload(list[index], incoming);
+  return next.sort(sortByCreatedAtDesc);
+};
+
+const formatTimestamp = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const formatDuration = (milliseconds) => {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return null;
+  const totalSeconds = Math.round(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes >= 1) {
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }
+  return `${seconds}s`;
 };
 
 function Training() {
@@ -56,11 +135,19 @@ function Training() {
   const [formData, setFormData] = useState(createInitialForm);
   const [viewerImage, setViewerImage] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const eventSourceRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const statusMapRef = useRef(new Map());
+  const [isStreamConnected, setIsStreamConnected] = useState(false);
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => fetchData(false), 10000);
-    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(timer);
   }, []);
 
   const modelCount = trainings.length;
@@ -93,14 +180,125 @@ function Training() {
         userAPI.getAll(),
         trainingAPI.getAll(),
       ]);
-      setUsers(usersResponse.data);
-      setTrainings(trainingsResponse.data);
+      const resolvedUsers = Array.isArray(usersResponse?.data)
+        ? usersResponse.data
+        : Array.isArray(usersResponse)
+        ? usersResponse
+        : [];
+      const resolvedTrainings = Array.isArray(trainingsResponse?.data)
+        ? trainingsResponse.data
+        : Array.isArray(trainingsResponse)
+        ? trainingsResponse
+        : [];
+      setUsers(resolvedUsers);
+      const initialTrainings = resolvedTrainings.slice().sort(sortByCreatedAtDesc);
+      setTrainings(initialTrainings);
+      const nextStatuses = new Map(statusMapRef.current);
+      initialTrainings.forEach((training) => {
+        if (training?._id) {
+          nextStatuses.set(training._id, training.status);
+        }
+      });
+      statusMapRef.current = nextStatuses;
     } catch (error) {
       toast.error(`Failed to fetch data: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  const applyTrainingUpdate = useCallback((payload) => {
+    if (Array.isArray(payload)) {
+      setTrainings(payload.slice().sort(sortByCreatedAtDesc));
+      return;
+    }
+    if (!payload?._id) return;
+    setTrainings((previous) => upsertTrainingList(previous, payload));
+  }, []);
+
+  const connectEventStream = useCallback(() => {
+    if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+      console.warn('EventSource is not supported in this environment.');
+      return;
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    const streamUrl = `${API_BASE_URL}/trainings/stream/live`;
+    const source = new EventSource(streamUrl, { withCredentials: true });
+    eventSourceRef.current = source;
+
+    source.onopen = () => {
+      setIsStreamConnected(true);
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+
+    source.onmessage = (event) => {
+      if (!event?.data) return;
+      try {
+        const payload = JSON.parse(event.data);
+        applyTrainingUpdate(payload);
+      } catch (parseError) {
+        console.error('Failed to parse training stream payload', parseError);
+      }
+    };
+
+    source.onerror = (error) => {
+      console.warn('Training stream error, retrying in 4s…', error);
+      setIsStreamConnected(false);
+      source.close();
+      eventSourceRef.current = null;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connectEventStream();
+      }, 4000);
+    };
+  }, [applyTrainingUpdate]);
+
+  useEffect(() => {
+    connectEventStream();
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      setIsStreamConnected(false);
+    };
+  }, [connectEventStream]);
+
+  useEffect(() => {
+    trainings.forEach((training) => {
+      if (!training?._id) return;
+      const previousStatus = statusMapRef.current.get(training._id);
+      if (previousStatus && previousStatus !== training.status) {
+        if (training.status === 'succeeded') {
+          toast.success(`Training "${training.modelName}" completed`);
+        } else if (training.status === 'failed') {
+          toast.error(
+            training.error
+              ? `Training "${training.modelName}" failed: ${training.error}`
+              : `Training "${training.modelName}" failed`
+          );
+        } else if (training.status === 'canceled') {
+          toast(`Training "${training.modelName}" canceled`, {
+            icon: '⚠️',
+          });
+        }
+      }
+      statusMapRef.current.set(training._id, training.status);
+    });
+  }, [trainings]);
 
   const handleInputChange = (event) => {
     const { name, value } = event.target;
@@ -138,10 +336,11 @@ function Training() {
         payload.trainingConfig = formData.trainingConfig;
       }
 
-      await trainingAPI.create(payload);
+      const response = await trainingAPI.create(payload);
+      const createdTraining = response?.data || response;
+      applyTrainingUpdate(createdTraining);
       toast.success('Training kicked off');
       resetForm();
-      fetchData(false);
     } catch (error) {
       toast.error(`Failed to start training: ${error.message}`);
     } finally {
@@ -169,23 +368,14 @@ function Training() {
     setViewerImage(null);
   }, [viewerImage]);
 
-  const handleRefreshTraining = async (id) => {
-    try {
-      const response = await trainingAPI.checkStatus(id);
-      toast.success(`Status updated: ${response.data.status}`);
-      fetchData(false);
-    } catch (error) {
-      toast.error(`Failed to refresh status: ${error.message}`);
-    }
-  };
-
   const handleCancelTraining = async (id) => {
     if (!window.confirm('Cancel this training job?')) return;
 
     try {
-      await trainingAPI.cancel(id);
+      const response = await trainingAPI.cancel(id);
+      const canceledTraining = response?.data || response;
+      applyTrainingUpdate(canceledTraining);
       toast.success('Training canceled');
-      fetchData(false);
     } catch (error) {
       toast.error(`Failed to cancel: ${error.message}`);
     }
@@ -229,6 +419,12 @@ function Training() {
           </Badge>
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
             {completedCount} completed
+          </Badge>
+          <Badge
+            variant={isStreamConnected ? 'success' : 'outline'}
+            className="hidden sm:inline-flex"
+          >
+            {isStreamConnected ? 'Live updates' : 'Reconnecting…'}
           </Badge>
           <Button className="gap-2" onClick={() => setShowForm((prev) => !prev)}>
             <Rocket className="h-4 w-4" />
@@ -456,6 +652,29 @@ function Training() {
                   ? clampedProgress.toString()
                   : clampedProgress.toFixed(1)
                 : null;
+            const startedAt = training.startedAt ? new Date(training.startedAt) : null;
+            const completedAt = training.completedAt ? new Date(training.completedAt) : null;
+            let etaLabel = null;
+            if (
+              startedAt &&
+              clampedProgress !== null &&
+              clampedProgress > 0 &&
+              clampedProgress < 100
+            ) {
+              const referenceTime = training.completedAt ? completedAt.getTime() : now;
+              const elapsedMs = Math.max(0, referenceTime - startedAt.getTime());
+              if (elapsedMs > 0) {
+                const remainingMs = (elapsedMs * (100 - clampedProgress)) / clampedProgress;
+                etaLabel = formatDuration(remainingMs);
+              }
+            }
+            const attemptsLabel = `${training.attempts ?? 0}/${MAX_TRAINING_ATTEMPTS}`;
+            const recentLogs = Array.isArray(training.logs)
+              ? training.logs.slice(-6).reverse()
+              : [];
+            const datasetCount = training.imageAssets?.length || training.imageUrls?.length || 0;
+            const showCancel = ['queued', 'starting', 'processing'].includes(training.status);
+
             return (
               <Card key={training._id} className="flex flex-col justify-between">
                 <CardHeader className="space-y-3">
@@ -472,7 +691,7 @@ function Training() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-foreground/50">
                     <Boxes className="h-3.5 w-3.5" />
-                    <span>{training.imageAssets?.length || training.imageUrls?.length || 0} images</span>
+                    <span>{datasetCount} images</span>
                     {training.trainingConfig?.source === 'upload' && (
                       <span className="rounded-full bg-foreground/10 px-2 py-1 text-[11px] uppercase tracking-wide text-foreground/55">
                         ZIP upload
@@ -480,28 +699,62 @@ function Training() {
                     )}
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 text-sm text-foreground/70">
+                <CardContent className="space-y-4 text-sm text-foreground/70">
                   <p>
                     User · {training.userId?.name} ({training.userId?.email})
                   </p>
-                  {clampedProgress !== null && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-foreground/50">
-                        <span className="uppercase tracking-[0.25em] text-foreground/45">
-                          Progress
-                        </span>
+
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-lg border border-border/60 bg-muted/30 p-3 space-y-3">
+                      <div className="flex items-center justify-between text-xs text-foreground/55">
+                        <span className="uppercase tracking-[0.25em] text-foreground/45">Progress</span>
                         <span className="font-mono text-foreground">
-                          {progressLabel}%
+                          {progressLabel !== null ? `${progressLabel}%` : '—'}
                         </span>
                       </div>
                       <div className="h-2 w-full rounded-full bg-foreground/10">
                         <div
                           className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
-                          style={{ width: `${clampedProgress}%` }}
+                          style={{ width: `${clampedProgress ?? 0}%` }}
                         />
                       </div>
+                      <div className="flex items-center justify-between text-[11px] text-foreground/55">
+                        <span>Status: {statusMeta.label}</span>
+                        {etaLabel ? <span>ETA ~ {etaLabel}</span> : null}
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-foreground/55">
+                        <span>Attempts</span>
+                        <span className="font-mono text-foreground">{attemptsLabel}</span>
+                      </div>
+                      {!hasNumericProgress && (
+                        <p className="text-[11px] text-foreground/55">
+                          Awaiting progress metrics from Replicate…
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2 text-[11px] text-foreground/55">
+                        {startedAt ? <span>Started {startedAt.toLocaleString()}</span> : null}
+                        {completedAt ? <span>Completed {completedAt.toLocaleString()}</span> : null}
+                      </div>
                     </div>
-                  )}
+                    <div className="rounded-lg border border-border/60 bg-card/70 p-3">
+                      <p className="text-xs uppercase tracking-[0.25em] text-foreground/45">Logs</p>
+                      {recentLogs.length > 0 ? (
+                        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto pr-1 font-mono text-[11px] text-foreground/65">
+                          {recentLogs.map((log, index) => (
+                            <div key={`${log.timestamp || index}-${log.message}`}>
+                              <span className="text-foreground/40">
+                                {formatTimestamp(log.timestamp)} ·
+                              </span>{' '}
+                              {log.message}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-foreground/50">Waiting for training logs…</p>
+                      )}
+                    </div>
+                  </div>
+
                   {training.trainingConfig?.zipUrl && (
                     <a
                       href={training.trainingConfig.zipUrl}
@@ -512,9 +765,6 @@ function Training() {
                       <DownloadCloud className="h-3.5 w-3.5" />
                       Download dataset ZIP
                     </a>
-                  )}
-                  {training.completedAt && (
-                    <p>Completed {new Date(training.completedAt).toLocaleString()}</p>
                   )}
                   {training.modelVersion && (
                     <p className="break-all font-mono text-xs text-emerald-300">
@@ -581,16 +831,7 @@ function Training() {
                   ) : null}
                 </CardContent>
                 <CardFooter className="flex items-center justify-end gap-2 border-t border-border/60 bg-card py-4">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1"
-                    onClick={() => handleRefreshTraining(training._id)}
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh
-                  </Button>
-                  {(training.status === 'starting' || training.status === 'processing') && (
+                  {showCancel ? (
                     <Button
                       variant="destructive"
                       size="sm"
@@ -600,6 +841,10 @@ function Training() {
                       <Ban className="h-4 w-4" />
                       Cancel
                     </Button>
+                  ) : (
+                    <span className="text-[11px] uppercase tracking-[0.2em] text-foreground/45">
+                      Listening for webhook events…
+                    </span>
                   )}
                 </CardFooter>
               </Card>
