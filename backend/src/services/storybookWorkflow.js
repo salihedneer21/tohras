@@ -368,24 +368,76 @@ const waitForGeneration = async ({ generationId, job, page }) => {
   return payload;
 };
 
+const normaliseWinnerIndex = (value, total) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+
+  if (parsed >= 1 && parsed <= total) {
+    return Math.floor(parsed) - 1;
+  }
+
+  if (parsed >= 0 && parsed < total) {
+    return Math.floor(parsed);
+  }
+
+  return null;
+};
+
 const deriveWinnerAsset = (generation) => {
   if (!generation) return null;
   const assets = generation.imageAssets || [];
   if (!assets.length) return null;
-  const winners = generation.ranking?.winners || [];
-  const winnerIndex = winners.length ? winners[0] - 1 : 0;
+
+  const rankedEntries = Array.isArray(generation.ranking?.ranked)
+    ? generation.ranking.ranked
+    : [];
+  const rawWinners = Array.isArray(generation.ranking?.winners)
+    ? generation.ranking.winners
+    : [];
+
+  const preferredIndexes = rawWinners
+    .map((value) => normaliseWinnerIndex(value, assets.length))
+    .filter((value) => value !== null);
+
+  let winnerIndex = preferredIndexes.length ? preferredIndexes[0] : null;
+
+  if (winnerIndex === null && rankedEntries.length) {
+    const sortedRanked = rankedEntries
+      .slice()
+      .sort((a, b) => {
+        const rankA = Number.isFinite(a.rank) ? a.rank : Number.POSITIVE_INFINITY;
+        const rankB = Number.isFinite(b.rank) ? b.rank : Number.POSITIVE_INFINITY;
+        if (rankA !== rankB) {
+          return rankA - rankB;
+        }
+        const scoreA = Number.isFinite(a.score) ? a.score : 0;
+        const scoreB = Number.isFinite(b.score) ? b.score : 0;
+        return scoreB - scoreA;
+      });
+    const bestRanked = sortedRanked[0];
+    winnerIndex =
+      bestRanked && bestRanked.imageIndex !== undefined
+        ? normaliseWinnerIndex(bestRanked.imageIndex, assets.length)
+        : null;
+  }
+
+  if (winnerIndex === null) {
+    winnerIndex = 0;
+  }
+
+  const asset = assets[winnerIndex] || assets[0];
+  const winnerNumber = winnerIndex + 1;
+
   return {
-    asset: assets[winnerIndex] || assets[0],
-    winner: winners.length ? winners[0] : winnerIndex + 1,
+    asset,
+    winner: winnerNumber,
     summary: generation.ranking?.summary || '',
-    notes: Array.isArray(generation.ranking?.ranked)
-      ? generation.ranking.ranked.map((entry) => ({
-          imageIndex: entry.imageIndex,
-          score: entry.score,
-          verdict: entry.verdict,
-          notes: entry.notes,
-        }))
-      : [],
+    notes: rankedEntries.map((entry) => ({
+      imageIndex: entry.imageIndex,
+      score: entry.score,
+      verdict: entry.verdict,
+      notes: entry.notes,
+    })),
   };
 };
 
