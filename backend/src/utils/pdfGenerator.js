@@ -338,9 +338,9 @@ async function generateStorybookPdf({ title, pages }) {
     const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     const isCharacterOnRight = index % 2 === 0;
 
-  const backgroundBuffer = await getImageBuffer(pageData.background);
-  if (backgroundBuffer) {
-    console.log(`[pdf] background buffer length for page ${index + 1}:`, backgroundBuffer.length);
+    const backgroundBuffer = await getImageBuffer(pageData.background);
+    if (backgroundBuffer) {
+      console.log(`[pdf] background buffer length for page ${index + 1}:`, backgroundBuffer.length);
       const backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
       if (backgroundImage) {
         page.drawImage(backgroundImage, {
@@ -360,17 +360,48 @@ async function generateStorybookPdf({ title, pages }) {
       });
     }
 
-    // Remove background from character image (required, no fallback)
     if (pageData.character) {
-      const characterBuffer = await removeBackground(pageData.character);
-      console.log(`[pdf] removeBackground result for page ${index + 1}:`, characterBuffer ? characterBuffer.length : null);
+      let characterBuffer = null;
+      if (pageData.character.backgroundRemoved) {
+        characterBuffer = await getImageBuffer(pageData.character);
+        console.log(
+          `[pdf] using stored background-removed buffer for page ${index + 1}:`,
+          characterBuffer ? characterBuffer.length : null
+        );
+      } else {
+        try {
+          characterBuffer = await removeBackground(pageData.character);
+          console.log(
+            `[pdf] removeBackground result for page ${index + 1}:`,
+            characterBuffer ? characterBuffer.length : null
+          );
+        } catch (error) {
+          console.warn(
+            `[pdf] background removal failed for page ${index + 1}:`,
+            error.message
+          );
+        }
 
-      if (!characterBuffer) {
-        throw new Error(`Failed to remove background from character image for page ${index + 1}. Background removal is required.`);
+        if (!characterBuffer || !characterBuffer.length) {
+          characterBuffer = await getImageBuffer(pageData.character);
+          console.log(
+            `[pdf] using original character buffer for page ${index + 1}:`,
+            characterBuffer ? characterBuffer.length : null
+          );
+        }
+      }
+
+      if (!characterBuffer || !characterBuffer.length) {
+        throw new Error(
+          `Failed to obtain character image buffer for page ${index + 1}`
+        );
       }
 
       const characterImage = await embedImage(pdfDoc, characterBuffer);
-      console.log('[pdf] embedded character image', characterImage ? { width: characterImage.width, height: characterImage.height } : null);
+      console.log(
+        '[pdf] embedded character image',
+        characterImage ? { width: characterImage.width, height: characterImage.height } : null
+      );
 
       if (!characterImage) {
         throw new Error(`Failed to embed character image for page ${index + 1}`);
@@ -470,4 +501,5 @@ async function generateStorybookPdf({ title, pages }) {
 
 module.exports = {
   generateStorybookPdf,
+  removeBackground,
 };

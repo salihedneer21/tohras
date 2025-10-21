@@ -4,8 +4,13 @@ const User = require('../models/User');
 const Training = require('../models/Training');
 const Generation = require('../models/Generation');
 const StorybookJob = require('../models/StorybookJob');
-const { uploadBufferToS3, generateBookCharacterOverlayKey, generateBookPdfKey, getSignedUrlForKey, downloadFromS3 } = require('../config/s3');
-const { generateStorybookPdf } = require('../utils/pdfGenerator');
+const {
+  uploadBufferToS3,
+  generateBookCharacterOverlayKey,
+  generateBookPdfKey,
+  getSignedUrlForKey,
+} = require('../config/s3');
+const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
 const { emitStorybookUpdate } = require('./storybookEvents');
 const { dispatchGenerationAttempt, populateForClient, broadcastGeneration } = require('./generationWorkflow');
 const { subscribeToGenerationUpdates } = require('./generationEvents');
@@ -182,6 +187,41 @@ const registerGenerationWaiter = ({ generationId, jobId, pageId, pageOrder }) =>
   });
 };
 
+const waitForStandaloneGeneration = (generationId) => {
+  const generationKey = String(generationId);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Generation timed out while waiting for completion'));
+    }, MAX_GENERATION_WAIT_TIME_MS);
+
+    let unsubscribe = null;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+      }
+    };
+
+    const listener = (payload) => {
+      if (!payload?._id) return;
+      if (String(payload._id) !== generationKey) return;
+
+      if (payload.status === 'succeeded') {
+        cleanup();
+        resolve(payload);
+      } else if (payload.status === 'failed') {
+        cleanup();
+        const errorMessage = payload.error || 'Generation failed';
+        reject(new Error(errorMessage));
+      }
+    };
+
+    unsubscribe = subscribeToGenerationUpdates(listener);
+  });
+};
+
 const handleGenerationUpdate = async ({ payload, jobId, pageId, pageOrder }) => {
   const pageFilter = [];
   if (pageId) {
@@ -273,10 +313,7 @@ const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
     throw new Error('Generation asset is missing S3 key');
   }
 
-  const buffer = await downloadFromS3(asset.key);
-  if (!buffer || !buffer.length) {
-    throw new Error('Failed to download asset for book character');
-  }
+  const source = { ...asset };
 
   const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
   const key = generateBookCharacterOverlayKey(
@@ -285,18 +322,57 @@ const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
     asset.originalName || `character-${page.order}.png`
   );
 
-  const contentType = asset.contentType || 'image/png';
-  const { url } = await uploadBufferToS3(buffer, key, contentType, { acl: 'public-read' });
+  const originalBuffer = await downloadFromS3(asset.key);
+  if (!originalBuffer || !originalBuffer.length) {
+    throw new Error(`Failed to download asset buffer for page ${page.order}`);
+  }
+
+  if (!source.signedUrl && source.key) {
+    source.signedUrl = await getSignedUrlForKey(source.key).catch(() => source.url || null);
+  }
+
+  let processedBuffer = null;
+  let backgroundRemoved = Boolean(asset.backgroundRemoved);
+
+  if (backgroundRemoved) {
+    processedBuffer = originalBuffer;
+  } else {
+    try {
+      const removalBuffer = await removeBackground(source);
+      if (removalBuffer && removalBuffer.length) {
+        processedBuffer = removalBuffer;
+        backgroundRemoved = true;
+      }
+    } catch (error) {
+      console.warn(
+        `[storybook] background removal failed for page ${page.order}:`,
+        error.message
+      );
+    }
+  }
+
+  if (!processedBuffer || !processedBuffer.length) {
+    processedBuffer = originalBuffer;
+    backgroundRemoved = false;
+  }
+
+  if (!processedBuffer || !processedBuffer.length) {
+    throw new Error(`Unable to obtain character buffer for page ${page.order}`);
+  }
+
+  const contentType = backgroundRemoved ? 'image/png' : asset.contentType || 'image/png';
+  const { url } = await uploadBufferToS3(processedBuffer, key, contentType, { acl: 'public-read' });
   const signedUrl = await getSignedUrlForKey(key).catch(() => null);
 
   return {
     key,
     url,
     signedUrl: signedUrl || url,
-    size: buffer.length,
+    size: processedBuffer.length,
     contentType,
     uploadedAt: new Date(),
     originalName: asset.originalName || `character-${page.order}.png`,
+    backgroundRemoved,
   };
 };
 
@@ -334,6 +410,22 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
     character: jobPage.characterAsset || null,
     quote: '',
     characterPosition: 'auto',
+    rankingSummary: jobPage.rankingSummary || '',
+    rankingNotes: Array.isArray(jobPage.rankingNotes) ? jobPage.rankingNotes : [],
+  };
+};
+
+const sanitizeAssetForSnapshot = (asset) => {
+  if (!asset) return null;
+  return {
+    key: asset.key,
+    url: asset.url,
+    signedUrl: asset.signedUrl || null,
+    size: asset.size || 0,
+    contentType: asset.contentType || null,
+    uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
+    originalName: asset.originalName || null,
+    backgroundRemoved: Boolean(asset.backgroundRemoved),
   };
 };
 
@@ -355,6 +447,22 @@ const buildPdfAsset = async ({ book, job, pages }) => {
     title: job.title || `${book.name} Storybook`,
     pageCount,
     createdAt: new Date(),
+    updatedAt: new Date(),
+    trainingId: job.trainingId || null,
+    storybookJobId: job._id || null,
+    readerId: job.readerId || null,
+    readerName: job.readerName || '',
+    userId: job.userId || null,
+    pages: pages.map((page) => ({
+      order: page.order,
+      text: page.text || '',
+      quote: page.quote || '',
+      background: sanitizeAssetForSnapshot(page.background),
+      character: sanitizeAssetForSnapshot(page.character),
+      rankingSummary: page.rankingSummary || '',
+      rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      updatedAt: new Date(),
+    })),
   };
 };
 
@@ -628,6 +736,7 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
         'pages.$[page].status': 'completed',
         'pages.$[page].completedAt': new Date(),
         'pages.$[page].characterAsset': bookCharacterAsset,
+        'pages.$[page].characterAssetOriginal': winner.asset,
         'pages.$[page].rankingWinner': winner.winner,
         'pages.$[page].rankingSummary': winner.summary,
         'pages.$[page].rankingNotes': winner.notes,
@@ -879,8 +988,242 @@ const listStorybookJobsForBook = async (bookId, limit = 10) => {
   });
 };
 
+const regenerateStorybookPage = async ({
+  bookId,
+  assetId = null,
+  pageOrder,
+  trainingId,
+  userId,
+  readerId,
+  readerName,
+}) => {
+  if (!bookId) {
+    throw new Error('Book ID is required for regeneration');
+  }
+  if (!trainingId) {
+    throw new Error('Training ID is required to regenerate a page');
+  }
+  if (!userId) {
+    throw new Error('User context is required to regenerate a page');
+  }
+
+  const book = await Book.findById(bookId);
+  if (!book) {
+    throw new Error('Book not found');
+  }
+
+  let targetPage = null;
+  let targetOrder = null;
+  const numericOrder = Number(pageOrder);
+  if (Number.isFinite(numericOrder) && numericOrder > 0) {
+    targetPage = book.pages.find((page) => page.order === numericOrder) || null;
+    if (targetPage) {
+      targetOrder = numericOrder;
+    }
+  }
+  if (!targetPage && mongoose.Types.ObjectId.isValid(pageOrder)) {
+    const pageDoc = book.pages.id(pageOrder);
+    if (pageDoc) {
+      targetPage = pageDoc;
+      targetOrder = pageDoc.order;
+    }
+  }
+  if (!targetPage) {
+    throw new Error('Requested page was not found in this book');
+  }
+  if (!targetOrder) {
+    targetOrder = targetPage.order;
+  }
+
+  const training = await Training.findById(trainingId);
+  if (!training) {
+    throw new Error('Training not found for regeneration');
+  }
+  if (training.status !== 'succeeded' || !training.modelVersion) {
+    throw new Error('Training must be completed successfully before regenerating a page');
+  }
+
+  const resolvedReaderId = readerId || null;
+  let resolvedReaderName = readerName || '';
+  if (!resolvedReaderName && resolvedReaderId) {
+    const readerDoc = await User.findById(resolvedReaderId).select('name').lean();
+    if (readerDoc?.name) {
+      resolvedReaderName = readerDoc.name;
+    }
+  }
+
+  const generationPrompt = replaceReaderPlaceholders(
+    targetPage.characterPrompt || targetPage.text || '',
+    resolvedReaderName
+  );
+
+  const generationInput = {
+    prompt: generationPrompt,
+    guidance_scale: 2,
+    output_quality: 100,
+    output_format: 'png',
+    num_outputs: 4,
+    go_fast: false,
+    num_inference_steps: 28,
+    megapixels: '1',
+    lora_scale: 1,
+    extra_lora_scale: 1,
+    pageOrder: targetOrder,
+  };
+
+  const createdAt = new Date();
+  const generation = await Generation.create({
+    userId,
+    trainingId: training._id,
+    modelVersion: training.modelVersion,
+    prompt: generationPrompt,
+    generationConfig: {
+      model: 'ranked',
+      mode: 'ranked',
+      goFast: Boolean(generationInput.go_fast),
+      loraScale: generationInput.lora_scale,
+      megapixels: generationInput.megapixels,
+      numOutputs: generationInput.num_outputs,
+      aspectRatio: generationInput.aspect_ratio || '1:1',
+      outputFormat: generationInput.output_format,
+      guidanceScale: generationInput.guidance_scale,
+      outputQuality: generationInput.output_quality,
+      promptStrength: generationInput.prompt_strength || 0.8,
+      extraLoraScale: generationInput.extra_lora_scale,
+      numInferenceSteps: generationInput.num_inference_steps,
+      pageOrder: targetOrder,
+    },
+    status: 'queued',
+    progress: 0,
+    attempts: 0,
+    replicateInput: generationInput,
+    storybookContext: {
+      bookId,
+      pageId: targetPage._id,
+      pageOrder: targetOrder,
+      runType: 'storybook-regenerate',
+    },
+    events: [
+      {
+        type: 'created',
+        message: 'Storybook page regeneration queued',
+        metadata: {
+          bookId,
+          pageOrder: targetOrder,
+        },
+        timestamp: createdAt,
+      },
+    ],
+  });
+
+  await broadcastGeneration(generation._id);
+
+  const generationPromise = waitForStandaloneGeneration(generation._id);
+
+  try {
+    await dispatchGenerationAttempt({
+      generationId: generation._id,
+      modelVersion: training.modelVersion,
+      input: generationInput,
+      reason: 'storybook-page-regenerate',
+    });
+  } catch (error) {
+    await Generation.findByIdAndUpdate(generation._id, {
+      status: 'failed',
+      error: error.message,
+      completedAt: new Date(),
+    });
+    throw error;
+  }
+
+  await generationPromise.catch(async (error) => {
+    await Generation.findByIdAndUpdate(generation._id, {
+      status: 'failed',
+      error: error.message,
+      completedAt: new Date(),
+    });
+    throw error;
+  });
+
+  const populatedGeneration = await populateForClient(generation._id);
+  const winner = deriveWinnerAsset(populatedGeneration);
+  if (!winner || !winner.asset) {
+    throw new Error('No winning asset found for regenerated page');
+  }
+
+  const bookCharacterAsset = await copyAssetToBookCharacterSlot({
+    book,
+    page: { pageId: targetPage._id, order: targetOrder },
+    asset: winner.asset,
+  });
+
+  await updateBookCharacterImage({
+    bookId,
+    page: { pageId: targetPage._id, order: targetOrder },
+    newAsset: bookCharacterAsset,
+  });
+
+  const timestamp = new Date();
+  if (assetId) {
+    const sanitizedCharacter = sanitizeAssetForSnapshot(bookCharacterAsset);
+    const assetFilter = mongoose.Types.ObjectId.isValid(assetId)
+      ? { 'asset._id': new mongoose.Types.ObjectId(assetId) }
+      : { 'asset.key': assetId };
+    await Book.updateOne(
+      { _id: bookId },
+      {
+        $set: {
+          'pdfAssets.$[asset].pages.$[page].character': sanitizedCharacter,
+          'pdfAssets.$[asset].pages.$[page].rankingSummary': winner.summary || '',
+          'pdfAssets.$[asset].pages.$[page].rankingNotes': winner.notes || [],
+          'pdfAssets.$[asset].pages.$[page].updatedAt': timestamp,
+          'pdfAssets.$[asset].updatedAt': timestamp,
+        },
+      },
+      {
+        arrayFilters: [assetFilter, { 'page.order': targetOrder }],
+      }
+    ).catch((error) => {
+      console.warn(
+        `[storybook] failed to update PDF asset snapshot for regeneration:`,
+        error.message
+      );
+    });
+  }
+
+  const refreshedBook = await Book.findById(bookId);
+  const refreshedPage =
+    refreshedBook?.pages.id(targetPage._id) ||
+    refreshedBook?.pages.find((page) => page.order === targetOrder) ||
+    null;
+
+  let refreshedPdfAssetPage = null;
+  if (assetId && refreshedBook) {
+    const candidateAsset =
+      (mongoose.Types.ObjectId.isValid(assetId) && refreshedBook.pdfAssets.id(assetId)) ||
+      refreshedBook.pdfAssets.find((asset) => asset.key === assetId);
+    if (candidateAsset && Array.isArray(candidateAsset.pages)) {
+      refreshedPdfAssetPage =
+        candidateAsset.pages.find((page) => page.order === targetOrder) || null;
+    }
+  }
+
+  return {
+    page: refreshedPage ? refreshedPage.toObject({ depopulate: true }) : null,
+    pdfAssetPage: refreshedPdfAssetPage
+      ? refreshedPdfAssetPage.toObject
+        ? refreshedPdfAssetPage.toObject({ depopulate: true })
+        : refreshedPdfAssetPage
+      : null,
+    characterAsset: bookCharacterAsset,
+    winner,
+    generation: populatedGeneration ? populatedGeneration.toObject({ depopulate: true }) : null,
+  };
+};
+
 module.exports = {
   startStorybookAutomation,
   getStorybookJobById,
   listStorybookJobsForBook,
+  regenerateStorybookPage,
 };

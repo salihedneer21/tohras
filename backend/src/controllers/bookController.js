@@ -11,6 +11,9 @@ const {
   getSignedUrlForKey,
 } = require('../config/s3');
 const { generateStorybookPdf } = require('../utils/pdfGenerator');
+const {
+  regenerateStorybookPage: regenerateStorybookPageService,
+} = require('../services/storybookWorkflow');
 
 const slugify = (value) =>
   (value || '')
@@ -678,6 +681,32 @@ exports.generateStorybook = async (req, res) => {
     const pdfKey = generateBookPdfKey(bookSlug, finalTitle);
     const { url } = await uploadBufferToS3(pdfBuffer, pdfKey, 'application/pdf', { acl: 'public-read' });
 
+    const sanitizeAssetForSnapshot = (asset) => {
+      if (!asset) return null;
+      return {
+        key: asset.key,
+        url: asset.url,
+        signedUrl: asset.signedUrl || null,
+        size: asset.size || 0,
+        contentType: asset.contentType || null,
+        uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
+        originalName: asset.originalName || null,
+        backgroundRemoved: Boolean(asset.backgroundRemoved),
+      };
+    };
+
+    const now = new Date();
+    const pagesSnapshot = storyPages.map((page) => ({
+      order: page.order,
+      text: page.text || '',
+      quote: page.quote || '',
+      background: sanitizeAssetForSnapshot(page.background),
+      character: sanitizeAssetForSnapshot(page.character),
+      rankingSummary: page.rankingSummary || '',
+      rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      updatedAt: now,
+    }));
+
     const pdfAsset = {
       key: pdfKey,
       url,
@@ -685,7 +714,14 @@ exports.generateStorybook = async (req, res) => {
       contentType: 'application/pdf',
       title: finalTitle,
       pageCount,
-      createdAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
+      trainingId: null,
+      storybookJobId: null,
+      readerId: readerId || null,
+      readerName: readerName || '',
+      userId: readerId || null,
+      pages: pagesSnapshot,
     };
 
     book.pdfAssets.push(pdfAsset);
@@ -703,6 +739,88 @@ exports.generateStorybook = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to generate storybook',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/books/:id/storybooks/:assetId/pages/:pageOrder/regenerate
+ */
+exports.regenerateStorybookPage = async (req, res) => {
+  try {
+    const { id: bookId, assetId, pageOrder } = req.params;
+    const {
+      trainingId: trainingIdOverride,
+      userId: userIdOverride,
+      readerId: readerIdOverride,
+      readerName: readerNameOverride,
+    } = req.body || {};
+
+    const book = await Book.findById(bookId);
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    const pdfAsset =
+      book.pdfAssets.id(assetId) ||
+      book.pdfAssets.find((asset) => asset.key === assetId);
+
+    if (!pdfAsset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook asset not found',
+      });
+    }
+
+    const trainingId = trainingIdOverride || pdfAsset.trainingId;
+    if (!trainingId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Training ID is required to regenerate this page',
+      });
+    }
+
+    const userId = userIdOverride || pdfAsset.userId || pdfAsset.readerId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User context is required to regenerate this page',
+      });
+    }
+
+    const readerId = readerIdOverride || pdfAsset.readerId || userId;
+    const readerName = readerNameOverride || pdfAsset.readerName || '';
+
+    const result = await regenerateStorybookPageService({
+      bookId,
+      assetId: pdfAsset._id ? pdfAsset._id.toString() : pdfAsset.key,
+      pageOrder,
+      trainingId,
+      userId,
+      readerId,
+      readerName,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Storybook page regenerated successfully',
+      data: {
+        page: result.page,
+        pdfAssetPage: result.pdfAssetPage,
+        characterAsset: result.characterAsset,
+        winner: result.winner,
+        generation: result.generation,
+      },
+    });
+  } catch (error) {
+    console.error('Error regenerating storybook page:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to regenerate storybook page',
       error: error.message,
     });
   }

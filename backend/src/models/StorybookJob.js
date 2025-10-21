@@ -9,6 +9,7 @@ const imageAssetSchema = new mongoose.Schema(
     uploadedAt: { type: Date, default: Date.now },
     originalName: { type: String, default: null },
     signedUrl: { type: String, default: null },
+    backgroundRemoved: { type: Boolean, default: false },
   },
   { _id: true }
 );
@@ -73,6 +74,10 @@ const storybookPageSchema = new mongoose.Schema(
       type: imageAssetSchema,
       default: null,
     },
+    characterAssetOriginal: {
+      type: imageAssetSchema,
+      default: null,
+    },
     rankingWinner: {
       type: Number,
       default: null,
@@ -114,6 +119,25 @@ const pdfAssetSchema = new mongoose.Schema(
     title: { type: String, default: '' },
     pageCount: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+    pages: {
+      type: [
+        new mongoose.Schema(
+          {
+            order: { type: Number, required: true },
+            text: { type: String, default: '' },
+            quote: { type: String, default: '' },
+            background: { type: imageAssetSchema, default: null },
+            character: { type: imageAssetSchema, default: null },
+            rankingSummary: { type: String, default: '' },
+            rankingNotes: { type: [rankingNoteSchema], default: [] },
+            updatedAt: { type: Date, default: Date.now },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
   },
   { _id: true }
 );

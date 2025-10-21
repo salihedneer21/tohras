@@ -55,6 +55,8 @@ export const bookAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   startAutoStorybook: (id, data) => api.post(`/books/${id}/storybooks/auto`, data),
+  regenerateStorybookPage: (bookId, assetId, pageOrder, data = {}) =>
+    api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/regenerate`, data),
   getStorybookJobs: (id, params) => api.get(`/books/${id}/storybooks/jobs`, { params }),
   getStorybookJob: (id, jobId) => api.get(`/books/${id}/storybooks/jobs/${jobId}`),
 };
