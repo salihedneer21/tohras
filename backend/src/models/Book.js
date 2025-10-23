@@ -5,6 +5,7 @@ const imageAssetSchema = new mongoose.Schema(
     key: { type: String, required: true },
     url: { type: String, required: true },
     signedUrl: { type: String, default: null },
+    downloadUrl: { type: String, default: null },
     size: { type: Number, default: 0 },
     contentType: { type: String, default: null },
     uploadedAt: { type: Date, default: Date.now },
@@ -49,6 +50,10 @@ const pageSchema = new mongoose.Schema(
       type: imageAssetSchema,
       default: null,
     },
+    characterImageOriginal: {
+      type: imageAssetSchema,
+      default: null,
+    },
   },
   { _id: true }
 );
@@ -60,6 +65,7 @@ const pageSnapshotSchema = new mongoose.Schema(
     quote: { type: String, default: '' },
     background: { type: imageAssetSchema, default: null },
     character: { type: imageAssetSchema, default: null },
+    characterOriginal: { type: imageAssetSchema, default: null },
     rankingSummary: { type: String, default: '' },
     rankingNotes: { type: [rankingNoteSchema], default: [] },
     updatedAt: { type: Date, default: Date.now },

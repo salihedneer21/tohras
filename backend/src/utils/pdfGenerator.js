@@ -84,6 +84,9 @@ const getImageBuffer = async (source) => {
     const buffer = await downloadFromS3(source.key);
     if (buffer) return buffer;
   }
+  if (source.downloadUrl && typeof source.downloadUrl === 'string') {
+    return fetchBufferFromUrl(source.downloadUrl);
+  }
   if (source.signedUrl && typeof source.signedUrl === 'string') {
     return fetchBufferFromUrl(source.signedUrl);
   }
@@ -197,14 +200,7 @@ const resolveReplicateOutputBuffer = async (output) => {
   return null;
 };
 
-const removeBackground = async (character) => {
-  if (!character) return null;
-  const imageUrl = typeof character.signedUrl === 'string' && character.signedUrl.trim()
-    ? character.signedUrl.trim()
-    : typeof character.url === 'string'
-    ? character.url.trim()
-    : '';
-  if (!imageUrl) return null;
+const performBackgroundRemoval = async (imageUrl) => {
   try {
     console.log('[bria] requesting background removal for:', imageUrl);
     const result = await replicate.run('bria/remove-background', {
@@ -235,7 +231,10 @@ const removeBackground = async (character) => {
       console.log('[bria] FileOutput URL string:', outputUrl);
       const processedBuffer = await fetchBufferFromUrl(outputUrl);
       console.log('[bria] resolved buffer length', processedBuffer ? processedBuffer.length : null);
-      return processedBuffer;
+      if (processedBuffer && processedBuffer.length) {
+        return processedBuffer;
+      }
+      throw new Error('Background removal returned empty buffer');
     }
 
     // Handle direct URL string responses (older SDK versions)
@@ -243,7 +242,10 @@ const removeBackground = async (character) => {
       console.log('[bria] direct URL string:', result);
       const processedBuffer = await fetchBufferFromUrl(result);
       console.log('[bria] resolved buffer length', processedBuffer ? processedBuffer.length : null);
-      return processedBuffer;
+      if (processedBuffer && processedBuffer.length) {
+        return processedBuffer;
+      }
+      throw new Error('Background removal returned empty buffer');
     }
 
     // Handle object responses with nested properties
@@ -270,7 +272,10 @@ const removeBackground = async (character) => {
         console.log('[bria] extracted URL from object:', outputUrl);
         const processedBuffer = await fetchBufferFromUrl(outputUrl);
         console.log('[bria] resolved buffer length', processedBuffer ? processedBuffer.length : null);
-        return processedBuffer;
+        if (processedBuffer && processedBuffer.length) {
+          return processedBuffer;
+        }
+        throw new Error('Background removal returned empty buffer');
       }
     }
 
@@ -283,6 +288,50 @@ const removeBackground = async (character) => {
     console.error(`[bria] Stack:`, error.stack);
     throw error; // Re-throw the error instead of returning null
   }
+};
+
+const removeBackground = async (character) => {
+  if (!character) return null;
+
+  const candidates = [];
+  const appendCandidate = (value) => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!candidates.includes(trimmed)) {
+      candidates.push(trimmed);
+    }
+  };
+
+  appendCandidate(character.url);
+  appendCandidate(character.downloadUrl);
+  appendCandidate(character.signedUrl);
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      const buffer = await performBackgroundRemoval(candidate);
+      if (buffer && buffer.length) {
+        return buffer;
+      }
+      lastError = new Error('Background removal returned empty buffer');
+      console.warn('[bria] empty buffer after background removal attempt for', candidate);
+    } catch (error) {
+      lastError = error;
+      console.warn('[bria] background removal attempt failed for', candidate, ':', error.message);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return null;
 };
 
 const wrapText = (text, maxWidth, fontSize) => {

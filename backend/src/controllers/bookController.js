@@ -10,7 +10,7 @@ const {
   generateBookPdfKey,
   getSignedUrlForKey,
 } = require('../config/s3');
-const { generateStorybookPdf } = require('../utils/pdfGenerator');
+const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
 const {
   regenerateStorybookPage: regenerateStorybookPageService,
 } = require('../services/storybookWorkflow');
@@ -75,11 +75,290 @@ const buildAssetPayload = async (asset) => {
     key: asset.key,
     url: asset.url,
     signedUrl,
+    downloadUrl: asset.url || signedUrl || asset.downloadUrl || null,
     size: asset.size,
     contentType: asset.contentType,
     uploadedAt: asset.uploadedAt,
     originalName: asset.originalName,
+    backgroundRemoved: Boolean(asset.backgroundRemoved),
   };
+};
+
+const cloneDocument = (value) =>
+  value && typeof value.toObject === 'function'
+    ? value.toObject({ depopulate: true })
+    : value
+    ? JSON.parse(JSON.stringify(value))
+    : null;
+
+const attachFreshSignedUrl = async (asset) => {
+  if (!asset) return null;
+  const cloned = cloneDocument(asset) || {};
+  if (!cloned.key) {
+    cloned.backgroundRemoved = Boolean(cloned.backgroundRemoved);
+    return cloned;
+  }
+
+  const signedUrl = await getSignedUrlForKey(cloned.key).catch(() => null);
+  cloned.signedUrl = signedUrl || cloned.signedUrl || null;
+  cloned.downloadUrl = cloned.url || cloned.downloadUrl || signedUrl || null;
+  cloned.backgroundRemoved = Boolean(cloned.backgroundRemoved);
+  return cloned;
+};
+
+const attachFreshSignedUrlsToPages = async (pages = [], options = {}) => {
+  const { bookPages = [] } = options;
+  const bookPagesArray = Array.isArray(bookPages) ? bookPages : [];
+  const bookPagesById = new Map();
+  const bookPagesByOrder = new Map();
+
+  bookPagesArray.forEach((page) => {
+    const cloned = cloneDocument(page) || {};
+    if (cloned._id) {
+      bookPagesById.set(String(cloned._id), cloned);
+    }
+    const orderValue = Number(cloned.order);
+    if (Number.isFinite(orderValue)) {
+      bookPagesByOrder.set(orderValue, cloned);
+    }
+  });
+
+  const hydrations = await Promise.all(
+    (pages || []).map(async (page) => {
+      if (!page) return null;
+      const clonedPage = cloneDocument(page) || {};
+      const pageId = clonedPage._id || clonedPage.pageId;
+      const pageOrder = Number(clonedPage.order);
+      const bookPageCandidate =
+        (pageId && bookPagesById.get(String(pageId))) ||
+        (Number.isFinite(pageOrder) && bookPagesByOrder.get(pageOrder)) ||
+        null;
+
+      // Prefer the most up-to-date book assets (which may have background removal applied after snapshot creation).
+      const backgroundSource =
+        (bookPageCandidate && bookPageCandidate.backgroundImage) || clonedPage.background;
+      const resolvedBackground = await attachFreshSignedUrl(backgroundSource);
+
+      // ALWAYS prefer the character asset stored on the book page (which reflects background removal).
+      // The book page characterImage is the source of truth after background removal has been applied.
+      let characterSource = null;
+      if (bookPageCandidate?.characterImage) {
+        // Use book page character image (may have backgroundRemoved = true)
+        characterSource = bookPageCandidate.characterImage;
+      } else if (clonedPage.character) {
+        // Fallback to snapshot character only if book page has none
+        characterSource = clonedPage.character;
+      }
+      const resolvedCharacter = await attachFreshSignedUrl(characterSource);
+
+      const originalSource =
+        clonedPage.characterOriginal ||
+        bookPageCandidate?.characterImageOriginal ||
+        // If the snapshot predates background removal, keep a reference to the original upload.
+        (!bookPageCandidate?.characterImage?.backgroundRemoved
+          ? bookPageCandidate?.characterImage
+          : null);
+      const resolvedCharacterOriginal = await attachFreshSignedUrl(originalSource);
+
+      clonedPage.background = resolvedBackground;
+      clonedPage.character = resolvedCharacter;
+      clonedPage.characterOriginal = resolvedCharacterOriginal;
+      return clonedPage;
+    })
+  );
+
+  return hydrations
+    .filter(Boolean)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+};
+
+const hydrateBookDocument = async (book) => {
+  if (!book) return null;
+
+  const clonedBook = cloneDocument(book);
+  if (!clonedBook) return null;
+
+  clonedBook.coverImage = await attachFreshSignedUrl(clonedBook.coverImage);
+
+  const hydratedPages = await Promise.all(
+    (clonedBook.pages || []).map(async (page) => {
+      const clonedPage = cloneDocument(page) || {};
+      return {
+        ...clonedPage,
+        backgroundImage: await attachFreshSignedUrl(clonedPage.backgroundImage),
+        characterImage: await attachFreshSignedUrl(clonedPage.characterImage),
+        characterImageOriginal: await attachFreshSignedUrl(clonedPage.characterImageOriginal),
+      };
+    })
+  );
+
+  clonedBook.pages = hydratedPages
+    .filter(Boolean)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  clonedBook.pdfAssets = await Promise.all(
+    (clonedBook.pdfAssets || []).map(async (asset) => {
+      const clonedAsset = cloneDocument(asset) || {};
+      clonedAsset.pages = await attachFreshSignedUrlsToPages(clonedAsset.pages || [], {
+        bookPages: clonedBook.pages || [],
+      });
+      return clonedAsset;
+    })
+  );
+
+  return clonedBook;
+};
+
+const ensureBackgroundRemovedCharacter = async ({
+  book,
+  bookSlug,
+  storyPage,
+  bookPage,
+}) => {
+  const existingCharacter = storyPage.character;
+  console.log('[ensureBackgroundRemoved] Starting for page', storyPage.order, 'hasCharacter:', Boolean(existingCharacter));
+
+  if (!existingCharacter) {
+    if (bookPage) {
+      bookPage.characterImage = null;
+      bookPage.characterImageOriginal = null;
+    }
+    return false;
+  }
+
+  const normalizedCharacter = await attachFreshSignedUrl(existingCharacter);
+  console.log('[ensureBackgroundRemoved] normalizedCharacter.backgroundRemoved:', normalizedCharacter.backgroundRemoved, 'key:', normalizedCharacter.key);
+  const previousCharacterImage = bookPage ? cloneDocument(bookPage.characterImage) : null;
+  const previousCharacterImageOriginal = bookPage
+    ? cloneDocument(bookPage.characterImageOriginal)
+    : null;
+
+  let finalCharacterAsset = normalizedCharacter;
+  // Preserve the original character asset before any background removal processing
+  // If storyPage.characterOriginal exists and is different from character, keep it (already processed before)
+  // Otherwise, use the current character as the original (first time processing)
+  let finalOriginalAsset = null;
+  if (storyPage.characterOriginal &&
+      storyPage.characterOriginal.key &&
+      storyPage.characterOriginal.key !== normalizedCharacter.key) {
+    // Already has a different original stored
+    finalOriginalAsset = storyPage.characterOriginal;
+  } else if (bookPage?.characterImageOriginal) {
+    // Use book page's original if available
+    finalOriginalAsset = cloneDocument(bookPage.characterImageOriginal);
+  } else {
+    // First time: use current character as original
+    finalOriginalAsset = { ...normalizedCharacter };
+  }
+
+  if (normalizedCharacter.backgroundRemoved && normalizedCharacter.key) {
+    console.log('[ensureBackgroundRemoved] Character already has background removed, skipping Brio');
+    storyPage.character = normalizedCharacter;
+    storyPage.characterOriginal = finalOriginalAsset;
+
+    if (bookPage) {
+      bookPage.characterImage = normalizedCharacter;
+      bookPage.characterImageOriginal = finalOriginalAsset;
+
+      const updatedCharacterImage = cloneDocument(bookPage.characterImage);
+      const updatedCharacterImageOriginal = cloneDocument(bookPage.characterImageOriginal);
+
+      return (
+        JSON.stringify(previousCharacterImage) !== JSON.stringify(updatedCharacterImage) ||
+        JSON.stringify(previousCharacterImageOriginal) !== JSON.stringify(updatedCharacterImageOriginal)
+      );
+    }
+
+    return false;
+  }
+
+  console.log('[ensureBackgroundRemoved] Background not removed yet, will call Brio');
+
+  const candidate = { ...normalizedCharacter };
+
+  if (!candidate.signedUrl && candidate.key) {
+    candidate.signedUrl = await getSignedUrlForKey(candidate.key).catch(
+      () => candidate.signedUrl || null
+    );
+  }
+
+  try {
+    const processedBuffer = await removeBackground(candidate);
+    console.log('[ensureBackgroundRemoved] Brio returned buffer length:', processedBuffer ? processedBuffer.length : null);
+    if (processedBuffer && processedBuffer.length) {
+      const key = generateBookCharacterOverlayKey(
+        bookSlug,
+        storyPage.order,
+        candidate.originalName || `character-${storyPage.order}.png`
+      );
+
+      const { url } = await uploadBufferToS3(processedBuffer, key, 'image/png', {
+        acl: 'public-read',
+      });
+      console.log('[ensureBackgroundRemoved] Uploaded background-removed image to S3:', key);
+      const signedUrl = await getSignedUrlForKey(key).catch(() => null);
+      const storedAsset = {
+        key,
+        url,
+        signedUrl: signedUrl || url,
+        downloadUrl: url,
+        size: processedBuffer.length,
+        contentType: 'image/png',
+        uploadedAt: new Date(),
+        originalName: candidate.originalName || `character-${storyPage.order}.png`,
+        backgroundRemoved: true,
+      };
+
+      finalCharacterAsset = storedAsset;
+      // Keep the finalOriginalAsset that was determined earlier (preserves original before background removal)
+      // Only use candidate as original if finalOriginalAsset wasn't set
+      if (!finalOriginalAsset || !finalOriginalAsset.key) {
+        finalOriginalAsset = candidate;
+      }
+      storyPage.character = storedAsset;
+      storyPage.characterOriginal = finalOriginalAsset;
+      console.log('[ensureBackgroundRemoved] Set storyPage.character.backgroundRemoved:', storedAsset.backgroundRemoved);
+
+      if (bookPage) {
+        bookPage.characterImage = storedAsset;
+        bookPage.characterImageOriginal = finalOriginalAsset;
+        console.log('[ensureBackgroundRemoved] Set bookPage.characterImage.backgroundRemoved:', storedAsset.backgroundRemoved);
+
+        const updatedCharacterImage = cloneDocument(bookPage.characterImage);
+        const updatedCharacterImageOriginal = cloneDocument(bookPage.characterImageOriginal);
+
+        return (
+          JSON.stringify(previousCharacterImage) !== JSON.stringify(updatedCharacterImage) ||
+          JSON.stringify(previousCharacterImageOriginal) !== JSON.stringify(updatedCharacterImageOriginal)
+        );
+      }
+
+      return true;
+    }
+  } catch (error) {
+    console.error(
+      `[storybook] Background removal failed for page ${storyPage.order} during PDF generation:`,
+      error.message
+    );
+  }
+
+  storyPage.character = finalCharacterAsset;
+  storyPage.characterOriginal = finalOriginalAsset;
+
+  if (bookPage) {
+    bookPage.characterImage = finalCharacterAsset;
+    bookPage.characterImageOriginal = finalOriginalAsset;
+
+    const updatedCharacterImage = cloneDocument(bookPage.characterImage);
+    const updatedCharacterImageOriginal = cloneDocument(bookPage.characterImageOriginal);
+
+    return (
+      JSON.stringify(previousCharacterImage) !== JSON.stringify(updatedCharacterImage) ||
+      JSON.stringify(previousCharacterImageOriginal) !== JSON.stringify(updatedCharacterImageOriginal)
+    );
+  }
+
+  return false;
 };
 
 /**
@@ -122,9 +401,11 @@ exports.getBookById = async (req, res) => {
       });
     }
 
+    const hydratedBook = await hydrateBookDocument(book);
+
     res.status(200).json({
       success: true,
-      data: book,
+      data: hydratedBook || book,
     });
   } catch (error) {
     console.error('Error fetching book:', error);
@@ -514,16 +795,72 @@ exports.getBookStorybooks = async (req, res) => {
       });
     }
 
+    const pdfAssets = Array.isArray(book.pdfAssets) ? book.pdfAssets : [];
+
     res.status(200).json({
       success: true,
-      count: book.pdfAssets.length,
-      data: book.pdfAssets,
+      count: pdfAssets.length,
+      data: await Promise.all(
+        pdfAssets.map(async (asset) => {
+          const clonedAsset = cloneDocument(asset) || {};
+          clonedAsset.pages = await attachFreshSignedUrlsToPages(clonedAsset.pages || [], {
+            bookPages: book.pages || [],
+          });
+          return clonedAsset;
+        })
+      ),
     });
   } catch (error) {
     console.error('Error fetching storybooks:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch storybooks',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route GET /api/books/:id/storybooks/:assetId/pages
+ */
+exports.getStorybookAssetPages = async (req, res) => {
+  try {
+    const { id: bookId, assetId } = req.params;
+    const book = await Book.findById(bookId);
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    const pdfAsset =
+      book.pdfAssets.id(assetId) ||
+      book.pdfAssets.find((asset) => asset.key === assetId);
+
+    if (!pdfAsset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook asset not found',
+      });
+    }
+
+    const pages = await attachFreshSignedUrlsToPages(pdfAsset.pages || [], {
+      bookPages: book.pages || [],
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        pages,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching storybook pages:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch storybook pages',
       error: error.message,
     });
   }
@@ -576,6 +913,8 @@ exports.generateStorybook = async (req, res) => {
     const pagesById = new Map(book.pages.map((page) => [page._id.toString(), page]));
 
     const storyPages = [];
+
+    let backgroundRemovalApplied = false;
 
     for (let index = 0; index < pagesPayload.length; index += 1) {
       const inputPage = pagesPayload[index];
@@ -648,6 +987,7 @@ exports.generateStorybook = async (req, res) => {
         quote: resolvedQuote,
         background: backgroundSource,
         character: includeCharacter ? characterSource : null,
+        characterOriginal: includeCharacter ? characterSource : null,
         useCharacter: includeCharacter,
         characterPosition: inputPage.characterPosition || 'auto',
       };
@@ -662,6 +1002,14 @@ exports.generateStorybook = async (req, res) => {
         readerName,
       });
 
+      const removalApplied = await ensureBackgroundRemovedCharacter({
+        book,
+        bookSlug,
+        storyPage,
+        bookPage,
+      });
+
+      backgroundRemovalApplied = backgroundRemovalApplied || removalApplied;
       storyPages.push(storyPage);
     }
 
@@ -687,6 +1035,7 @@ exports.generateStorybook = async (req, res) => {
         key: asset.key,
         url: asset.url,
         signedUrl: asset.signedUrl || null,
+        downloadUrl: asset.url || asset.downloadUrl || asset.signedUrl || null,
         size: asset.size || 0,
         contentType: asset.contentType || null,
         uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
@@ -702,6 +1051,7 @@ exports.generateStorybook = async (req, res) => {
       quote: page.quote || '',
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
+      characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
       updatedAt: now,
@@ -725,13 +1075,31 @@ exports.generateStorybook = async (req, res) => {
     };
 
     book.pdfAssets.push(pdfAsset);
+    // Character assignments mutate nested page documents; ensure Mongoose persists them.
+    book.markModified('pages');
     await book.save();
-    await cleanupKeys(temporaryUploads);
+
+    // Don't delete keys that were used for background-removed character images
+    const keysToKeep = new Set();
+    for (const page of book.pages) {
+      if (page.characterImage?.key && page.characterImage.backgroundRemoved) {
+        keysToKeep.add(page.characterImage.key);
+      }
+    }
+    const keysToDelete = temporaryUploads.filter(key => !keysToKeep.has(key));
+    await cleanupKeys(keysToDelete);
+
+    const hydratedPages = await attachFreshSignedUrlsToPages(pdfAsset.pages || [], {
+      bookPages: book.pages || [],
+    });
 
     res.status(201).json({
       success: true,
       message: 'Storybook generated successfully',
-      data: pdfAsset,
+      data: {
+        ...pdfAsset,
+        pages: hydratedPages,
+      },
     });
   } catch (error) {
     console.error('Error generating storybook:', error);
@@ -805,13 +1173,31 @@ exports.regenerateStorybookPage = async (req, res) => {
       readerName,
     });
 
+    const hydratedPdfAssetPage = result.pdfAssetPage
+      ? (
+          await attachFreshSignedUrlsToPages([result.pdfAssetPage], {
+            bookPages: result.page ? [result.page] : book.pages || [],
+          })
+        )[0]
+      : null;
+
+    const hydratedBookPage = result.page
+      ? {
+          ...cloneDocument(result.page),
+          backgroundImage: await attachFreshSignedUrl(result.page.backgroundImage),
+          characterImage: await attachFreshSignedUrl(result.page.characterImage),
+        }
+      : null;
+
+    const hydratedCharacterAsset = await attachFreshSignedUrl(result.characterAsset);
+
     res.status(200).json({
       success: true,
       message: 'Storybook page regenerated successfully',
       data: {
-        page: result.page,
-        pdfAssetPage: result.pdfAssetPage,
-        characterAsset: result.characterAsset,
+        page: hydratedBookPage,
+        pdfAssetPage: hydratedPdfAssetPage,
+        characterAsset: hydratedCharacterAsset,
         winner: result.winner,
         generation: result.generation,
       },

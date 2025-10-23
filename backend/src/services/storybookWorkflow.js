@@ -9,6 +9,7 @@ const {
   generateBookCharacterOverlayKey,
   generateBookPdfKey,
   getSignedUrlForKey,
+  downloadFromS3,
 } = require('../config/s3');
 const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
 const { emitStorybookUpdate } = require('./storybookEvents');
@@ -315,6 +316,8 @@ const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
 
   const source = { ...asset };
 
+  console.log('[copyAssetToBookCharacterSlot] asset URLs - url:', asset.url, 'downloadUrl:', asset.downloadUrl, 'signedUrl:', asset.signedUrl, 'key:', asset.key);
+
   const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
   const key = generateBookCharacterOverlayKey(
     bookSlug,
@@ -327,56 +330,84 @@ const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
     throw new Error(`Failed to download asset buffer for page ${page.order}`);
   }
 
-  if (!source.signedUrl && source.key) {
-    source.signedUrl = await getSignedUrlForKey(source.key).catch(() => source.url || null);
-  }
+  // Step 1: Upload original buffer to the book's character slot
+  console.log('[copyAssetToBookCharacterSlot] Uploading original buffer to S3 key:', key);
+  const { url: uploadedUrl } = await uploadBufferToS3(
+    originalBuffer,
+    key,
+    asset.contentType || 'image/png',
+    { acl: 'public-read' }
+  );
 
+  // Step 2: Get a signed URL for Brio to access
+  const signedUrl = await getSignedUrlForKey(key).catch(() => uploadedUrl);
+  console.log('[copyAssetToBookCharacterSlot] Got URL for Brio:', signedUrl ? 'Yes' : 'No');
+
+  // Step 3: Call Brio to remove background
   let processedBuffer = null;
-  let backgroundRemoved = Boolean(asset.backgroundRemoved);
+  let backgroundRemoved = false;
 
-  if (backgroundRemoved) {
+  if (asset.backgroundRemoved) {
+    console.log('[copyAssetToBookCharacterSlot] Asset already has background removed, skipping Brio');
     processedBuffer = originalBuffer;
+    backgroundRemoved = true;
   } else {
+    console.log('[copyAssetToBookCharacterSlot] Calling Brio for page', page.order);
     try {
-      const removalBuffer = await removeBackground(source);
+      const removalBuffer = await removeBackground({
+        url: uploadedUrl,
+        signedUrl: signedUrl,
+        downloadUrl: uploadedUrl,
+        key: key,
+      });
+      console.log('[copyAssetToBookCharacterSlot] Brio returned buffer length:', removalBuffer ? removalBuffer.length : null);
+
       if (removalBuffer && removalBuffer.length) {
         processedBuffer = removalBuffer;
         backgroundRemoved = true;
+        console.log('[copyAssetToBookCharacterSlot] Background removal successful!');
+      } else {
+        console.warn('[copyAssetToBookCharacterSlot] Brio returned empty buffer, using original');
+        processedBuffer = originalBuffer;
+        backgroundRemoved = false;
       }
     } catch (error) {
       console.warn(
-        `[storybook] background removal failed for page ${page.order}:`,
+        `[copyAssetToBookCharacterSlot] Background removal failed for page ${page.order}:`,
         error.message
       );
+      processedBuffer = originalBuffer;
+      backgroundRemoved = false;
     }
-  }
-
-  if (!processedBuffer || !processedBuffer.length) {
-    processedBuffer = originalBuffer;
-    backgroundRemoved = false;
   }
 
   if (!processedBuffer || !processedBuffer.length) {
     throw new Error(`Unable to obtain character buffer for page ${page.order}`);
   }
 
+  // Step 4: Upload the final buffer (with or without background removed) to S3
   const contentType = backgroundRemoved ? 'image/png' : asset.contentType || 'image/png';
+  console.log('[copyAssetToBookCharacterSlot] Uploading final buffer (backgroundRemoved:', backgroundRemoved, ') to S3');
   const { url } = await uploadBufferToS3(processedBuffer, key, contentType, { acl: 'public-read' });
-  const signedUrl = await getSignedUrlForKey(key).catch(() => null);
+  const finalSignedUrl = await getSignedUrlForKey(key).catch(() => null);
 
-  return {
+  const result = {
     key,
     url,
-    signedUrl: signedUrl || url,
+    signedUrl: finalSignedUrl || url,
+    downloadUrl: url,
     size: processedBuffer.length,
     contentType,
     uploadedAt: new Date(),
     originalName: asset.originalName || `character-${page.order}.png`,
     backgroundRemoved,
   };
+
+  console.log('[copyAssetToBookCharacterSlot] Returning asset for page', page.order, 'with backgroundRemoved:', backgroundRemoved);
+  return result;
 };
 
-const updateBookCharacterImage = async ({ bookId, page, newAsset }) => {
+const updateBookCharacterImage = async ({ bookId, page, newAsset, originalAsset = null }) => {
   const hasPageId = Boolean(page.pageId);
   const arrayFilters = [];
 
@@ -388,17 +419,20 @@ const updateBookCharacterImage = async ({ bookId, page, newAsset }) => {
     arrayFilters.push({ 'page.order': page.order });
   }
 
+  console.log('[updateBookCharacterImage] Saving to DB - newAsset.backgroundRemoved:', newAsset?.backgroundRemoved, 'pageOrder:', page.order);
   await Book.updateOne(
     { _id: bookId },
     {
       $set: {
         'pages.$[page].characterImage': newAsset,
+        'pages.$[page].characterImageOriginal': originalAsset,
       },
     },
     {
       arrayFilters,
     }
   );
+  console.log('[updateBookCharacterImage] Saved to DB successfully');
 };
 
 const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
@@ -407,7 +441,9 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
     order: bookPage.order,
     text: pageText,
     background: bookPage.backgroundImage || null,
-    character: jobPage.characterAsset || null,
+    character: jobPage.characterAsset || bookPage.characterImage || null,
+    characterOriginal:
+      jobPage.characterAssetOriginal || bookPage.characterImageOriginal || null,
     quote: '',
     characterPosition: 'auto',
     rankingSummary: jobPage.rankingSummary || '',
@@ -421,6 +457,7 @@ const sanitizeAssetForSnapshot = (asset) => {
     key: asset.key,
     url: asset.url,
     signedUrl: asset.signedUrl || null,
+    downloadUrl: asset.url || asset.downloadUrl || asset.signedUrl || null,
     size: asset.size || 0,
     contentType: asset.contentType || null,
     uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
@@ -459,6 +496,7 @@ const buildPdfAsset = async ({ book, job, pages }) => {
       quote: page.quote || '',
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
+      characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
       updatedAt: new Date(),
@@ -723,10 +761,13 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
     asset: winner.asset,
   });
 
+  const sanitizedOriginalAsset = sanitizeAssetForSnapshot(winner.asset);
+
   await updateBookCharacterImage({
     bookId: book._id,
     page,
     newAsset: bookCharacterAsset,
+    originalAsset: sanitizedOriginalAsset,
   });
 
   await updateJobAndEmit({
@@ -736,7 +777,7 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
         'pages.$[page].status': 'completed',
         'pages.$[page].completedAt': new Date(),
         'pages.$[page].characterAsset': bookCharacterAsset,
-        'pages.$[page].characterAssetOriginal': winner.asset,
+        'pages.$[page].characterAssetOriginal': sanitizedOriginalAsset,
         'pages.$[page].rankingWinner': winner.winner,
         'pages.$[page].rankingSummary': winner.summary,
         'pages.$[page].rankingNotes': winner.notes,
@@ -1157,10 +1198,13 @@ const regenerateStorybookPage = async ({
     asset: winner.asset,
   });
 
+  const sanitizedOriginalAsset = sanitizeAssetForSnapshot(winner.asset);
+
   await updateBookCharacterImage({
     bookId,
     page: { pageId: targetPage._id, order: targetOrder },
     newAsset: bookCharacterAsset,
+    originalAsset: sanitizedOriginalAsset,
   });
 
   const timestamp = new Date();
@@ -1174,6 +1218,7 @@ const regenerateStorybookPage = async ({
       {
         $set: {
           'pdfAssets.$[asset].pages.$[page].character': sanitizedCharacter,
+          'pdfAssets.$[asset].pages.$[page].characterOriginal': sanitizedOriginalAsset,
           'pdfAssets.$[asset].pages.$[page].rankingSummary': winner.summary || '',
           'pdfAssets.$[asset].pages.$[page].rankingNotes': winner.notes || [],
           'pdfAssets.$[asset].pages.$[page].updatedAt': timestamp,

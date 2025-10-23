@@ -34,6 +34,7 @@ router.get('/:id/storybooks/jobs', storybookAutomationController.listJobs);
 router.get('/:id/storybooks/jobs/:jobId', storybookAutomationController.getJob);
 router.post('/:id/storybooks', storybookFields, bookController.generateStorybook);
 router.post('/:id/storybooks/auto', storybookAutomationController.startAutomation);
+router.get('/:id/storybooks/:assetId/pages', bookController.getStorybookAssetPages);
 router.post(
   '/:id/storybooks/:assetId/pages/:pageOrder/regenerate',
   bookController.regenerateStorybookPage

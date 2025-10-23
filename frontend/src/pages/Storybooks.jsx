@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   Loader2,
   Eye,
-  RefreshCcw,
   ChevronLeft,
   ChevronRight,
   X,
@@ -152,6 +151,64 @@ const replaceNamePlaceholders = (value, replacement) => {
   return value.replace(/\{name\}/gi, replacement);
 };
 
+const PDF_PAGE_WIDTH = 842;
+const PDF_PAGE_HEIGHT = 421;
+const PDF_CHARACTER_MAX_WIDTH_RATIO = 0.4;
+const PDF_CHARACTER_MAX_HEIGHT_RATIO = 0.8;
+const PDF_TEXT_BLOCK_WIDTH = 300;
+const PDF_TEXT_BLOCK_WIDTH_RATIO = 0.35;
+const PDF_TEXT_MARGIN = 40;
+const PDF_FONT_SIZE = 16;
+const PDF_LINE_HEIGHT = PDF_FONT_SIZE * 1.4;
+
+const wrapTextToLines = (text, maxWidth, fontSize) => {
+  if (!text) return [];
+  const words = text.split(/\s+/);
+  const lines = [];
+  let currentLine = '';
+  const avgCharWidth = fontSize * 0.45;
+
+  words.forEach((word) => {
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    const lineWidth = testLine.length * avgCharWidth;
+    if (lineWidth <= maxWidth) {
+      currentLine = testLine;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  });
+
+  if (currentLine) lines.push(currentLine);
+  return lines;
+};
+
+const toPercent = (value, total) => {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total === 0) {
+    return '0%';
+  }
+  return `${(value / total) * 100}%`;
+};
+
+const withCacheBust = (url, token) => {
+  if (!url) return '';
+  if (!token) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}cb=${encodeURIComponent(token)}`;
+};
+
+const normaliseAssetPages = (pages) => {
+  if (!Array.isArray(pages)) return [];
+  return pages
+    .map((entry) => ({
+      ...entry,
+      background: entry?.background ? { ...entry.background } : null,
+      character: entry?.character ? { ...entry.character } : null,
+      characterOriginal: entry?.characterOriginal ? { ...entry.characterOriginal } : null,
+    }))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+};
+
 function Storybooks() {
   const [books, setBooks] = useState([]);
   const [users, setUsers] = useState([]);
@@ -208,7 +265,16 @@ function Storybooks() {
         setLoadingBook(true);
         const response = await bookAPI.getById(bookId);
         const book = response.data;
-        setSelectedBook(book);
+        const normalisedPdfAssets = Array.isArray(book.pdfAssets)
+          ? book.pdfAssets.map((asset) => ({
+              ...asset,
+              pages: normaliseAssetPages(asset.pages),
+            }))
+          : [];
+        setSelectedBook({
+          ...book,
+          pdfAssets: normalisedPdfAssets,
+        });
         setStoryTitle((prev) => {
           if (preserveTitle && prev) return prev;
           if (prev) return prev;
@@ -267,7 +333,16 @@ function Storybooks() {
         if (!prev) return prev;
         const existingAssets = Array.isArray(prev.pdfAssets) ? prev.pdfAssets : [];
         const alreadyPresent = existingAssets.some((asset) => asset.key === job.pdfAsset?.key);
-        const nextAssets = job.pdfAsset && !alreadyPresent ? [job.pdfAsset, ...existingAssets] : existingAssets;
+        const nextAssets =
+          job.pdfAsset && !alreadyPresent
+            ? [
+                {
+                  ...job.pdfAsset,
+                  pages: normaliseAssetPages(job.pdfAsset.pages),
+                },
+                ...existingAssets,
+              ]
+            : existingAssets;
         return {
           ...prev,
           pdfAssets: nextAssets,
@@ -652,7 +727,11 @@ function Storybooks() {
 
       setSelectedBook((prev) => {
         if (!prev) return prev;
-        const updatedAssets = [...(prev.pdfAssets || []), response.data];
+        const newAsset = {
+          ...response.data,
+          pages: normaliseAssetPages(response.data?.pages),
+        };
+        const updatedAssets = [...(prev.pdfAssets || []), newAsset];
         return { ...prev, pdfAssets: updatedAssets };
       });
     } catch (error) {
@@ -664,41 +743,62 @@ function Storybooks() {
 
   const resolveAssetUrl = (asset) => {
     if (!asset) return '';
+    const direct = typeof asset.url === 'string' ? asset.url.trim() : '';
+    if (direct) return direct;
+    const download = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : '';
+    if (download) return download;
     const signed = typeof asset.signedUrl === 'string' ? asset.signedUrl.trim() : '';
     if (signed) return signed;
-    const direct = typeof asset.url === 'string' ? asset.url.trim() : '';
-    return direct;
+    return '';
   };
 
-  const handleOpenAssetViewer = (asset) => {
+  const handleOpenAssetViewer = async (asset) => {
     if (!asset) return;
     const assetSnapshot = JSON.parse(JSON.stringify(asset));
-    const assetPages =
-      Array.isArray(assetSnapshot.pages) && assetSnapshot.pages.length
-        ? assetSnapshot.pages
-        : null;
-
-    const fallbackPages =
-      assetPages && assetPages.length
-        ? assetPages
-        : (selectedBook?.pages || []).map((page) => ({
-            order: page.order,
-            text: page.text || '',
-            quote: page.quote || '',
-            background: page.backgroundImage
-              ? JSON.parse(JSON.stringify(page.backgroundImage))
-              : null,
-            character: page.characterImage
-              ? JSON.parse(JSON.stringify(page.characterImage))
-              : null,
-            rankingSummary: page.rankingSummary || '',
-            rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
-            updatedAt: page.updatedAt || new Date().toISOString(),
-          }));
+    const orderedPages = normaliseAssetPages(assetSnapshot.pages);
 
     setActiveAsset(assetSnapshot);
-    setActiveAssetPages(fallbackPages);
+    setActiveAssetPages(orderedPages);
     setActivePageIndex(0);
+
+    if (!selectedBookId) return;
+
+    const assetIdentifier = assetSnapshot._id || assetSnapshot.key;
+    if (!assetIdentifier) return;
+
+    try {
+      const response = await bookAPI.getStorybookAssetPages(selectedBookId, assetIdentifier);
+      const remotePages = normaliseAssetPages(response.data?.pages || []);
+      if (remotePages.length) {
+        setActiveAssetPages(remotePages);
+        setActivePageIndex((prev) =>
+          prev >= remotePages.length ? remotePages.length - 1 : prev
+        );
+        setActiveAsset((prev) => (prev ? { ...prev, pages: remotePages } : prev));
+        setSelectedBook((prev) => {
+          if (!prev) return prev;
+          const nextAssets = Array.isArray(prev.pdfAssets)
+            ? prev.pdfAssets.map((existing) => {
+                const matches =
+                  (assetSnapshot._id && existing._id === assetSnapshot._id) ||
+                  existing.key === assetSnapshot.key;
+                if (!matches) return existing;
+                return {
+                  ...existing,
+                  pages: remotePages,
+                  updatedAt: new Date().toISOString(),
+                };
+              })
+            : prev.pdfAssets;
+          return {
+            ...prev,
+            pdfAssets: nextAssets,
+          };
+        });
+      }
+    } catch (error) {
+      console.warn('Failed to fetch storybook pages', error);
+    }
   };
 
   const handleCloseAssetViewer = () => {
@@ -732,25 +832,25 @@ function Storybooks() {
 
       if (pdfAssetPage) {
         setActiveAssetPages((prev) => {
-          if (!Array.isArray(prev) || !prev.length) {
-            return [pdfAssetPage];
-          }
-          const existingIndex = prev.findIndex((entry) => entry.order === pdfAssetPage.order);
+          const next = Array.isArray(prev) ? [...prev] : [];
+          const existingIndex = next.findIndex((entry) => entry.order === pdfAssetPage.order);
           if (existingIndex === -1) {
-            return [...prev, pdfAssetPage];
+            next.push(pdfAssetPage);
+          } else {
+            next[existingIndex] = { ...next[existingIndex], ...pdfAssetPage };
           }
-          const next = [...prev];
-          next[existingIndex] = { ...next[existingIndex], ...pdfAssetPage };
-          return next;
+          return normaliseAssetPages(next);
         });
 
         setActiveAsset((prev) => {
           if (!prev) return prev;
-          const nextPages = Array.isArray(prev.pages)
-            ? prev.pages.map((entry) =>
-                entry.order === pdfAssetPage.order ? { ...entry, ...pdfAssetPage } : entry
-              )
-            : prev.pages;
+          const nextPages = normaliseAssetPages(
+            Array.isArray(prev.pages)
+              ? prev.pages.map((entry) =>
+                  entry.order === pdfAssetPage.order ? { ...entry, ...pdfAssetPage } : entry
+                )
+              : [pdfAssetPage]
+          );
           return {
             ...prev,
             pages: nextPages,
@@ -806,7 +906,7 @@ function Storybooks() {
                 } else {
                   assetPages[pageIndex] = { ...assetPages[pageIndex], ...pdfAssetPage };
                 }
-                updatedAsset.pages = assetPages;
+                updatedAsset.pages = normaliseAssetPages(assetPages);
               }
               return updatedAsset;
             })
@@ -820,6 +920,22 @@ function Storybooks() {
       });
 
       await fetchBookDetails(selectedBookId, { preserveTitle: true });
+      try {
+        const refreshedPagesResponse = await bookAPI.getStorybookAssetPages(
+          selectedBookId,
+          assetIdentifier
+        );
+        const refreshedPages = normaliseAssetPages(refreshedPagesResponse.data?.pages || []);
+        if (refreshedPages.length) {
+          setActiveAssetPages(refreshedPages);
+          setActivePageIndex((prev) =>
+            prev >= refreshedPages.length ? refreshedPages.length - 1 : prev
+          );
+          setActiveAsset((prev) => (prev ? { ...prev, pages: refreshedPages } : prev));
+        }
+      } catch (fetchError) {
+        console.warn('Failed to refresh storybook pages after regeneration', fetchError);
+      }
       toast.success('Page regenerated. Regenerate the PDF to export the latest changes.');
     } catch (error) {
       toast.error(`Failed to regenerate page: ${error.message}`);
@@ -839,27 +955,59 @@ function Storybooks() {
       : 0;
     const currentPage = hasPages ? activeAssetPages[safeIndex] || null : null;
     const isCharacterOnRight = safeIndex % 2 === 0;
+    const assetIdentifier = activeAsset?._id || activeAsset?.key || 'storybook';
     const backgroundUrl = resolveAssetUrl(currentPage?.background);
     const characterUrl = resolveAssetUrl(currentPage?.character);
-    const rankingNotes = Array.isArray(currentPage?.rankingNotes)
-      ? currentPage.rankingNotes
-      : [];
     const canNavigatePrev = hasPages && safeIndex > 0;
     const canNavigateNext = hasPages && safeIndex < activeAssetPages.length - 1;
     const isCurrentPageRegenerating =
       currentPage?.order !== undefined && regeneratingOrder === currentPage.order;
+    const pageLabel = currentPage?.order || safeIndex + 1;
+
+    const textBlockWidth = Math.min(
+      Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
+      PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
+    );
+    const textLines = wrapTextToLines(currentPage?.text || '', textBlockWidth, PDF_FONT_SIZE);
+    const textY = PDF_PAGE_HEIGHT * 0.7;
+    const bubbleTopPercent = toPercent(PDF_PAGE_HEIGHT - (textY + 20), PDF_PAGE_HEIGHT);
+    const bubbleSidePercent = toPercent(Math.max(PDF_TEXT_MARGIN - 20, 0), PDF_PAGE_WIDTH);
+    const bubbleWidthPercent = toPercent(textBlockWidth + 40, PDF_PAGE_WIDTH);
+
+    const quoteLines = wrapTextToLines(
+      currentPage?.quote || '',
+      PDF_PAGE_WIDTH * 0.3,
+      PDF_FONT_SIZE
+    );
+    const quoteWidthPercent = toPercent(PDF_PAGE_WIDTH * 0.3, PDF_PAGE_WIDTH);
+    const quoteTopPercent = toPercent(Math.max(80 - PDF_FONT_SIZE, 0), PDF_PAGE_HEIGHT);
+    const quoteRightPercent = toPercent(260, PDF_PAGE_WIDTH);
+    const quoteLeftPercent = toPercent(PDF_TEXT_MARGIN, PDF_PAGE_WIDTH);
+    const cacheToken =
+      currentPage?.updatedAt ||
+      activeAsset?.updatedAt ||
+      `${assetIdentifier}-${pageLabel}`;
+    const backgroundSrc = withCacheBust(
+      backgroundUrl,
+      `${cacheToken}-background-${pageLabel}`
+    );
+    const characterSrc = withCacheBust(
+      characterUrl,
+      `${cacheToken}-character-${pageLabel}`
+    );
+    const hasCharacterImage = Boolean(characterSrc);
+    const hasCharacterAsset = Boolean(currentPage?.character);
+    const characterBackgroundRemoved = Boolean(currentPage?.character?.backgroundRemoved);
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
-        <div className="relative flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-background shadow-2xl">
+        <div className="relative flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-background shadow-2xl">
           <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
             <div>
               <p className="text-xs uppercase tracking-wide text-foreground/45">Storybook preview</p>
               <h3 className="text-lg font-semibold text-foreground">
                 {activeAsset.title || selectedBook?.name || 'Storybook'}
-                {hasPages
-                  ? ` · Page ${currentPage?.order || safeIndex + 1}`
-                  : ' · No page snapshots yet'}
+                {hasPages ? ` · Page ${pageLabel}` : ' · No page snapshots yet'}
               </h3>
             </div>
             <div className="flex items-center gap-2">
@@ -892,6 +1040,25 @@ function Storybooks() {
                 Next
                 <ChevronRight className="h-4 w-4" />
               </Button>
+              {hasPages ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
+                  disabled={isCurrentPageRegenerating}
+                >
+                  {isCurrentPageRegenerating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Regenerating…
+                    </>
+                  ) : (
+                    'Regenerate page'
+                  )}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
@@ -903,121 +1070,109 @@ function Storybooks() {
             </div>
           </div>
 
-          <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6 lg:flex-row">
-            <div className="relative flex-1 overflow-hidden rounded-2xl bg-muted">
-              {hasPages ? (
-                backgroundUrl ? (
-                  <img
-                    src={backgroundUrl}
-                    alt={`Background for page ${currentPage?.order || safeIndex + 1}`}
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-sm text-foreground/50">
-                    No background image for this page
-                  </div>
-                )
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-sm text-foreground/50">
-                  Generate this storybook to preview page layouts.
-                </div>
-              )}
-              {hasPages && characterUrl ? (
-                <img
-                  src={characterUrl}
-                  alt={`Character for page ${currentPage?.order || safeIndex + 1}`}
-                  className={`absolute bottom-0 ${
-                    isCharacterOnRight ? 'right-6' : 'left-6'
-                  } w-[34%] max-w-sm object-contain drop-shadow-xl`}
-                />
-              ) : null}
-              {hasPages ? (
+          <div className="flex flex-1 items-center justify-center overflow-y-auto px-6 pb-10">
+            {hasPages ? (
+              <div className="w-full max-w-5xl space-y-4">
                 <div
-                  className={`absolute top-10 ${
-                    isCharacterOnRight ? 'left-10' : 'right-10'
-                  } max-w-sm rounded-3xl bg-white/80 p-5 text-sm text-foreground shadow-lg backdrop-blur`}
+                  className="relative w-full overflow-hidden rounded-[32px] border border-border/60 bg-background/60"
+                  style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
                 >
-                  <p className="whitespace-pre-line leading-relaxed">
-                    {currentPage?.text || 'No story text on this page yet.'}
-                  </p>
-                </div>
-              ) : null}
-              {hasPages && currentPage?.quote ? (
-                <div
-                  className={`absolute bottom-10 ${
-                    isCharacterOnRight ? 'left-10' : 'right-10'
-                  } max-w-xs rounded-2xl bg-white/70 px-4 py-3 text-sm font-medium italic text-foreground/80`}
-                >
-                  “{currentPage.quote}”
-                </div>
-              ) : null}
-            </div>
-            <div className="flex w-full max-w-md flex-col gap-4">
-              <div className="rounded-xl border border-border/60 bg-card/70 p-4">
-                <h4 className="text-sm font-semibold text-foreground">Ranking summary</h4>
-                <p className="mt-2 text-sm text-foreground/70">
-                  {hasPages
-                    ? currentPage?.rankingSummary || 'No ranking summary available.'
-                    : 'Generate this storybook to view ranking insights once pages are available.'}
-                </p>
-                {hasPages && rankingNotes.length ? (
-                  <ul className="mt-3 space-y-2 text-sm text-foreground/70">
-                    {rankingNotes.map((note, index) => (
-                      <li
-                        key={`ranking-note-${note?.imageIndex || index}`}
-                        className="rounded-lg border border-border/60 bg-muted/40 px-3 py-2"
-                      >
-                        <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-foreground/45">
-                          <span>Image {note?.imageIndex || index + 1}</span>
-                          {note?.score !== undefined && note?.score !== null ? (
-                            <span>{note.score}</span>
-                          ) : null}
-                        </div>
-                        <p className="mt-1 text-sm text-foreground/70">
-                          {note?.notes || 'No reviewer notes recorded.'}
+                  {backgroundSrc ? (
+                    <img
+                      key={`${currentPage?.background?.key || pageLabel}-background`}
+                      src={backgroundSrc}
+                      alt={`Background for page ${pageLabel}`}
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-sm text-foreground/50">
+                      No background stored for this page.
+                    </div>
+                  )}
+                  {hasCharacterImage ? (
+                    <img
+                      key={`${currentPage?.character?.key || pageLabel}-character`}
+                      src={characterSrc}
+                      alt={`Character for page ${pageLabel}`}
+                      className="absolute bottom-0 object-contain drop-shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+                      style={{
+                        maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
+                        maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
+                        [isCharacterOnRight ? 'right' : 'left']: '0%',
+                      }}
+                    />
+                  ) : null}
+                  {hasCharacterAsset && !characterBackgroundRemoved ? (
+                    <div
+                      className="absolute bottom-[8%] max-w-xs rounded-2xl bg-black/60 px-4 py-2 text-center text-xs font-medium uppercase tracking-[0.18em] text-white/80"
+                      style={{
+                        [isCharacterOnRight ? 'right' : 'left']: '8%',
+                      }}
+                    >
+                      Character still has original background
+                    </div>
+                  ) : null}
+                  {textLines.length ? (
+                    <div
+                      className="absolute rounded-[24px] bg-white/65 p-5 text-black shadow-lg backdrop-blur-sm"
+                      style={{
+                        top: bubbleTopPercent,
+                        width: bubbleWidthPercent,
+                        [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
+                        fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+                      }}
+                    >
+                      {textLines.map((line, lineIndex) => (
+                        <p
+                          key={`page-${pageLabel}-line-${lineIndex}`}
+                          className="text-[16px] leading-[22.4px]"
+                        >
+                          {line}
                         </p>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
+                      ))}
+                    </div>
+                  ) : null}
+                  {quoteLines.length ? (
+                    <div
+                      className="absolute text-[16px] font-semibold italic text-black"
+                      style={{
+                        top: quoteTopPercent,
+                        width: quoteWidthPercent,
+                        lineHeight: `${PDF_LINE_HEIGHT}px`,
+                        fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+                        ...(isCharacterOnRight
+                          ? { right: quoteRightPercent }
+                          : { left: quoteLeftPercent }),
+                      }}
+                    >
+                      {quoteLines.map((line, lineIndex) => (
+                        <p key={`quote-${pageLabel}-${lineIndex}`}>{line}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="absolute left-[3%] top-[4%] text-xs font-semibold uppercase tracking-[0.2em] text-white/80 drop-shadow">
+                    Page {pageLabel}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-foreground/60">
+                  <span>
+                    Viewing {safeIndex + 1} of {activeAssetPages.length}
+                  </span>
+                  <span>
+                    {currentPage?.character?.backgroundRemoved
+                      ? 'Character background removed'
+                      : currentPage?.character
+                      ? 'Character original background'
+                      : 'No character image'}
+                  </span>
+                </div>
               </div>
-              <div className="rounded-xl border border-border/60 bg-card/70 p-4 text-sm text-foreground/70">
-                <p>
-                  {hasPages
-                    ? 'Regenerate to produce a fresh ranked batch for this page. The book updates with the new winning image—remember to generate a new PDF when you\'re ready to export.'
-                    : 'Run the automated generator to create ranked imagery before previewing pages here.'}
-                </p>
+            ) : (
+              <div className="flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-sm text-foreground/60">
+                <ImageOff className="h-8 w-8 text-foreground/40" />
+                <p>Generate a storybook to preview its pages here.</p>
               </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between border-t border-border/60 bg-card/70 px-6 py-4">
-            <div className="text-sm text-foreground/60">
-              Reader: {activeAsset.readerName || 'Unknown'} · Training:{' '}
-              {activeAsset.trainingName || activeAsset.trainingId || 'Unknown'}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                className="gap-2"
-                onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
-                disabled={
-                  !currentPage || !activeAsset.trainingId || isCurrentPageRegenerating
-                }
-              >
-                {isCurrentPageRegenerating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Regenerating…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCcw className="h-4 w-4" />
-                    Regenerate best image
-                  </>
-                )}
-              </Button>
-            </div>
+            )}
           </div>
         </div>
       </div>

@@ -4,6 +4,7 @@ const imageAssetSchema = new mongoose.Schema(
   {
     key: { type: String, required: true },
     url: { type: String, required: true },
+    downloadUrl: { type: String, default: null },
     size: { type: Number, default: 0 },
     contentType: { type: String, default: null },
     uploadedAt: { type: Date, default: Date.now },
