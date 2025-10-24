@@ -59,6 +59,10 @@ export const bookAPI = {
     api.get(`/books/${bookId}/storybooks/${assetId}/pages`),
   regenerateStorybookPage: (bookId, assetId, pageOrder, data = {}) =>
     api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/regenerate`, data),
+  regenerateStorybookPdf: (bookId, assetId, data = {}) =>
+    api.post(`/books/${bookId}/storybooks/${assetId}/regenerate`, data),
+  selectStorybookPageCandidate: (bookId, assetId, pageOrder, data = {}) =>
+    api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/select`, data),
   getStorybookJobs: (id, params) => api.get(`/books/${id}/storybooks/jobs`, { params }),
   getStorybookJob: (id, jobId) => api.get(`/books/${id}/storybooks/jobs/${jobId}`),
 };

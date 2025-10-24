@@ -79,6 +79,19 @@ const storybookPageSchema = new mongoose.Schema(
       type: imageAssetSchema,
       default: null,
     },
+    generationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Generation',
+      default: null,
+    },
+    candidateAssets: {
+      type: [imageAssetSchema],
+      default: [],
+    },
+    selectedCandidateIndex: {
+      type: Number,
+      default: null,
+    },
     rankingWinner: {
       type: Number,
       default: null,

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
 const Book = require('../models/Book');
 const User = require('../models/User');
@@ -13,6 +14,7 @@ const {
 const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
 const {
   regenerateStorybookPage: regenerateStorybookPageService,
+  applyStorybookCandidateSelection,
 } = require('../services/storybookWorkflow');
 
 const slugify = (value) =>
@@ -83,6 +85,28 @@ const buildAssetPayload = async (asset) => {
     backgroundRemoved: Boolean(asset.backgroundRemoved),
   };
 };
+
+const sanitizeAssetForSnapshot = (asset) => {
+  if (!asset) return null;
+  return {
+    key: asset.key,
+    url: asset.url,
+    signedUrl: asset.signedUrl || null,
+    downloadUrl: asset.url || asset.downloadUrl || asset.signedUrl || null,
+    size: asset.size || 0,
+    contentType: asset.contentType || null,
+    uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
+    originalName: asset.originalName || null,
+    backgroundRemoved: Boolean(asset.backgroundRemoved),
+  };
+};
+
+const sanitizeAssetListForSnapshot = (assets) =>
+  Array.isArray(assets)
+    ? assets
+        .map((asset) => sanitizeAssetForSnapshot(asset))
+        .filter((asset) => Boolean(asset?.key || asset?.url))
+    : [];
 
 const cloneDocument = (value) =>
   value && typeof value.toObject === 'function'
@@ -160,9 +184,14 @@ const attachFreshSignedUrlsToPages = async (pages = [], options = {}) => {
           : null);
       const resolvedCharacterOriginal = await attachFreshSignedUrl(originalSource);
 
+      const resolvedCandidateAssets = Array.isArray(clonedPage.candidateAssets)
+        ? await Promise.all(clonedPage.candidateAssets.map((asset) => attachFreshSignedUrl(asset)))
+        : [];
+
       clonedPage.background = resolvedBackground;
       clonedPage.character = resolvedCharacter;
       clonedPage.characterOriginal = resolvedCharacterOriginal;
+      clonedPage.candidateAssets = resolvedCandidateAssets.filter(Boolean);
       return clonedPage;
     })
   );
@@ -990,6 +1019,9 @@ exports.generateStorybook = async (req, res) => {
         characterOriginal: includeCharacter ? characterSource : null,
         useCharacter: includeCharacter,
         characterPosition: inputPage.characterPosition || 'auto',
+        candidateAssets: [],
+        generationId: null,
+        selectedCandidateIndex: null,
       };
 
       console.log('[storybook] Prepared page', {
@@ -1029,21 +1061,6 @@ exports.generateStorybook = async (req, res) => {
     const pdfKey = generateBookPdfKey(bookSlug, finalTitle);
     const { url } = await uploadBufferToS3(pdfBuffer, pdfKey, 'application/pdf', { acl: 'public-read' });
 
-    const sanitizeAssetForSnapshot = (asset) => {
-      if (!asset) return null;
-      return {
-        key: asset.key,
-        url: asset.url,
-        signedUrl: asset.signedUrl || null,
-        downloadUrl: asset.url || asset.downloadUrl || asset.signedUrl || null,
-        size: asset.size || 0,
-        contentType: asset.contentType || null,
-        uploadedAt: asset.uploadedAt ? new Date(asset.uploadedAt) : new Date(),
-        originalName: asset.originalName || null,
-        backgroundRemoved: Boolean(asset.backgroundRemoved),
-      };
-    };
-
     const now = new Date();
     const pagesSnapshot = storyPages.map((page) => ({
       order: page.order,
@@ -1052,6 +1069,11 @@ exports.generateStorybook = async (req, res) => {
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
       characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
+      generationId: page.generationId || null,
+      candidateAssets: sanitizeAssetListForSnapshot(page.candidateAssets),
+      selectedCandidateIndex: Number.isFinite(page.selectedCandidateIndex)
+        ? page.selectedCandidateIndex
+        : null,
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
       updatedAt: now,
@@ -1186,6 +1208,9 @@ exports.regenerateStorybookPage = async (req, res) => {
           ...cloneDocument(result.page),
           backgroundImage: await attachFreshSignedUrl(result.page.backgroundImage),
           characterImage: await attachFreshSignedUrl(result.page.characterImage),
+          characterImageOriginal: await attachFreshSignedUrl(
+            result.page.characterImageOriginal
+          ),
         }
       : null;
 
@@ -1207,6 +1232,212 @@ exports.regenerateStorybookPage = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to regenerate storybook page',
+      error: error.message,
+    });
+  }
+};
+
+exports.regenerateStorybookPdf = async (req, res) => {
+  try {
+    const { id: bookId, assetId } = req.params;
+    const { title: overrideTitle } = req.body || {};
+
+    const book = await Book.findById(bookId);
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    const pdfAssetDoc =
+      (mongoose.Types.ObjectId.isValid(assetId) && book.pdfAssets.id(assetId)) ||
+      book.pdfAssets.find((asset) => asset.key === assetId);
+
+    if (!pdfAssetDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook asset not found',
+      });
+    }
+
+    const sortedBookPages = (book.pages || [])
+      .slice()
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (!sortedBookPages.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Book has no pages to rebuild the PDF',
+      });
+    }
+
+    const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
+    const storyPages = [];
+    let backgroundRemovalApplied = false;
+
+    for (const bookPage of sortedBookPages) {
+      const snapshot = (pdfAssetDoc.pages || []).find((page) => page.order === bookPage.order) || {};
+
+      const backgroundSource = bookPage.backgroundImage
+        ? await attachFreshSignedUrl(bookPage.backgroundImage)
+        : snapshot.background
+        ? await attachFreshSignedUrl(snapshot.background)
+        : null;
+
+      const characterSource = bookPage.characterImage
+        ? await attachFreshSignedUrl(bookPage.characterImage)
+        : snapshot.character
+        ? await attachFreshSignedUrl(snapshot.character)
+        : null;
+
+      const originalCharacterSource = bookPage.characterImageOriginal
+        ? await attachFreshSignedUrl(bookPage.characterImageOriginal)
+        : snapshot.characterOriginal
+        ? await attachFreshSignedUrl(snapshot.characterOriginal)
+        : null;
+
+      const storyPage = {
+        order: bookPage.order,
+        text: snapshot.text || bookPage.text || '',
+        quote: snapshot.quote || '',
+        background: backgroundSource,
+        character: characterSource,
+        characterOriginal: originalCharacterSource,
+        useCharacter: Boolean(characterSource),
+        characterPosition: snapshot.characterPosition || 'auto',
+        rankingSummary: snapshot.rankingSummary || '',
+        rankingNotes: Array.isArray(snapshot.rankingNotes) ? snapshot.rankingNotes : [],
+        candidateAssets: sanitizeAssetListForSnapshot(snapshot.candidateAssets || []),
+        generationId: snapshot.generationId || null,
+        selectedCandidateIndex: Number.isFinite(snapshot.selectedCandidateIndex)
+          ? snapshot.selectedCandidateIndex
+          : null,
+      };
+
+      const removalApplied = await ensureBackgroundRemovedCharacter({
+        book,
+        bookSlug,
+        storyPage,
+        bookPage,
+      });
+
+      backgroundRemovalApplied = backgroundRemovalApplied || removalApplied;
+      storyPages.push(storyPage);
+    }
+
+    if (!storyPages.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to resolve story pages for regeneration',
+      });
+    }
+
+    const finalTitle = overrideTitle || pdfAssetDoc.title || `${book.name} Storybook`;
+    const { buffer: pdfBuffer, pageCount } = await generateStorybookPdf({
+      title: finalTitle,
+      pages: storyPages,
+    });
+
+    await uploadBufferToS3(pdfBuffer, pdfAssetDoc.key, 'application/pdf', { acl: 'public-read' });
+
+    const now = new Date();
+    const pagesSnapshot = storyPages.map((page) => ({
+      order: page.order,
+      text: page.text || '',
+      quote: page.quote || '',
+      background: sanitizeAssetForSnapshot(page.background),
+      character: sanitizeAssetForSnapshot(page.character),
+      characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
+      generationId: page.generationId || null,
+      candidateAssets: sanitizeAssetListForSnapshot(page.candidateAssets),
+      selectedCandidateIndex: Number.isFinite(page.selectedCandidateIndex)
+        ? page.selectedCandidateIndex
+        : null,
+      rankingSummary: page.rankingSummary || '',
+      rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      updatedAt: now,
+    }));
+
+    pdfAssetDoc.title = finalTitle;
+    pdfAssetDoc.size = pdfBuffer.length;
+    pdfAssetDoc.pageCount = pageCount;
+    pdfAssetDoc.updatedAt = now;
+    pdfAssetDoc.pages = pagesSnapshot;
+
+    if (backgroundRemovalApplied) {
+      book.markModified('pages');
+    }
+    book.markModified('pdfAssets');
+    await book.save();
+
+    const hydratedPages = await attachFreshSignedUrlsToPages(pagesSnapshot, {
+      bookPages: book.pages || [],
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Storybook PDF regenerated successfully',
+      data: {
+        ...cloneDocument(pdfAssetDoc),
+        pages: hydratedPages,
+      },
+    });
+  } catch (error) {
+    console.error('Error regenerating storybook PDF:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to regenerate storybook PDF',
+      error: error.message,
+    });
+  }
+};
+
+exports.selectStorybookPageCandidate = async (req, res) => {
+  try {
+    const { id: bookId, assetId, pageOrder } = req.params;
+    const { candidateIndex } = req.body || {};
+
+    const result = await applyStorybookCandidateSelection({
+      bookId,
+      assetId,
+      pageOrder,
+      candidateIndex,
+    });
+
+    const hydratedPages = result.pdfAssetPage
+      ? await attachFreshSignedUrlsToPages([result.pdfAssetPage], {
+          bookPages: result.page ? [result.page] : [],
+        })
+      : [];
+
+    const hydratedCharacter = await attachFreshSignedUrl(result.characterAsset);
+    const hydratedBookPage = result.page
+      ? {
+          ...result.page,
+          backgroundImage: await attachFreshSignedUrl(result.page.backgroundImage),
+          characterImage: await attachFreshSignedUrl(result.page.characterImage),
+          characterImageOriginal: await attachFreshSignedUrl(
+            result.page.characterImageOriginal
+          ),
+        }
+      : null;
+
+    res.status(200).json({
+      success: true,
+      message: 'Candidate image applied successfully',
+      data: {
+        page: hydratedBookPage,
+        pdfAssetPage: hydratedPages[0] || null,
+        characterAsset: hydratedCharacter,
+        candidateIndex: result.candidateIndex,
+      },
+    });
+  } catch (error) {
+    console.error('Error applying storybook candidate:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to apply storybook candidate',
       error: error.message,
     });
   }

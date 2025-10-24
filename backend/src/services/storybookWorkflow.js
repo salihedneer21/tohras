@@ -446,6 +446,11 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
       jobPage.characterAssetOriginal || bookPage.characterImageOriginal || null,
     quote: '',
     characterPosition: 'auto',
+    generationId: jobPage?.generationId || null,
+    candidateAssets: sanitizeAssetListForSnapshot(jobPage?.candidateAssets || []),
+    selectedCandidateIndex: Number.isFinite(jobPage?.selectedCandidateIndex)
+      ? jobPage.selectedCandidateIndex
+      : null,
     rankingSummary: jobPage.rankingSummary || '',
     rankingNotes: Array.isArray(jobPage.rankingNotes) ? jobPage.rankingNotes : [],
   };
@@ -465,6 +470,13 @@ const sanitizeAssetForSnapshot = (asset) => {
     backgroundRemoved: Boolean(asset.backgroundRemoved),
   };
 };
+
+const sanitizeAssetListForSnapshot = (assets) =>
+  Array.isArray(assets)
+    ? assets
+        .map((asset) => sanitizeAssetForSnapshot(asset))
+        .filter((asset) => Boolean(asset?.key || asset?.url))
+    : [];
 
 const buildPdfAsset = async ({ book, job, pages }) => {
   const { buffer, pageCount } = await generateStorybookPdf({
@@ -497,6 +509,11 @@ const buildPdfAsset = async ({ book, job, pages }) => {
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
       characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
+      generationId: page.generationId || null,
+      candidateAssets: sanitizeAssetListForSnapshot(page.candidateAssets),
+      selectedCandidateIndex: Number.isFinite(page.selectedCandidateIndex)
+        ? page.selectedCandidateIndex
+        : null,
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
       updatedAt: new Date(),
@@ -750,6 +767,9 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
 
   const populatedGeneration = await populateForClient(generation._id);
   const winner = deriveWinnerAsset(populatedGeneration);
+  const candidateAssets = sanitizeAssetListForSnapshot(
+    populatedGeneration?.imageAssets || []
+  );
 
   if (!winner || !winner.asset) {
     throw new Error(`No winning asset found for page ${page.order}`);
@@ -782,6 +802,9 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
         'pages.$[page].rankingSummary': winner.summary,
         'pages.$[page].rankingNotes': winner.notes,
         'pages.$[page].progress': 100,
+        'pages.$[page].candidateAssets': candidateAssets,
+        'pages.$[page].generationId': generation._id,
+        'pages.$[page].selectedCandidateIndex': winner.winner,
       },
       $push: {
         'pages.$[page].events': createEvent('page-completed', 'Page generation completed', {
@@ -1199,6 +1222,9 @@ const regenerateStorybookPage = async ({
   });
 
   const sanitizedOriginalAsset = sanitizeAssetForSnapshot(winner.asset);
+  const candidateAssetsSnapshot = sanitizeAssetListForSnapshot(
+    populatedGeneration?.imageAssets || []
+  );
 
   await updateBookCharacterImage({
     bookId,
@@ -1221,6 +1247,9 @@ const regenerateStorybookPage = async ({
           'pdfAssets.$[asset].pages.$[page].characterOriginal': sanitizedOriginalAsset,
           'pdfAssets.$[asset].pages.$[page].rankingSummary': winner.summary || '',
           'pdfAssets.$[asset].pages.$[page].rankingNotes': winner.notes || [],
+          'pdfAssets.$[asset].pages.$[page].candidateAssets': candidateAssetsSnapshot,
+          'pdfAssets.$[asset].pages.$[page].generationId': generation._id,
+          'pdfAssets.$[asset].pages.$[page].selectedCandidateIndex': winner.winner,
           'pdfAssets.$[asset].pages.$[page].updatedAt': timestamp,
           'pdfAssets.$[asset].updatedAt': timestamp,
         },
@@ -1266,9 +1295,162 @@ const regenerateStorybookPage = async ({
   };
 };
 
+const applyStorybookCandidateSelection = async ({
+  bookId,
+  assetId,
+  pageOrder,
+  candidateIndex,
+}) => {
+  if (!bookId) {
+    throw new Error('Book ID is required');
+  }
+  if (!assetId) {
+    throw new Error('Storybook asset identifier is required');
+  }
+
+  const parsedIndex = Number(candidateIndex);
+  if (!Number.isFinite(parsedIndex) || parsedIndex < 1) {
+    throw new Error('Candidate index must be a positive number');
+  }
+
+  const book = await Book.findById(bookId);
+  if (!book) {
+    throw new Error('Book not found');
+  }
+
+  const pdfAsset =
+    (mongoose.Types.ObjectId.isValid(assetId) && book.pdfAssets.id(assetId)) ||
+    book.pdfAssets.find((asset) => asset.key === assetId);
+
+  if (!pdfAsset) {
+    throw new Error('Storybook asset not found');
+  }
+
+  const numericOrder = Number(pageOrder);
+  let targetOrder = null;
+  if (Number.isFinite(numericOrder) && numericOrder > 0) {
+    targetOrder = numericOrder;
+  }
+  if (!targetOrder && mongoose.Types.ObjectId.isValid(pageOrder)) {
+    const pageDoc = book.pages.id(pageOrder);
+    if (pageDoc) {
+      targetOrder = pageDoc.order;
+    }
+  }
+  if (!targetOrder) {
+    throw new Error('Requested page was not found');
+  }
+
+  const bookPage = book.pages.find((page) => page.order === targetOrder);
+  if (!bookPage) {
+    throw new Error('Book page not found');
+  }
+
+  const pageIndex = pdfAsset.pages.findIndex((page) => page.order === targetOrder);
+  if (pageIndex === -1) {
+    throw new Error('Storybook page snapshot missing');
+  }
+
+  const pdfPage = pdfAsset.pages[pageIndex] || {};
+
+  let candidateAssets = Array.isArray(pdfPage.candidateAssets)
+    ? pdfPage.candidateAssets.slice()
+    : [];
+  let resolvedGenerationId = pdfPage.generationId || null;
+
+  if (!candidateAssets.length && pdfPage.generationId) {
+    const generationDoc = await populateForClient(pdfPage.generationId);
+    if (generationDoc) {
+      candidateAssets = sanitizeAssetListForSnapshot(generationDoc.imageAssets || []);
+      resolvedGenerationId = generationDoc._id || resolvedGenerationId;
+    }
+  }
+
+  if (!candidateAssets.length) {
+    throw new Error('No candidate images are available for this page');
+  }
+
+  const zeroIndex = Math.floor(parsedIndex) - 1;
+  if (zeroIndex < 0 || zeroIndex >= candidateAssets.length) {
+    throw new Error('Selected candidate index is out of range');
+  }
+
+  const candidateAsset = candidateAssets[zeroIndex];
+  if (!candidateAsset?.key) {
+    throw new Error('Candidate image is missing required metadata');
+  }
+
+  const appliedAsset = await copyAssetToBookCharacterSlot({
+    book,
+    page: { pageId: bookPage._id, order: targetOrder },
+    asset: candidateAsset,
+  });
+
+  const sanitizedCharacter = sanitizeAssetForSnapshot(appliedAsset);
+  const sanitizedOriginal = sanitizeAssetForSnapshot(candidateAsset);
+
+  await updateBookCharacterImage({
+    bookId,
+    page: { pageId: bookPage._id, order: targetOrder },
+    newAsset: appliedAsset,
+    originalAsset: sanitizedOriginal,
+  });
+
+  const timestamp = new Date();
+  const sanitizedCandidateAssets = sanitizeAssetListForSnapshot(candidateAssets);
+  const assetFilter = mongoose.Types.ObjectId.isValid(assetId)
+    ? { 'asset._id': new mongoose.Types.ObjectId(assetId) }
+    : { 'asset.key': assetId };
+
+  await Book.updateOne(
+    { _id: bookId },
+    {
+      $set: {
+        'pdfAssets.$[asset].pages.$[page].character': sanitizedCharacter,
+        'pdfAssets.$[asset].pages.$[page].characterOriginal': sanitizedOriginal,
+        'pdfAssets.$[asset].pages.$[page].candidateAssets': sanitizedCandidateAssets,
+        'pdfAssets.$[asset].pages.$[page].selectedCandidateIndex': parsedIndex,
+        'pdfAssets.$[asset].pages.$[page].updatedAt': timestamp,
+        'pdfAssets.$[asset].pages.$[page].generationId': resolvedGenerationId,
+        'pdfAssets.$[asset].updatedAt': timestamp,
+      },
+    },
+    {
+      arrayFilters: [assetFilter, { 'page.order': targetOrder }],
+    }
+  ).catch((error) => {
+    console.warn('[storybook] Failed to persist candidate selection on PDF snapshot:', error);
+  });
+
+  const refreshedBook = await Book.findById(bookId);
+  const refreshedPage =
+    refreshedBook?.pages.find((page) => page.order === targetOrder) || null;
+  let refreshedPdfAssetPage = null;
+  if (refreshedBook) {
+    const refreshedPdfAsset =
+      (mongoose.Types.ObjectId.isValid(assetId) && refreshedBook.pdfAssets.id(assetId)) ||
+      refreshedBook.pdfAssets.find((asset) => asset.key === assetId);
+    if (refreshedPdfAsset && Array.isArray(refreshedPdfAsset.pages)) {
+      refreshedPdfAssetPage = refreshedPdfAsset.pages.find((page) => page.order === targetOrder);
+    }
+  }
+
+  return {
+    page: refreshedPage ? refreshedPage.toObject({ depopulate: true }) : null,
+    pdfAssetPage: refreshedPdfAssetPage
+      ? refreshedPdfAssetPage.toObject
+        ? refreshedPdfAssetPage.toObject({ depopulate: true })
+        : refreshedPdfAssetPage
+      : null,
+    characterAsset: appliedAsset,
+    candidateIndex: parsedIndex,
+  };
+};
+
 module.exports = {
   startStorybookAutomation,
   getStorybookJobById,
   listStorybookJobsForBook,
   regenerateStorybookPage,
+  applyStorybookCandidateSelection,
 };

@@ -205,6 +205,13 @@ const normaliseAssetPages = (pages) => {
       background: entry?.background ? { ...entry.background } : null,
       character: entry?.character ? { ...entry.character } : null,
       characterOriginal: entry?.characterOriginal ? { ...entry.characterOriginal } : null,
+      candidateAssets: Array.isArray(entry?.candidateAssets)
+        ? entry.candidateAssets.map((asset) => ({ ...asset }))
+        : [],
+      selectedCandidateIndex: Number.isFinite(entry?.selectedCandidateIndex)
+        ? entry.selectedCandidateIndex
+        : null,
+      generationId: entry?.generationId || null,
     }))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 };
@@ -232,6 +239,9 @@ function Storybooks() {
   const [activeAssetPages, setActiveAssetPages] = useState([]);
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [regeneratingOrder, setRegeneratingOrder] = useState(null);
+  const [isRegeneratingPdf, setIsRegeneratingPdf] = useState(false);
+  const [applyingCandidateKey, setApplyingCandidateKey] = useState('');
+  const preloadRefs = useRef([]);
 
   const selectedReader = useMemo(
     () => users.find((user) => user._id === selectedUserId) || null,
@@ -806,7 +816,59 @@ function Storybooks() {
     setActiveAssetPages([]);
     setActivePageIndex(0);
     setRegeneratingOrder(null);
+    setIsRegeneratingPdf(false);
+    setApplyingCandidateKey('');
+    if (Array.isArray(preloadRefs.current)) {
+      preloadRefs.current.forEach((image) => {
+        if (typeof Image !== 'undefined' && image && image instanceof Image) {
+          image.src = '';
+        }
+      });
+    }
+    preloadRefs.current = [];
   };
+
+  useEffect(() => {
+    if (!activeAsset || !activeAssetPages.length) {
+      preloadRefs.current = [];
+      return;
+    }
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const assetIdentifier = activeAsset._id || activeAsset.key || 'asset';
+    const images = [];
+
+    activeAssetPages.forEach((page, index) => {
+      const pageLabel = page.order || index + 1;
+      const cacheToken =
+        page.updatedAt || activeAsset.updatedAt || `${assetIdentifier}-${pageLabel}`;
+
+      const backgroundUrl = resolveAssetUrl(page.background);
+      if (backgroundUrl) {
+        const image = new Image();
+        image.src = withCacheBust(backgroundUrl, `${cacheToken}-preload-background`);
+        images.push(image);
+      }
+
+      const characterUrl = resolveAssetUrl(page.character);
+      if (characterUrl) {
+        const image = new Image();
+        image.src = withCacheBust(characterUrl, `${cacheToken}-preload-character`);
+        images.push(image);
+      }
+    });
+
+    preloadRefs.current = images;
+
+    return () => {
+      images.forEach((image) => {
+        image.src = '';
+      });
+      preloadRefs.current = [];
+    };
+  }, [activeAsset, activeAssetPages]);
 
   const handleRegeneratePage = async (order) => {
     if (!activeAsset || !selectedBookId || !order) return;
@@ -944,6 +1006,180 @@ function Storybooks() {
     }
   };
 
+  const handleRegeneratePdf = async () => {
+    if (!activeAsset || !selectedBookId) {
+      toast.error('Open a storybook to regenerate the PDF');
+      return;
+    }
+
+    const assetIdentifier = activeAsset._id || activeAsset.key;
+    if (!assetIdentifier) {
+      toast.error('Missing storybook identifier for PDF regeneration');
+      return;
+    }
+
+    setIsRegeneratingPdf(true);
+    try {
+      const response = await bookAPI.regenerateStorybookPdf(selectedBookId, assetIdentifier, {
+        title: activeAsset.title,
+      });
+      const payload = response.data || {};
+      const normalisedPages = normaliseAssetPages(payload.pages || []);
+
+      setActiveAsset((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          ...payload,
+          pages: normalisedPages,
+          updatedAt: payload.updatedAt || new Date().toISOString(),
+        };
+      });
+      setActiveAssetPages(normalisedPages);
+
+      setSelectedBook((prev) => {
+        if (!prev) return prev;
+        const updatedAssets = Array.isArray(prev.pdfAssets)
+          ? prev.pdfAssets.map((asset) => {
+              const matches =
+                (activeAsset?._id && asset._id === activeAsset._id) ||
+                asset.key === activeAsset?.key;
+              if (!matches) return asset;
+              return {
+                ...asset,
+                ...payload,
+                pages: normalisedPages,
+              };
+            })
+          : prev.pdfAssets;
+        return {
+          ...prev,
+          pdfAssets: updatedAssets,
+        };
+      });
+
+      toast.success('Regenerated PDF with the latest imagery');
+    } catch (error) {
+      toast.error(`Failed to regenerate PDF: ${error.message}`);
+    } finally {
+      setIsRegeneratingPdf(false);
+    }
+  };
+
+  const handleApplyCandidate = async (order, candidateIndex) => {
+    if (!activeAsset || !selectedBookId || !order) return;
+    const assetIdentifier = activeAsset._id || activeAsset.key;
+    if (!assetIdentifier) {
+      toast.error('Missing storybook identifier for candidate selection');
+      return;
+    }
+
+    const selectionKey = `${order}-${candidateIndex}`;
+    setApplyingCandidateKey(selectionKey);
+
+    try {
+      const response = await bookAPI.selectStorybookPageCandidate(
+        selectedBookId,
+        assetIdentifier,
+        order,
+        { candidateIndex }
+      );
+      const payload = response.data || {};
+      if (payload.pdfAssetPage) {
+        const [normalisedPage] = normaliseAssetPages([payload.pdfAssetPage]);
+
+        setActiveAssetPages((prev) => {
+          const next = Array.isArray(prev)
+            ? prev.map((page) =>
+                page.order === normalisedPage.order ? { ...page, ...normalisedPage } : page
+              )
+            : [normalisedPage];
+          return normaliseAssetPages(next);
+        });
+
+        setActiveAsset((prev) => {
+          if (!prev) return prev;
+          const nextPages = normaliseAssetPages(
+            Array.isArray(prev.pages)
+              ? prev.pages.map((page) =>
+                  page.order === normalisedPage.order ? { ...page, ...normalisedPage } : page
+                )
+              : [normalisedPage]
+          );
+          return {
+            ...prev,
+            pages: nextPages,
+            updatedAt: payload.pdfAssetPage.updatedAt || new Date().toISOString(),
+          };
+        });
+
+        setSelectedBook((prev) => {
+          if (!prev) return prev;
+          const updatedBookPages = Array.isArray(prev.pages)
+            ? prev.pages.map((page) =>
+                page.order === (payload.page?.order || order)
+                  ? {
+                      ...page,
+                      characterImage: payload.page?.characterImage || page.characterImage,
+                      characterImageOriginal:
+                        payload.page?.characterImageOriginal || page.characterImageOriginal,
+                    }
+                  : page
+              )
+            : prev.pages;
+          const updatedAssets = Array.isArray(prev.pdfAssets)
+            ? prev.pdfAssets.map((asset) => {
+                const matches =
+                  (activeAsset?._id && asset._id === activeAsset._id) ||
+                  asset.key === activeAsset?.key;
+                if (!matches) return asset;
+                const nextPages = normaliseAssetPages(
+                  Array.isArray(asset.pages)
+                    ? asset.pages.map((page) =>
+                        page.order === normalisedPage.order ? { ...page, ...normalisedPage } : page
+                      )
+                    : [normalisedPage]
+                );
+                return {
+                  ...asset,
+                  pages: nextPages,
+                  updatedAt:
+                    payload.pdfAssetPage.updatedAt || asset.updatedAt || new Date().toISOString(),
+                };
+              })
+            : prev.pdfAssets;
+          return {
+            ...prev,
+            pdfAssets: updatedAssets,
+            pages: updatedBookPages,
+          };
+        });
+
+        if (payload.page?.characterImage) {
+          setPages((prev) =>
+            prev.map((page) =>
+              page.order === (payload.page.order || order)
+                ? {
+                    ...page,
+                    characterUrl: payload.page.characterImage?.url || page.characterUrl,
+                    characterPreview: '',
+                    characterFile: null,
+                    useCharacter: true,
+                  }
+                : page
+            )
+          );
+        }
+
+        toast.success('Applied the selected candidate image');
+      }
+    } catch (error) {
+      toast.error(`Failed to apply candidate: ${error.message}`);
+    } finally {
+      setApplyingCandidateKey('');
+    }
+  };
+
   const renderAssetViewer = () => {
     if (!activeAsset) return null;
 
@@ -998,6 +1234,12 @@ function Storybooks() {
     const hasCharacterImage = Boolean(characterSrc);
     const hasCharacterAsset = Boolean(currentPage?.character);
     const characterBackgroundRemoved = Boolean(currentPage?.character?.backgroundRemoved);
+    const hasCandidateAssets =
+      Array.isArray(currentPage?.candidateAssets) && currentPage.candidateAssets.length > 0;
+    const hasRankingNotes = Array.isArray(currentPage?.rankingNotes) && currentPage.rankingNotes.length > 0;
+    const shouldShowCandidateSection =
+      hasCandidateAssets || hasRankingNotes || Boolean(activeAsset?.trainingId);
+    const rankingSummary = (currentPage?.rankingSummary || '').trim();
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
@@ -1059,6 +1301,28 @@ function Storybooks() {
                   )}
                 </Button>
               ) : null}
+              {hasPages ? (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="gap-2"
+                  onClick={handleRegeneratePdf}
+                  disabled={isRegeneratingPdf}
+                >
+                  {isRegeneratingPdf ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Rebuilding…
+                    </>
+                  ) : (
+                    <>
+                      <BookOpen className="h-4 w-4" />
+                      Regenerate PDF
+                    </>
+                  )}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
@@ -1070,13 +1334,19 @@ function Storybooks() {
             </div>
           </div>
 
-          <div className="flex flex-1 items-center justify-center overflow-y-auto px-6 pb-10">
+          <div className="flex flex-1 items-stretch justify-center overflow-y-auto px-4 pb-10 sm:px-6">
             {hasPages ? (
-              <div className="w-full max-w-5xl space-y-4">
-                <div
-                  className="relative w-full overflow-hidden rounded-[32px] border border-border/60 bg-background/60"
-                  style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
+              <div className="flex w-full max-w-6xl flex-col gap-5">
+                <div className="flex flex-col gap-5 xl:flex-row">
+                  <div className="w-full xl:max-w-[60%]">
+                    <div
+                  className="relative mx-auto w-full max-w-full overflow-hidden rounded-3xl border border-border/50 bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-[0_40px_80px_-32px_rgba(0,0,0,0.55)]"
+                  style={{
+                    aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
+                    maxHeight: '70vh',
+                  }}
                 >
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
                   {backgroundSrc ? (
                     <img
                       key={`${currentPage?.background?.key || pageLabel}-background`}
@@ -1114,7 +1384,7 @@ function Storybooks() {
                   ) : null}
                   {textLines.length ? (
                     <div
-                      className="absolute rounded-[24px] bg-white/65 p-5 text-black shadow-lg backdrop-blur-sm"
+                      className="absolute rounded-3xl bg-white/70 p-5 text-black shadow-[0_20px_45px_rgba(0,0,0,0.25)] backdrop-blur-sm"
                       style={{
                         top: bubbleTopPercent,
                         width: bubbleWidthPercent,
@@ -1125,7 +1395,7 @@ function Storybooks() {
                       {textLines.map((line, lineIndex) => (
                         <p
                           key={`page-${pageLabel}-line-${lineIndex}`}
-                          className="text-[16px] leading-[22.4px]"
+                          className="text-[16px] leading-[22.4px] text-slate-900"
                         >
                           {line}
                         </p>
@@ -1134,7 +1404,7 @@ function Storybooks() {
                   ) : null}
                   {quoteLines.length ? (
                     <div
-                      className="absolute text-[16px] font-semibold italic text-black"
+                      className="absolute rounded-2xl bg-white/60 px-5 py-4 text-[16px] font-semibold italic text-slate-900 shadow-[0_18px_35px_rgba(0,0,0,0.2)] backdrop-blur-sm"
                       style={{
                         top: quoteTopPercent,
                         width: quoteWidthPercent,
@@ -1150,22 +1420,144 @@ function Storybooks() {
                       ))}
                     </div>
                   ) : null}
-                  <div className="absolute left-[3%] top-[4%] text-xs font-semibold uppercase tracking-[0.2em] text-white/80 drop-shadow">
+                  <div className="absolute left-[3%] top-[4%] rounded-full bg-black/35 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/85 shadow-[0_10px_25px_rgba(0,0,0,0.35)]">
                     Page {pageLabel}
                   </div>
                 </div>
-                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-foreground/60">
-                  <span>
-                    Viewing {safeIndex + 1} of {activeAssetPages.length}
-                  </span>
-                  <span>
-                    {currentPage?.character?.backgroundRemoved
-                      ? 'Character background removed'
-                      : currentPage?.character
-                      ? 'Character original background'
-                      : 'No character image'}
-                  </span>
+                <div className="flex w-full flex-col gap-3 xl:max-w-[40%]">
+                  <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.2em] text-foreground/60">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-foreground/70">
+                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                      Viewing {safeIndex + 1} of {activeAssetPages.length}
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-foreground/70">
+                      {currentPage?.character?.backgroundRemoved
+                        ? 'Background removed'
+                        : currentPage?.character
+                        ? 'Original background'
+                        : 'No character image'}
+                    </span>
+                  </div>
+                  {rankingSummary ? (
+                    <div className="rounded-2xl border border-dashed border-border/60 bg-background/75 p-4 text-sm text-foreground/80">
+                      <p className="text-xs uppercase tracking-[0.2em] text-foreground/55">
+                        Art Director Notes
+                      </p>
+                      <p className="mt-2 leading-relaxed">{rankingSummary}</p>
+                    </div>
+                  ) : null}
                 </div>
+              </div>
+                {shouldShowCandidateSection ? (
+                  hasCandidateAssets ? (
+                    <div className="space-y-3 rounded-2xl border border-border/60 bg-background/70 p-4">
+                      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-foreground/60">
+                        <span>Candidate images</span>
+                        <span>
+                          {Number.isFinite(currentPage?.selectedCandidateIndex)
+                            ? `Selected option ${currentPage.selectedCandidateIndex}`
+                            : 'Choose an alternate image'}
+                        </span>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        {currentPage.candidateAssets.map((candidate, candidateIdx) => {
+                          const optionNumber = candidateIdx + 1;
+                          const candidateUrl = resolveAssetUrl(candidate);
+                          const cacheKey = `${cacheToken}-candidate-${optionNumber}`;
+                          const candidateKey = `${currentPage?.order || pageLabel}-${optionNumber}`;
+                          const isSelected =
+                            currentPage.selectedCandidateIndex === optionNumber;
+                          const isApplying = applyingCandidateKey === candidateKey;
+                          const rankingEntry = Array.isArray(currentPage?.rankingNotes)
+                            ? currentPage.rankingNotes.find(
+                                (entry) => entry.imageIndex === optionNumber
+                              )
+                            : null;
+                          const rawScore = rankingEntry?.score;
+                          const normalisedScore =
+                            rawScore === null || rawScore === undefined
+                              ? null
+                              : Number(rawScore);
+                          const scoreLabel = Number.isFinite(normalisedScore)
+                            ? `${Math.round(normalisedScore)}/100`
+                            : null;
+                          const verdictLabel = rankingEntry?.verdict
+                            ? rankingEntry.verdict.replace(/\b\w/g, (char) => char.toUpperCase())
+                            : null;
+                          const noteText = rankingEntry?.notes?.trim();
+                          return (
+                            <div
+                              key={candidate.key || candidate.url || candidateKey}
+                              className={`flex flex-col gap-2 rounded-xl border ${
+                                isSelected ? 'border-accent/60' : 'border-border/50'
+                              } bg-background/80 p-3 shadow-md transition-transform duration-150 hover:-translate-y-1 hover:shadow-xl`}
+                            >
+                              <div className="relative aspect-[4/5] overflow-hidden rounded-lg border border-border/50 bg-muted/30">
+                                {candidateUrl ? (
+                                  <img
+                                    src={withCacheBust(candidateUrl, cacheKey)}
+                                    alt={`Candidate ${optionNumber} for page ${pageLabel}`}
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center text-xs text-foreground/50">
+                                    No preview
+                                  </div>
+                                )}
+                                {isSelected ? (
+                                  <div className="absolute inset-0 bg-accent/15 backdrop-blur-[2px]" />
+                                ) : null}
+                              </div>
+                              <div className="flex items-center justify-between text-xs text-foreground/60">
+                                <span>Option {optionNumber}</span>
+                                {isSelected ? <Badge variant="default">Selected</Badge> : null}
+                              </div>
+                              {(scoreLabel || verdictLabel || rankingEntry?.rank) && (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/70 px-3 py-2 text-[11px] text-foreground/70">
+                                  {rankingEntry?.rank ? <span>Rank #{rankingEntry.rank}</span> : null}
+                                  {scoreLabel ? <span>Score: {scoreLabel}</span> : null}
+                                  {verdictLabel ? <span>{verdictLabel}</span> : null}
+                                </div>
+                              )}
+                              {noteText ? (
+                                <p className="rounded-lg bg-muted/10 px-3 py-2 text-[11px] leading-relaxed text-foreground/65">
+                                  {noteText}
+                                </p>
+                              ) : null}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={isSelected ? 'outline' : 'default'}
+                                className="gap-2"
+                                onClick={() =>
+                                  handleApplyCandidate(currentPage.order || pageLabel, optionNumber)
+                                }
+                                disabled={isSelected || isApplying}
+                              >
+                                {isApplying ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Applying…
+                                  </>
+                                ) : isSelected ? (
+                                  'Current choice'
+                                ) : (
+                                  'Use this image'
+                                )}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border/60 bg-muted/10 p-4 text-xs text-foreground/55">
+                      No alternate candidates stored for this page yet. Regenerate the page to
+                      refresh options.
+                    </div>
+                  )
+                ) : null}
               </div>
             ) : (
               <div className="flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-sm text-foreground/60">

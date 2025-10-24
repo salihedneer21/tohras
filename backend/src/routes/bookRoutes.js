@@ -39,6 +39,11 @@ router.post(
   '/:id/storybooks/:assetId/pages/:pageOrder/regenerate',
   bookController.regenerateStorybookPage
 );
+router.post('/:id/storybooks/:assetId/regenerate', bookController.regenerateStorybookPdf);
+router.post(
+  '/:id/storybooks/:assetId/pages/:pageOrder/select',
+  bookController.selectStorybookPageCandidate
+);
 router.get('/:id', bookController.getBookById);
 router.post('/', uploadFields, validateBookCreate, bookController.createBook);
 router.put('/:id', uploadFields, validateBookUpdate, bookController.updateBook);
