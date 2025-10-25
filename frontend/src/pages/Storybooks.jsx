@@ -216,6 +216,70 @@ const normaliseAssetPages = (pages) => {
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 };
 
+// Page Thumbnail Component - lightweight and optimized
+const PageThumbnail = ({ page, index, isActive, onClick, assetUpdatedAt }) => {
+  const thumbLabel = page.order || index + 1;
+  const isCharacterOnRight = index % 2 === 0;
+  const backgroundUrl = page?.background?.url || page?.background?.downloadUrl || page?.background?.signedUrl || '';
+  const characterUrl = page?.character?.url || page?.character?.downloadUrl || page?.character?.signedUrl || '';
+  const thumbCacheToken = page.updatedAt || assetUpdatedAt || `thumb-${thumbLabel}`;
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full overflow-hidden transition-colors ${
+        isActive
+          ? 'ring-2 ring-accent shadow-lg'
+          : 'ring-1 ring-border/40 hover:ring-accent/60'
+      }`}
+    >
+      <div
+        className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70"
+        style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
+      >
+        {backgroundUrl && (
+          <img
+            src={withCacheBust(backgroundUrl, `${thumbCacheToken}-thumb-bg`)}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+        )}
+        {characterUrl && (
+          <img
+            src={withCacheBust(characterUrl, `${thumbCacheToken}-thumb-char`)}
+            alt=""
+            className="absolute bottom-0 object-contain"
+            style={{
+              maxWidth: '40%',
+              maxHeight: '80%',
+              [isCharacterOnRight ? 'right' : 'left']: '0%',
+            }}
+            loading="lazy"
+          />
+        )}
+        {page.text && (
+          <div
+            className="absolute bg-white/80 text-[4px] leading-tight text-black p-1 overflow-hidden"
+            style={{
+              bottom: '25%',
+              width: '35%',
+              [isCharacterOnRight ? 'left' : 'right']: '5%',
+            }}
+          >
+            {page.text.slice(0, 50)}
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent pt-2 pb-0.5 px-1">
+          <div className="text-[9px] font-semibold text-white text-center">
+            {thumbLabel}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+};
+
 function Storybooks() {
   const [books, setBooks] = useState([]);
   const [users, setUsers] = useState([]);
@@ -828,47 +892,51 @@ function Storybooks() {
     preloadRefs.current = [];
   };
 
+  // Simplified preloading - only preload adjacent pages for better performance
   useEffect(() => {
-    if (!activeAsset || !activeAssetPages.length) {
-      preloadRefs.current = [];
-      return;
-    }
-    if (typeof window === 'undefined') {
+    if (!activeAsset || !activeAssetPages.length || typeof window === 'undefined') {
       return;
     }
 
     const assetIdentifier = activeAsset._id || activeAsset.key || 'asset';
     const images = [];
 
-    activeAssetPages.forEach((page, index) => {
+    // Only preload current page and adjacent pages (prev and next)
+    const pagesToPreload = [
+      activePageIndex - 1,
+      activePageIndex,
+      activePageIndex + 1,
+    ].filter((idx) => idx >= 0 && idx < activeAssetPages.length);
+
+    pagesToPreload.forEach((index) => {
+      const page = activeAssetPages[index];
+      if (!page) return;
+
       const pageLabel = page.order || index + 1;
-      const cacheToken =
-        page.updatedAt || activeAsset.updatedAt || `${assetIdentifier}-${pageLabel}`;
+      const cacheToken = page.updatedAt || activeAsset.updatedAt || `${assetIdentifier}-${pageLabel}`;
 
       const backgroundUrl = resolveAssetUrl(page.background);
+      const characterUrl = resolveAssetUrl(page.character);
+
       if (backgroundUrl) {
-        const image = new Image();
-        image.src = withCacheBust(backgroundUrl, `${cacheToken}-preload-background`);
-        images.push(image);
+        const img = new Image();
+        img.src = withCacheBust(backgroundUrl, `${cacheToken}-preload-bg`);
+        images.push(img);
       }
 
-      const characterUrl = resolveAssetUrl(page.character);
       if (characterUrl) {
-        const image = new Image();
-        image.src = withCacheBust(characterUrl, `${cacheToken}-preload-character`);
-        images.push(image);
+        const img = new Image();
+        img.src = withCacheBust(characterUrl, `${cacheToken}-preload-char`);
+        images.push(img);
       }
     });
 
-    preloadRefs.current = images;
-
     return () => {
-      images.forEach((image) => {
-        image.src = '';
+      images.forEach((img) => {
+        img.src = '';
       });
-      preloadRefs.current = [];
     };
-  }, [activeAsset, activeAssetPages]);
+  }, [activeAsset, activeAssetPages, activePageIndex]);
 
   const handleRegeneratePage = async (order) => {
     if (!activeAsset || !selectedBookId || !order) return;
@@ -1180,7 +1248,7 @@ function Storybooks() {
     }
   };
 
-  const renderAssetViewer = () => {
+  const renderAssetViewer = useCallback(() => {
     if (!activeAsset) return null;
 
     const hasPages = Array.isArray(activeAssetPages) && activeAssetPages.length > 0;
@@ -1242,36 +1310,36 @@ function Storybooks() {
     const rankingSummary = (currentPage?.rankingSummary || '').trim();
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8">
-        <div className="relative flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-background shadow-2xl">
-          <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
-            <div>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="relative flex h-full w-full max-w-[95vw] flex-col overflow-hidden rounded-2xl bg-background shadow-2xl">
+          <div className="flex items-center justify-between border-b border-border/50 px-4 sm:px-6 py-4 bg-background/95 backdrop-blur-sm">
+            <div className="min-w-0 flex-1">
               <p className="text-xs uppercase tracking-wide text-foreground/45">Storybook preview</p>
-              <h3 className="text-lg font-semibold text-foreground">
+              <h3 className="text-base sm:text-lg font-semibold text-foreground truncate">
                 {activeAsset.title || selectedBook?.name || 'Storybook'}
                 {hasPages ? ` · Page ${pageLabel}` : ' · No page snapshots yet'}
               </h3>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="gap-1"
+                className="gap-1 px-2 sm:px-3"
                 onClick={() => setActivePageIndex((prev) => Math.max(0, prev - 1))}
                 disabled={!canNavigatePrev}
               >
                 <ChevronLeft className="h-4 w-4" />
-                Prev
+                <span className="hidden sm:inline">Prev</span>
               </Button>
-              <span className="text-sm font-medium text-foreground/60">
+              <span className="text-xs sm:text-sm font-medium text-foreground/60 px-1">
                 {hasPages ? `${safeIndex + 1} / ${activeAssetPages.length}` : '0 / 0'}
               </span>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="gap-1"
+                className="gap-1 px-2 sm:px-3"
                 onClick={() =>
                   setActivePageIndex((prev) =>
                     prev + 1 >= activeAssetPages.length ? prev : prev + 1
@@ -1279,7 +1347,7 @@ function Storybooks() {
                 }
                 disabled={!canNavigateNext}
               >
-                Next
+                <span className="hidden sm:inline">Next</span>
                 <ChevronRight className="h-4 w-4" />
               </Button>
               {hasPages ? (
@@ -1287,17 +1355,17 @@ function Storybooks() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="gap-1 hidden md:flex"
                   onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
                   disabled={isCurrentPageRegenerating}
                 >
                   {isCurrentPageRegenerating ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Regenerating…
+                      <span className="hidden lg:inline">Regenerating…</span>
                     </>
                   ) : (
-                    'Regenerate page'
+                    <span className="hidden lg:inline">Regenerate page</span>
                   )}
                 </Button>
               ) : null}
@@ -1306,19 +1374,19 @@ function Storybooks() {
                   type="button"
                   variant="default"
                   size="sm"
-                  className="gap-2"
+                  className="gap-1 hidden md:flex"
                   onClick={handleRegeneratePdf}
                   disabled={isRegeneratingPdf}
                 >
                   {isRegeneratingPdf ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Rebuilding…
+                      <span className="hidden lg:inline">Rebuilding…</span>
                     </>
                   ) : (
                     <>
                       <BookOpen className="h-4 w-4" />
-                      Regenerate PDF
+                      <span className="hidden lg:inline">Regenerate PDF</span>
                     </>
                   )}
                 </Button>
@@ -1334,18 +1402,37 @@ function Storybooks() {
             </div>
           </div>
 
-          <div className="flex flex-1 items-stretch justify-center overflow-y-auto px-4 pb-10 sm:px-6">
+          <div className="flex flex-1 overflow-hidden">
             {hasPages ? (
-              <div className="flex w-full max-w-6xl flex-col gap-5">
-                <div className="flex flex-col gap-5 xl:flex-row">
-                  <div className="w-full xl:max-w-[60%]">
+              <div className="flex w-full h-full">
+                {/* Left Sidebar - Page Thumbnails */}
+                <div className="hidden md:flex w-44 lg:w-52 flex-col border-r border-border/50 bg-background/50 overflow-y-auto">
+                  <div className="p-2 border-b border-border/50 bg-background/95 sticky top-0 z-10">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-foreground/60">Pages</p>
+                  </div>
+                  <div className="p-2 space-y-2">
+                    {activeAssetPages.map((page, idx) => (
+                      <PageThumbnail
+                        key={`thumb-${page.order || idx}`}
+                        page={page}
+                        index={idx}
+                        isActive={idx === safeIndex}
+                        onClick={() => setActivePageIndex(idx)}
+                        assetUpdatedAt={activeAsset.updatedAt}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Center - Main Preview */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="flex-1 flex items-center justify-center p-3 sm:p-4 bg-muted/10 overflow-auto">
                     <div
-                  className="relative mx-auto w-full max-w-full overflow-hidden rounded-3xl border border-border/50 bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-[0_40px_80px_-32px_rgba(0,0,0,0.55)]"
-                  style={{
-                    aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
-                    maxHeight: '70vh',
-                  }}
-                >
+                      className="relative w-full max-w-4xl bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-2xl"
+                      style={{
+                        aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
+                      }}
+                    >
                   <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
                   {backgroundSrc ? (
                     <img
@@ -1374,7 +1461,7 @@ function Storybooks() {
                   ) : null}
                   {hasCharacterAsset && !characterBackgroundRemoved ? (
                     <div
-                      className="absolute bottom-[8%] max-w-xs rounded-2xl bg-black/60 px-4 py-2 text-center text-xs font-medium uppercase tracking-[0.18em] text-white/80"
+                      className="absolute bottom-[8%] max-w-xs bg-black/60 px-4 py-2 text-center text-xs font-medium uppercase tracking-[0.18em] text-white/80"
                       style={{
                         [isCharacterOnRight ? 'right' : 'left']: '8%',
                       }}
@@ -1384,7 +1471,7 @@ function Storybooks() {
                   ) : null}
                   {textLines.length ? (
                     <div
-                      className="absolute rounded-3xl bg-white/70 p-5 text-black shadow-[0_20px_45px_rgba(0,0,0,0.25)] backdrop-blur-sm"
+                      className="absolute bg-white/70 p-5 text-black shadow-[0_20px_45px_rgba(0,0,0,0.25)] backdrop-blur-sm"
                       style={{
                         top: bubbleTopPercent,
                         width: bubbleWidthPercent,
@@ -1404,7 +1491,7 @@ function Storybooks() {
                   ) : null}
                   {quoteLines.length ? (
                     <div
-                      className="absolute rounded-2xl bg-white/60 px-5 py-4 text-[16px] font-semibold italic text-slate-900 shadow-[0_18px_35px_rgba(0,0,0,0.2)] backdrop-blur-sm"
+                      className="absolute bg-white/60 px-5 py-4 text-[16px] font-semibold italic text-slate-900 shadow-[0_18px_35px_rgba(0,0,0,0.2)] backdrop-blur-sm"
                       style={{
                         top: quoteTopPercent,
                         width: quoteWidthPercent,
@@ -1424,42 +1511,89 @@ function Storybooks() {
                     Page {pageLabel}
                   </div>
                 </div>
-                <div className="flex w-full flex-col gap-3 xl:max-w-[40%]">
-                  <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.2em] text-foreground/60">
-                    <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-foreground/70">
-                      <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-                      Viewing {safeIndex + 1} of {activeAssetPages.length}
-                    </span>
-                    <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/80 px-3 py-1 text-foreground/70">
-                      {currentPage?.character?.backgroundRemoved
-                        ? 'Background removed'
-                        : currentPage?.character
-                        ? 'Original background'
-                        : 'No character image'}
-                    </span>
                   </div>
-                  {rankingSummary ? (
-                    <div className="rounded-2xl border border-dashed border-border/60 bg-background/75 p-4 text-sm text-foreground/80">
-                      <p className="text-xs uppercase tracking-[0.2em] text-foreground/55">
-                        Art Director Notes
-                      </p>
-                      <p className="mt-2 leading-relaxed">{rankingSummary}</p>
+
+                  {/* Mobile Page Info */}
+                  <div className="md:hidden px-4 py-3 border-t border-border/50 bg-background/80">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-foreground/60">
+                        Page {safeIndex + 1} of {activeAssetPages.length}
+                      </span>
+                      <span className="text-foreground/50">
+                        {currentPage?.character?.backgroundRemoved
+                          ? 'Background removed'
+                          : currentPage?.character
+                          ? 'Original background'
+                          : 'No character'}
+                      </span>
                     </div>
-                  ) : null}
-                </div>
-              </div>
+                  </div>
+
+                  {/* Bottom Section - Metadata & Candidates */}
+                  <div className="border-t border-border/50 bg-background">
+                    <div className="p-3 sm:p-4 space-y-3 max-h-72 overflow-y-auto">
+                      {/* Mobile Action Buttons */}
+                      <div className="flex md:hidden gap-2 pb-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 gap-1"
+                          onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
+                          disabled={isCurrentPageRegenerating}
+                        >
+                          {isCurrentPageRegenerating ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Regenerating…
+                            </>
+                          ) : (
+                            'Regenerate page'
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          className="flex-1 gap-1"
+                          onClick={handleRegeneratePdf}
+                          disabled={isRegeneratingPdf}
+                        >
+                          {isRegeneratingPdf ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Rebuilding…
+                            </>
+                          ) : (
+                            <>
+                              <BookOpen className="h-4 w-4" />
+                              Regenerate PDF
+                            </>
+                          )}
+                        </Button>
+                      </div>
+
+                      {/* Art Director Notes */}
+                      {rankingSummary ? (
+                        <div className="rounded-lg border border-border/60 bg-background p-4 text-sm text-foreground/80">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-foreground/55 mb-2">
+                            Art Director Notes
+                          </p>
+                          <p className="leading-relaxed">{rankingSummary}</p>
+                        </div>
+                      ) : null}
                 {shouldShowCandidateSection ? (
                   hasCandidateAssets ? (
-                    <div className="space-y-3 rounded-2xl border border-border/60 bg-background/70 p-4">
-                      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-foreground/60">
-                        <span>Candidate images</span>
-                        <span>
+                    <div className="space-y-3 border border-border/50 bg-background/50 p-3 sm:p-4">
+                      <div className="flex items-center justify-between text-[10px] sm:text-xs uppercase tracking-wide text-foreground/60">
+                        <span className="font-semibold">Candidate images</span>
+                        <span className="text-foreground/50">
                           {Number.isFinite(currentPage?.selectedCandidateIndex)
-                            ? `Selected option ${currentPage.selectedCandidateIndex}`
-                            : 'Choose an alternate image'}
+                            ? `Selected: ${currentPage.selectedCandidateIndex}`
+                            : 'Choose alternate'}
                         </span>
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="grid gap-3 grid-cols-2 sm:grid-cols-2 lg:grid-cols-4">
                         {currentPage.candidateAssets.map((candidate, candidateIdx) => {
                           const optionNumber = candidateIdx + 1;
                           const candidateUrl = resolveAssetUrl(candidate);
@@ -1488,11 +1622,11 @@ function Storybooks() {
                           return (
                             <div
                               key={candidate.key || candidate.url || candidateKey}
-                              className={`flex flex-col gap-2 rounded-xl border ${
-                                isSelected ? 'border-accent/60' : 'border-border/50'
-                              } bg-background/80 p-3 shadow-md transition-transform duration-150 hover:-translate-y-1 hover:shadow-xl`}
+                              className={`flex flex-col gap-2 border ${
+                                isSelected ? 'border-accent bg-accent/10' : 'border-border/40 bg-background'
+                              } p-2 transition-colors hover:border-accent/70`}
                             >
-                              <div className="relative aspect-[4/5] overflow-hidden rounded-lg border border-border/50 bg-muted/30">
+                              <div className="relative aspect-[3/4] overflow-hidden bg-muted/30">
                                 {candidateUrl ? (
                                   <img
                                     src={withCacheBust(candidateUrl, cacheKey)}
@@ -1506,30 +1640,22 @@ function Storybooks() {
                                   </div>
                                 )}
                                 {isSelected ? (
-                                  <div className="absolute inset-0 bg-accent/15 backdrop-blur-[2px]" />
+                                  <div className="absolute inset-0 flex items-center justify-center bg-accent/25">
+                                    <div className="bg-accent px-2 py-1 text-[10px] font-bold text-accent-foreground">
+                                      SELECTED
+                                    </div>
+                                  </div>
                                 ) : null}
                               </div>
-                              <div className="flex items-center justify-between text-xs text-foreground/60">
-                                <span>Option {optionNumber}</span>
-                                {isSelected ? <Badge variant="default">Selected</Badge> : null}
+                              <div className="flex items-center justify-between text-[10px] text-foreground/70">
+                                <span className="font-medium">#{optionNumber}</span>
+                                {scoreLabel && <span>{scoreLabel}</span>}
                               </div>
-                              {(scoreLabel || verdictLabel || rankingEntry?.rank) && (
-                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/70 px-3 py-2 text-[11px] text-foreground/70">
-                                  {rankingEntry?.rank ? <span>Rank #{rankingEntry.rank}</span> : null}
-                                  {scoreLabel ? <span>Score: {scoreLabel}</span> : null}
-                                  {verdictLabel ? <span>{verdictLabel}</span> : null}
-                                </div>
-                              )}
-                              {noteText ? (
-                                <p className="rounded-lg bg-muted/10 px-3 py-2 text-[11px] leading-relaxed text-foreground/65">
-                                  {noteText}
-                                </p>
-                              ) : null}
                               <Button
                                 type="button"
                                 size="sm"
                                 variant={isSelected ? 'outline' : 'default'}
-                                className="gap-2"
+                                className="gap-1 h-8 text-xs"
                                 onClick={() =>
                                   handleApplyCandidate(currentPage.order || pageLabel, optionNumber)
                                 }
@@ -1537,13 +1663,13 @@ function Storybooks() {
                               >
                                 {isApplying ? (
                                   <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <Loader2 className="h-3 w-3 animate-spin" />
                                     Applying…
                                   </>
                                 ) : isSelected ? (
-                                  'Current choice'
+                                  'Current'
                                 ) : (
-                                  'Use this image'
+                                  'Use this'
                                 )}
                               </Button>
                             </div>
@@ -1552,12 +1678,15 @@ function Storybooks() {
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-border/60 bg-muted/10 p-4 text-xs text-foreground/55">
+                    <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-center text-sm text-foreground/60">
                       No alternate candidates stored for this page yet. Regenerate the page to
                       refresh options.
                     </div>
                   )
                 ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-sm text-foreground/60">
@@ -1569,7 +1698,18 @@ function Storybooks() {
         </div>
       </div>
     );
-  };
+  }, [
+    activeAsset,
+    activeAssetPages,
+    activePageIndex,
+    regeneratingOrder,
+    isRegeneratingPdf,
+    applyingCandidateKey,
+    selectedBook?.name,
+    handleRegeneratePage,
+    handleRegeneratePdf,
+    handleApplyCandidate,
+  ]);
 
   if (loading) {
     return (
