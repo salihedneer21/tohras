@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   BookOpen,
@@ -216,20 +216,30 @@ const normaliseAssetPages = (pages) => {
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 };
 
-// Page Thumbnail Component - lightweight and optimized
-const PageThumbnail = ({ page, index, isActive, onClick, assetUpdatedAt }) => {
+// Page Thumbnail Component - matches main preview exactly
+const PageThumbnail = React.memo(({ page, index, isActive, onClick, assetUpdatedAt }) => {
   const thumbLabel = page.order || index + 1;
   const isCharacterOnRight = index % 2 === 0;
   const backgroundUrl = page?.background?.url || page?.background?.downloadUrl || page?.background?.signedUrl || '';
   const characterUrl = page?.character?.url || page?.character?.downloadUrl || page?.character?.signedUrl || '';
   const thumbCacheToken = page.updatedAt || assetUpdatedAt || `thumb-${thumbLabel}`;
 
+  // Use same positioning logic as main preview
+  const textBlockWidth = Math.min(
+    Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
+    PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
+  );
+  const textY = PDF_PAGE_HEIGHT * 0.7;
+  const bubbleTopPercent = toPercent(PDF_PAGE_HEIGHT - (textY + 20), PDF_PAGE_HEIGHT);
+  const bubbleSidePercent = toPercent(Math.max(PDF_TEXT_MARGIN - 20, 0), PDF_PAGE_WIDTH);
+  const bubbleWidthPercent = toPercent(textBlockWidth + 40, PDF_PAGE_WIDTH);
+
   return (
     <button
       onClick={onClick}
       className={`w-full overflow-hidden transition-colors ${
         isActive
-          ? 'ring-2 ring-accent shadow-lg'
+          ? 'ring-2 ring-accent shadow-md'
           : 'ring-1 ring-border/40 hover:ring-accent/60'
       }`}
     >
@@ -249,10 +259,10 @@ const PageThumbnail = ({ page, index, isActive, onClick, assetUpdatedAt }) => {
           <img
             src={withCacheBust(characterUrl, `${thumbCacheToken}-thumb-char`)}
             alt=""
-            className="absolute bottom-0 object-contain"
+            className="absolute bottom-0 object-contain drop-shadow-[0_2px_6px_rgba(0,0,0,0.45)]"
             style={{
-              maxWidth: '40%',
-              maxHeight: '80%',
+              maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
+              maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
               [isCharacterOnRight ? 'right' : 'left']: '0%',
             }}
             loading="lazy"
@@ -260,25 +270,33 @@ const PageThumbnail = ({ page, index, isActive, onClick, assetUpdatedAt }) => {
         )}
         {page.text && (
           <div
-            className="absolute bg-white/80 text-[4px] leading-tight text-black p-1 overflow-hidden"
+            className="absolute bg-white/70 text-[3px] leading-[1.4] text-black overflow-hidden shadow-[0_2px_6px_rgba(0,0,0,0.25)]"
             style={{
-              bottom: '25%',
-              width: '35%',
-              [isCharacterOnRight ? 'left' : 'right']: '5%',
+              top: bubbleTopPercent,
+              width: bubbleWidthPercent,
+              padding: '2%',
+              [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
             }}
           >
-            {page.text.slice(0, 50)}
+            <div className="line-clamp-3">{page.text}</div>
           </div>
         )}
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent pt-2 pb-0.5 px-1">
-          <div className="text-[9px] font-semibold text-white text-center">
-            {thumbLabel}
-          </div>
+        <div className="absolute left-[3%] top-[4%] bg-black/35 px-1 py-0.5 text-[6px] font-semibold text-white/85">
+          {thumbLabel}
         </div>
       </div>
     </button>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison to prevent unnecessary re-renders - return true if props are equal
+  return (
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.page.order === nextProps.page.order &&
+    prevProps.page.updatedAt === nextProps.page.updatedAt &&
+    prevProps.assetUpdatedAt === nextProps.assetUpdatedAt &&
+    prevProps.index === nextProps.index
+  );
+});
 
 function Storybooks() {
   const [books, setBooks] = useState([]);
@@ -634,8 +652,8 @@ function Storybooks() {
     }
   }, [activeAsset, selectedBook?.pdfAssets]);
 
-  const totalPages = useMemo(() => pages.length, [pages]);
-  const totalStorybooks = selectedBook?.pdfAssets?.length || 0;
+  const totalPages = useMemo(() => pages.length, [pages.length]);
+  const totalStorybooks = useMemo(() => selectedBook?.pdfAssets?.length || 0, [selectedBook?.pdfAssets?.length]);
   const activeJob = useMemo(
     () =>
       storybookJobs.find((job) =>
@@ -643,6 +661,11 @@ function Storybooks() {
       ) || null,
     [storybookJobs]
   );
+
+  // Memoize page index setter to prevent re-renders
+  const handlePageIndexChange = useCallback((newIndex) => {
+    setActivePageIndex(newIndex);
+  }, []);
 
   const updatePage = (index, patch) => {
     setPages((prev) =>
@@ -1406,7 +1429,7 @@ function Storybooks() {
             {hasPages ? (
               <div className="flex w-full h-full">
                 {/* Left Sidebar - Page Thumbnails */}
-                <div className="hidden md:flex w-44 lg:w-52 flex-col border-r border-border/50 bg-background/50 overflow-y-auto">
+                <div className="hidden md:flex w-44 lg:w-52 flex-col border-r border-border/50 bg-background/50 overflow-y-auto will-change-scroll">
                   <div className="p-2 border-b border-border/50 bg-background/95 sticky top-0 z-10">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-foreground/60">Pages</p>
                   </div>
@@ -1417,7 +1440,7 @@ function Storybooks() {
                         page={page}
                         index={idx}
                         isActive={idx === safeIndex}
-                        onClick={() => setActivePageIndex(idx)}
+                        onClick={() => handlePageIndexChange(idx)}
                         assetUpdatedAt={activeAsset.updatedAt}
                       />
                     ))}
@@ -1425,12 +1448,15 @@ function Storybooks() {
                 </div>
 
                 {/* Center - Main Preview */}
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <div className="flex-1 flex items-center justify-center p-3 sm:p-4 bg-muted/10 overflow-auto">
+                <div className="flex-1 flex flex-col overflow-y-auto will-change-scroll bg-muted/10">
+                  <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
+                    {/* Main Preview Image */}
                     <div
-                      className="relative w-full max-w-4xl bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-2xl"
+                      className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-2xl"
                       style={{
                         aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
+                        transform: 'translateZ(0)',
+                        willChange: 'transform',
                       }}
                     >
                   <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
@@ -1440,6 +1466,8 @@ function Storybooks() {
                       src={backgroundSrc}
                       alt={`Background for page ${pageLabel}`}
                       className="absolute inset-0 h-full w-full object-cover"
+                      decoding="async"
+                      loading="eager"
                     />
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center text-sm text-foreground/50">
@@ -1457,6 +1485,8 @@ function Storybooks() {
                         maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
                         [isCharacterOnRight ? 'right' : 'left']: '0%',
                       }}
+                      decoding="async"
+                      loading="eager"
                     />
                   ) : null}
                   {hasCharacterAsset && !characterBackgroundRemoved ? (
@@ -1511,77 +1541,73 @@ function Storybooks() {
                     Page {pageLabel}
                   </div>
                 </div>
-                  </div>
 
-                  {/* Mobile Page Info */}
-                  <div className="md:hidden px-4 py-3 border-t border-border/50 bg-background/80">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-foreground/60">
-                        Page {safeIndex + 1} of {activeAssetPages.length}
-                      </span>
-                      <span className="text-foreground/50">
-                        {currentPage?.character?.backgroundRemoved
-                          ? 'Background removed'
-                          : currentPage?.character
-                          ? 'Original background'
-                          : 'No character'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Bottom Section - Metadata & Candidates */}
-                  <div className="border-t border-border/50 bg-background">
-                    <div className="p-3 sm:p-4 space-y-3 max-h-72 overflow-y-auto">
-                      {/* Mobile Action Buttons */}
-                      <div className="flex md:hidden gap-2 pb-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="flex-1 gap-1"
-                          onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
-                          disabled={isCurrentPageRegenerating}
-                        >
-                          {isCurrentPageRegenerating ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Regenerating…
-                            </>
-                          ) : (
-                            'Regenerate page'
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          className="flex-1 gap-1"
-                          onClick={handleRegeneratePdf}
-                          disabled={isRegeneratingPdf}
-                        >
-                          {isRegeneratingPdf ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Rebuilding…
-                            </>
-                          ) : (
-                            <>
-                              <BookOpen className="h-4 w-4" />
-                              Regenerate PDF
-                            </>
-                          )}
-                        </Button>
+                    {/* Mobile Page Info */}
+                    <div className="md:hidden px-4 py-3 border border-border/50 bg-background/80 rounded-lg">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-foreground/60">
+                          Page {safeIndex + 1} of {activeAssetPages.length}
+                        </span>
+                        <span className="text-foreground/50">
+                          {currentPage?.character?.backgroundRemoved
+                            ? 'Background removed'
+                            : currentPage?.character
+                            ? 'Original background'
+                            : 'No character'}
+                        </span>
                       </div>
+                    </div>
 
-                      {/* Art Director Notes */}
-                      {rankingSummary ? (
-                        <div className="rounded-lg border border-border/60 bg-background p-4 text-sm text-foreground/80">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-foreground/55 mb-2">
-                            Art Director Notes
-                          </p>
-                          <p className="leading-relaxed">{rankingSummary}</p>
-                        </div>
-                      ) : null}
+                    {/* Action Buttons */}
+                    <div className="flex md:hidden gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 gap-1"
+                        onClick={() => currentPage && handleRegeneratePage(currentPage.order)}
+                        disabled={isCurrentPageRegenerating}
+                      >
+                        {isCurrentPageRegenerating ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Regenerating…
+                          </>
+                        ) : (
+                          'Regenerate page'
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="sm"
+                        className="flex-1 gap-1"
+                        onClick={handleRegeneratePdf}
+                        disabled={isRegeneratingPdf}
+                      >
+                        {isRegeneratingPdf ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Rebuilding…
+                          </>
+                        ) : (
+                          <>
+                            <BookOpen className="h-4 w-4" />
+                            Regenerate PDF
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {/* Art Director Notes */}
+                    {rankingSummary ? (
+                      <div className="rounded-lg border border-border/60 bg-background p-4 text-sm text-foreground/80">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-foreground/55 mb-2">
+                          Art Director Notes
+                        </p>
+                        <p className="leading-relaxed">{rankingSummary}</p>
+                      </div>
+                    ) : null}
                 {shouldShowCandidateSection ? (
                   hasCandidateAssets ? (
                     <div className="space-y-3 border border-border/50 bg-background/50 p-3 sm:p-4">
@@ -1633,6 +1659,7 @@ function Storybooks() {
                                     alt={`Candidate ${optionNumber} for page ${pageLabel}`}
                                     className="h-full w-full object-cover"
                                     loading="lazy"
+                                    decoding="async"
                                   />
                                 ) : (
                                   <div className="flex h-full items-center justify-center text-xs text-foreground/50">
@@ -1684,7 +1711,6 @@ function Storybooks() {
                     </div>
                   )
                 ) : null}
-                    </div>
                   </div>
                 </div>
               </div>
