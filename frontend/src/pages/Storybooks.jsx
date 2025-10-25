@@ -436,7 +436,7 @@ const PageThumbnail = React.memo(
         }`}
       >
         <div
-          className="relative w-full bg-white border border-border/40"
+          className="relative w-full bg-transparent border border-border/40"
           style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
         >
           {previewModel ? (
@@ -1577,7 +1577,7 @@ function Storybooks() {
                   <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
                     {/* Main Preview Image */}
                     <div
-                      className="relative w-full bg-white shadow-xl preview-container border border-border/50"
+                      className="relative w-full bg-transparent shadow-xl preview-container border border-border/50"
                       style={{
                         aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
                       }}
