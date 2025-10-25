@@ -183,19 +183,217 @@ const wrapTextToLines = (text, maxWidth, fontSize) => {
   return lines;
 };
 
-const toPercent = (value, total) => {
-  if (!Number.isFinite(value) || !Number.isFinite(total) || total === 0) {
-    return '0%';
-  }
-  return `${(value / total) * 100}%`;
-};
-
 const withCacheBust = (url, token) => {
   if (!url) return '';
   if (!token) return url;
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}cb=${encodeURIComponent(token)}`;
 };
+
+const resolveAssetUrl = (asset) => {
+  if (!asset) return '';
+  const direct = typeof asset.url === 'string' ? asset.url.trim() : '';
+  if (direct) return direct;
+  const download = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : '';
+  if (download) return download;
+  const signed = typeof asset.signedUrl === 'string' ? asset.signedUrl.trim() : '';
+  if (signed) return signed;
+  return '';
+};
+
+const buildPagePreviewModel = ({
+  page,
+  index = 0,
+  assetIdentifier = 'storybook',
+  assetUpdatedAt,
+}) => {
+  if (!page) return null;
+
+  const safeIndex = Number.isInteger(index) ? index : 0;
+  const pageLabel = page.order || safeIndex + 1;
+  const isCharacterOnRight = safeIndex % 2 === 0;
+
+  const backgroundUrl = resolveAssetUrl(page.background);
+  const characterUrl = resolveAssetUrl(page.character);
+
+  const cacheToken = page.updatedAt || assetUpdatedAt || `${assetIdentifier}-${pageLabel}`;
+  const backgroundSrc = withCacheBust(backgroundUrl, `${cacheToken}-background-${pageLabel}`);
+  const characterSrc = withCacheBust(characterUrl, `${cacheToken}-character-${pageLabel}`);
+
+  const textBlockWidth = Math.min(
+    Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
+    PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
+  );
+  const textLines = wrapTextToLines(page.text || '', textBlockWidth, PDF_FONT_SIZE);
+  const quoteLines = wrapTextToLines(page.quote || '', PDF_PAGE_WIDTH * 0.3, PDF_FONT_SIZE);
+  const textHeight = textLines.length * PDF_LINE_HEIGHT;
+
+  return {
+    cacheToken,
+    pageLabel,
+    isCharacterOnRight,
+    backgroundSrc,
+    characterSrc,
+    textLines,
+    quoteLines,
+    textBlockWidth,
+    textHeight,
+  };
+};
+
+const StorybookPageSvg = React.memo(
+  ({ model, className = '' }) => {
+    if (!model) return null;
+
+    const {
+      backgroundSrc,
+      characterSrc,
+      isCharacterOnRight,
+      pageLabel,
+      textLines,
+      quoteLines,
+      textBlockWidth,
+      textHeight,
+    } = model;
+
+    const textBaseline = PDF_PAGE_HEIGHT * 0.7;
+    const textRectWidth = textBlockWidth + 40;
+    const textRectHeight = textHeight + 40;
+    const textRectX = isCharacterOnRight
+      ? Math.max(PDF_TEXT_MARGIN - 20, 0)
+      : PDF_PAGE_WIDTH - textBlockWidth - PDF_TEXT_MARGIN - 20;
+    const textX = isCharacterOnRight
+      ? PDF_TEXT_MARGIN
+      : PDF_PAGE_WIDTH - textBlockWidth - PDF_TEXT_MARGIN;
+    const textRectBottom = textBaseline - textHeight - 20;
+    const textRectSvgY = PDF_PAGE_HEIGHT - (textRectBottom + textRectHeight);
+
+    const quoteX = isCharacterOnRight ? PDF_PAGE_WIDTH - 260 : PDF_TEXT_MARGIN;
+    const quoteBaselineStart = PDF_PAGE_HEIGHT - 80;
+
+    const labelY = Math.max(PDF_PAGE_HEIGHT - 35, PDF_TEXT_MARGIN);
+    const labelSvgY = PDF_PAGE_HEIGHT - labelY;
+
+    const characterWidth = PDF_PAGE_WIDTH * PDF_CHARACTER_MAX_WIDTH_RATIO;
+    const characterHeight = PDF_PAGE_HEIGHT * PDF_CHARACTER_MAX_HEIGHT_RATIO;
+    const characterX = isCharacterOnRight ? PDF_PAGE_WIDTH - characterWidth : 0;
+    const characterY = PDF_PAGE_HEIGHT - characterHeight;
+    const characterPreserveAspectRatio = isCharacterOnRight ? 'xMaxYMax meet' : 'xMinYMax meet';
+
+    const svgClasses = ['h-full', 'w-full', className].filter(Boolean).join(' ');
+
+    return (
+      <svg
+        viewBox={`0 0 ${PDF_PAGE_WIDTH} ${PDF_PAGE_HEIGHT}`}
+        className={svgClasses}
+        role="img"
+        aria-label={`Storybook page ${pageLabel}`}
+        xmlns="http://www.w3.org/2000/svg"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {backgroundSrc ? (
+          <image
+            href={backgroundSrc}
+            x="0"
+            y="0"
+            width={PDF_PAGE_WIDTH}
+            height={PDF_PAGE_HEIGHT}
+            preserveAspectRatio="none"
+          />
+        ) : (
+          <rect x="0" y="0" width={PDF_PAGE_WIDTH} height={PDF_PAGE_HEIGHT} fill="#ffffff" />
+        )}
+
+        {characterSrc ? (
+          <image
+            href={characterSrc}
+            x={characterX}
+            y={characterY}
+            width={characterWidth}
+            height={characterHeight}
+            preserveAspectRatio={characterPreserveAspectRatio}
+          />
+        ) : null}
+
+        {textLines.length ? (
+          <>
+            <rect
+              x={textRectX}
+              y={textRectSvgY}
+              width={textRectWidth}
+              height={textRectHeight}
+              fill="#ffffff"
+              fillOpacity="0.5"
+            />
+            {textLines.map((line, index) => {
+              const baseline = textBaseline - index * PDF_LINE_HEIGHT - 18;
+              const svgY = PDF_PAGE_HEIGHT - baseline;
+              return (
+                <text
+                  key={`text-line-${pageLabel}-${index}`}
+                  x={textX}
+                  y={svgY}
+                  fontSize={PDF_FONT_SIZE}
+                  fontFamily="Helvetica, Arial, sans-serif"
+                  fill="#000000"
+                  dominantBaseline="alphabetic"
+                >
+                  {line}
+                </text>
+              );
+            })}
+          </>
+        ) : null}
+
+        {quoteLines.length
+          ? quoteLines.map((line, index) => {
+              const baseline = quoteBaselineStart - index * PDF_LINE_HEIGHT;
+              const svgY = PDF_PAGE_HEIGHT - baseline;
+              return (
+                <text
+                  key={`quote-line-${pageLabel}-${index}`}
+                  x={quoteX}
+                  y={svgY}
+                  fontSize={PDF_FONT_SIZE}
+                  fontFamily="Helvetica, Arial, sans-serif"
+                  fontWeight="700"
+                  fill="#000000"
+                  dominantBaseline="alphabetic"
+                >
+                  {line}
+                </text>
+              );
+            })
+          : null}
+
+        <text
+          x={PDF_TEXT_MARGIN}
+          y={labelSvgY}
+          fontSize={14}
+          fontFamily="Helvetica, Arial, sans-serif"
+          fontWeight="700"
+          fill="#ffffff"
+          fillOpacity="0.65"
+          dominantBaseline="alphabetic"
+        >
+          {`Page ${pageLabel}`}
+        </text>
+      </svg>
+    );
+  },
+  (prev, next) => {
+    if (!prev.model && !next.model) return true;
+    if (!prev.model || !next.model) return false;
+    return (
+      prev.model.cacheToken === next.model.cacheToken &&
+      prev.model.pageLabel === next.model.pageLabel &&
+      prev.model.backgroundSrc === next.model.backgroundSrc &&
+      prev.model.characterSrc === next.model.characterSrc &&
+      prev.model.textLines.join('\n') === next.model.textLines.join('\n') &&
+      prev.model.quoteLines.join('\n') === next.model.quoteLines.join('\n')
+    );
+  }
+);
 
 const normaliseAssetPages = (pages) => {
   if (!Array.isArray(pages)) return [];
@@ -217,105 +415,52 @@ const normaliseAssetPages = (pages) => {
 };
 
 // Page Thumbnail Component - matches main preview exactly
-const PageThumbnail = React.memo(({ page, index, isActive, onClick, assetUpdatedAt }) => {
-  const thumbLabel = page.order || index + 1;
-  const isCharacterOnRight = index % 2 === 0;
-  const backgroundUrl = page?.background?.url || page?.background?.downloadUrl || page?.background?.signedUrl || '';
-  const characterUrl = page?.character?.url || page?.character?.downloadUrl || page?.character?.signedUrl || '';
-  const thumbCacheToken = page.updatedAt || assetUpdatedAt || `thumb-${thumbLabel}`;
+const PageThumbnail = React.memo(
+  ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier }) => {
+    const previewModel = useMemo(
+      () =>
+        buildPagePreviewModel({
+          page,
+          index,
+          assetUpdatedAt,
+          assetIdentifier: assetIdentifier || 'storybook',
+        }),
+      [assetIdentifier, assetUpdatedAt, index, page]
+    );
 
-  // Use same positioning logic as main preview
-  const textBlockWidth = Math.min(
-    Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
-    PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
-  );
-  const textY = PDF_PAGE_HEIGHT * 0.7;
-  const bubbleTopPercent = toPercent(PDF_PAGE_HEIGHT - (textY + 20), PDF_PAGE_HEIGHT);
-  const bubbleSidePercent = toPercent(Math.max(PDF_TEXT_MARGIN - 20, 0), PDF_PAGE_WIDTH);
-  const bubbleWidthPercent = toPercent(textBlockWidth + 40, PDF_PAGE_WIDTH);
-
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full overflow-hidden transition-colors ${
-        isActive
-          ? 'ring-2 ring-accent shadow-md'
-          : 'ring-1 ring-border/40 hover:ring-accent/60'
-      }`}
-    >
-      <div
-        className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70"
-        style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
+    return (
+      <button
+        onClick={onClick}
+        className={`w-full overflow-hidden transition-colors ${
+          isActive ? 'ring-2 ring-accent shadow-md' : 'ring-1 ring-border/40 hover:ring-accent/60'
+        }`}
       >
-        {backgroundUrl && (
-          <img
-            src={withCacheBust(backgroundUrl, `${thumbCacheToken}-thumb-bg`)}
-            alt=""
-            className="absolute inset-0 w-full h-full object-cover"
-            loading="lazy"
-          />
-        )}
-        {characterUrl && (
-          <img
-            src={withCacheBust(characterUrl, `${thumbCacheToken}-thumb-char`)}
-            alt=""
-            className="absolute bottom-0 object-contain"
-            style={{
-              maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
-              maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
-              [isCharacterOnRight ? 'right' : 'left']: '0%',
-              filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
-            }}
-            loading="lazy"
-          />
-        )}
-        {page.text && (
-          <div
-            className="absolute overflow-hidden"
-            style={{
-              top: bubbleTopPercent,
-              width: bubbleWidthPercent,
-              padding: '2%',
-              [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
-              backgroundColor: 'rgb(255, 255, 255)',
-              opacity: 0.5,
-              borderRadius: '3px',
-              fontSize: '3px',
-              lineHeight: '1.4',
-              color: 'rgb(0, 0, 0)',
-              fontFamily: 'Helvetica, Arial, sans-serif',
-            }}
-          >
-            <div className="line-clamp-3">{page.text}</div>
-          </div>
-        )}
         <div
-          className="absolute"
-          style={{
-            left: '4.75%',
-            top: '8.3%',
-            fontSize: '4px',
-            fontFamily: 'Helvetica, Arial, sans-serif',
-            fontWeight: 'bold',
-            color: 'rgb(255, 255, 255)',
-            opacity: 0.65,
-          }}
+          className="relative w-full bg-white border border-border/40"
+          style={{ aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}` }}
         >
-          Page {thumbLabel}
+          {previewModel ? (
+            <StorybookPageSvg model={previewModel} className="absolute inset-0" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-white text-[10px] font-semibold text-foreground/60">
+              No preview
+            </div>
+          )}
         </div>
-      </div>
-    </button>
-  );
-}, (prevProps, nextProps) => {
-  // Custom comparison to prevent unnecessary re-renders - return true if props are equal
-  return (
-    prevProps.isActive === nextProps.isActive &&
-    prevProps.page.order === nextProps.page.order &&
-    prevProps.page.updatedAt === nextProps.page.updatedAt &&
-    prevProps.assetUpdatedAt === nextProps.assetUpdatedAt &&
-    prevProps.index === nextProps.index
-  );
-});
+      </button>
+    );
+  },
+  (prevProps, nextProps) => {
+    return (
+      prevProps.isActive === nextProps.isActive &&
+      prevProps.page.order === nextProps.page.order &&
+      prevProps.page.updatedAt === nextProps.page.updatedAt &&
+      prevProps.assetUpdatedAt === nextProps.assetUpdatedAt &&
+      prevProps.assetIdentifier === nextProps.assetIdentifier &&
+      prevProps.index === nextProps.index
+    );
+  }
+);
 
 function Storybooks() {
   const [books, setBooks] = useState([]);
@@ -857,17 +1002,6 @@ function Storybooks() {
   }
 };
 
-  const resolveAssetUrl = (asset) => {
-    if (!asset) return '';
-    const direct = typeof asset.url === 'string' ? asset.url.trim() : '';
-    if (direct) return direct;
-    const download = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : '';
-    if (download) return download;
-    const signed = typeof asset.signedUrl === 'string' ? asset.signedUrl.trim() : '';
-    if (signed) return signed;
-    return '';
-  };
-
   const handleOpenAssetViewer = async (asset) => {
     if (!asset) return;
     const assetSnapshot = JSON.parse(JSON.stringify(asset));
@@ -1300,50 +1434,21 @@ function Storybooks() {
         : Math.max(0, activePageIndex)
       : 0;
     const currentPage = hasPages ? activeAssetPages[safeIndex] || null : null;
-    const isCharacterOnRight = safeIndex % 2 === 0;
     const assetIdentifier = activeAsset?._id || activeAsset?.key || 'storybook';
-    const backgroundUrl = resolveAssetUrl(currentPage?.background);
-    const characterUrl = resolveAssetUrl(currentPage?.character);
+    const previewModel = currentPage
+      ? buildPagePreviewModel({
+          page: currentPage,
+          index: safeIndex,
+          assetIdentifier,
+          assetUpdatedAt: activeAsset?.updatedAt,
+        })
+      : null;
     const canNavigatePrev = hasPages && safeIndex > 0;
     const canNavigateNext = hasPages && safeIndex < activeAssetPages.length - 1;
     const isCurrentPageRegenerating =
       currentPage?.order !== undefined && regeneratingOrder === currentPage.order;
-    const pageLabel = currentPage?.order || safeIndex + 1;
-
-    const textBlockWidth = Math.min(
-      Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
-      PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
-    );
-    const textLines = wrapTextToLines(currentPage?.text || '', textBlockWidth, PDF_FONT_SIZE);
-    const textY = PDF_PAGE_HEIGHT * 0.7;
-    const bubbleTopPercent = toPercent(PDF_PAGE_HEIGHT - (textY + 20), PDF_PAGE_HEIGHT);
-    const bubbleSidePercent = toPercent(Math.max(PDF_TEXT_MARGIN - 20, 0), PDF_PAGE_WIDTH);
-    const bubbleWidthPercent = toPercent(textBlockWidth + 40, PDF_PAGE_WIDTH);
-
-    const quoteLines = wrapTextToLines(
-      currentPage?.quote || '',
-      PDF_PAGE_WIDTH * 0.3,
-      PDF_FONT_SIZE
-    );
-    const quoteWidthPercent = toPercent(PDF_PAGE_WIDTH * 0.3, PDF_PAGE_WIDTH);
-    const quoteTopPercent = toPercent(Math.max(80 - PDF_FONT_SIZE, 0), PDF_PAGE_HEIGHT);
-    const quoteRightPercent = toPercent(260, PDF_PAGE_WIDTH);
-    const quoteLeftPercent = toPercent(PDF_TEXT_MARGIN, PDF_PAGE_WIDTH);
-    const cacheToken =
-      currentPage?.updatedAt ||
-      activeAsset?.updatedAt ||
-      `${assetIdentifier}-${pageLabel}`;
-    const backgroundSrc = withCacheBust(
-      backgroundUrl,
-      `${cacheToken}-background-${pageLabel}`
-    );
-    const characterSrc = withCacheBust(
-      characterUrl,
-      `${cacheToken}-character-${pageLabel}`
-    );
-    const hasCharacterImage = Boolean(characterSrc);
-    const hasCharacterAsset = Boolean(currentPage?.character);
-    const characterBackgroundRemoved = Boolean(currentPage?.character?.backgroundRemoved);
+    const pageLabel = previewModel?.pageLabel || currentPage?.order || safeIndex + 1;
+    const cacheToken = previewModel?.cacheToken || assetIdentifier;
     const hasCandidateAssets =
       Array.isArray(currentPage?.candidateAssets) && currentPage.candidateAssets.length > 0;
     const hasRankingNotes = Array.isArray(currentPage?.rankingNotes) && currentPage.rankingNotes.length > 0;
@@ -1461,6 +1566,7 @@ function Storybooks() {
                         isActive={idx === safeIndex}
                         onClick={() => handlePageIndexChange(idx)}
                         assetUpdatedAt={activeAsset.updatedAt}
+                        assetIdentifier={assetIdentifier}
                       />
                     ))}
                   </div>
@@ -1471,115 +1577,30 @@ function Storybooks() {
                   <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
                     {/* Main Preview Image */}
                     <div
-                      className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-xl preview-container"
+                      className="relative w-full bg-white shadow-xl preview-container border border-border/50"
                       style={{
                         aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
                       }}
                     >
-                  {backgroundSrc ? (
-                    <img
-                      key={`${currentPage?.background?.key || pageLabel}-background`}
-                      src={backgroundSrc}
-                      alt={`Background for page ${pageLabel}`}
-                      className="absolute inset-0 h-full w-full object-cover"
-                      decoding="async"
-                      loading="eager"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-sm text-foreground/50">
-                      No background stored for this page.
+                      {previewModel ? (
+                        <>
+                          <StorybookPageSvg
+                            key={`${previewModel.cacheToken}-preview`}
+                            model={previewModel}
+                            className="absolute inset-0"
+                          />
+                          {!previewModel.backgroundSrc ? (
+                            <div className="absolute inset-0 flex items-center justify-center text-sm font-medium text-foreground/60">
+                              No background stored for this page.
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-sm text-foreground/50">
+                          No preview available.
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {hasCharacterImage ? (
-                    <img
-                      key={`${currentPage?.character?.key || pageLabel}-character`}
-                      src={characterSrc}
-                      alt={`Character for page ${pageLabel}`}
-                      className="absolute bottom-0 object-contain"
-                      style={{
-                        maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
-                        maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
-                        [isCharacterOnRight ? 'right' : 'left']: '0%',
-                        filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.3))',
-                      }}
-                      decoding="async"
-                      loading="eager"
-                    />
-                  ) : null}
-                  {textLines.length ? (
-                    <div
-                      className="absolute"
-                      style={{
-                        top: bubbleTopPercent,
-                        width: bubbleWidthPercent,
-                        [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
-                        backgroundColor: 'rgb(255, 255, 255)',
-                        opacity: 0.5,
-                        borderRadius: '24px',
-                        padding: '20px',
-                        fontFamily: 'Helvetica, Arial, sans-serif',
-                        fontSize: '16px',
-                        lineHeight: '22.4px',
-                        color: 'rgb(0, 0, 0)',
-                      }}
-                    >
-                      {textLines.map((line, lineIndex) => (
-                        <p
-                          key={`page-${pageLabel}-line-${lineIndex}`}
-                          style={{
-                            margin: 0,
-                            padding: 0,
-                          }}
-                        >
-                          {line}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-                  {quoteLines.length ? (
-                    <div
-                      className="absolute"
-                      style={{
-                        top: quoteTopPercent,
-                        width: quoteWidthPercent,
-                        fontSize: '16px',
-                        lineHeight: '22.4px',
-                        fontFamily: 'Helvetica, Arial, sans-serif',
-                        fontWeight: 'bold',
-                        color: 'rgb(0, 0, 0)',
-                        ...(isCharacterOnRight
-                          ? { right: quoteRightPercent }
-                          : { left: quoteLeftPercent }),
-                      }}
-                    >
-                      {quoteLines.map((line, lineIndex) => (
-                        <p
-                          key={`quote-${pageLabel}-${lineIndex}`}
-                          style={{
-                            margin: 0,
-                            padding: 0,
-                          }}
-                        >
-                          {line}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div
-                    className="absolute"
-                    style={{
-                      left: `${(PDF_TEXT_MARGIN / PDF_PAGE_WIDTH) * 100}%`,
-                      top: '8.3%',
-                      fontSize: '14px',
-                      fontFamily: 'Helvetica, Arial, sans-serif',
-                      fontWeight: 'bold',
-                      color: 'rgb(255, 255, 255)',
-                      opacity: 0.65,
-                    }}
-                  >
-                    Page {pageLabel}
-                  </div>
-                </div>
 
                     {/* Mobile Page Info */}
                     <div className="md:hidden px-4 py-3 border border-border/50 bg-background/80 rounded-lg">
