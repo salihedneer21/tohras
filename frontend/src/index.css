@@ -30,7 +30,10 @@ body {
 /* Performance optimizations for preview modal */
 .will-change-scroll {
   -webkit-overflow-scrolling: touch;
-  scroll-behavior: smooth;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  transform: translateZ(0);
+  will-change: scroll-position;
 }
 
 /* GPU acceleration for smoother rendering */
@@ -38,6 +41,8 @@ body {
   transform: translateZ(0);
   backface-visibility: hidden;
   perspective: 1000px;
+  contain: layout style paint;
+  content-visibility: auto;
 }
 
 /* Optimize image rendering - smooth high-quality rendering */
@@ -45,4 +50,26 @@ img {
   image-rendering: auto;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+/* Optimize scrollable sections */
+.scroll-container {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  contain: layout style paint;
+  will-change: scroll-position;
+  scroll-behavior: auto;
+}
+
+/* Reduce repaints on candidate cards */
+.candidate-card {
+  contain: layout style paint;
+  content-visibility: auto;
+}
+
+/* Optimize backdrop blur performance */
+.backdrop-blur-sm {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }

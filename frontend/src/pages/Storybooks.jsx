@@ -259,30 +259,49 @@ const PageThumbnail = React.memo(({ page, index, isActive, onClick, assetUpdated
           <img
             src={withCacheBust(characterUrl, `${thumbCacheToken}-thumb-char`)}
             alt=""
-            className="absolute bottom-0 object-contain drop-shadow-[0_2px_6px_rgba(0,0,0,0.45)]"
+            className="absolute bottom-0 object-contain"
             style={{
               maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
               maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
               [isCharacterOnRight ? 'right' : 'left']: '0%',
+              filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
             }}
             loading="lazy"
           />
         )}
         {page.text && (
           <div
-            className="absolute bg-white/70 text-[3px] leading-[1.4] text-black overflow-hidden shadow-[0_2px_6px_rgba(0,0,0,0.25)]"
+            className="absolute overflow-hidden"
             style={{
               top: bubbleTopPercent,
               width: bubbleWidthPercent,
               padding: '2%',
               [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
+              backgroundColor: 'rgb(255, 255, 255)',
+              opacity: 0.5,
+              borderRadius: '3px',
+              fontSize: '3px',
+              lineHeight: '1.4',
+              color: 'rgb(0, 0, 0)',
+              fontFamily: 'Helvetica, Arial, sans-serif',
             }}
           >
             <div className="line-clamp-3">{page.text}</div>
           </div>
         )}
-        <div className="absolute left-[3%] top-[4%] bg-black/35 px-1 py-0.5 text-[6px] font-semibold text-white/85">
-          {thumbLabel}
+        <div
+          className="absolute"
+          style={{
+            left: '4.75%',
+            top: '8.3%',
+            fontSize: '4px',
+            fontFamily: 'Helvetica, Arial, sans-serif',
+            fontWeight: 'bold',
+            color: 'rgb(255, 255, 255)',
+            opacity: 0.65,
+          }}
+        >
+          Page {thumbLabel}
         </div>
       </div>
     </button>
@@ -1429,11 +1448,11 @@ function Storybooks() {
             {hasPages ? (
               <div className="flex w-full h-full">
                 {/* Left Sidebar - Page Thumbnails */}
-                <div className="hidden md:flex w-44 lg:w-52 flex-col border-r border-border/50 bg-background/50 overflow-y-auto will-change-scroll">
+                <div className="hidden md:flex w-44 lg:w-52 flex-col border-r border-border/50 bg-background/50 overflow-y-auto scroll-container">
                   <div className="p-2 border-b border-border/50 bg-background/95 sticky top-0 z-10">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-foreground/60">Pages</p>
                   </div>
-                  <div className="p-2 space-y-2">
+                  <div className="p-2 space-y-2" style={{ contain: 'layout style' }}>
                     {activeAssetPages.map((page, idx) => (
                       <PageThumbnail
                         key={`thumb-${page.order || idx}`}
@@ -1448,18 +1467,15 @@ function Storybooks() {
                 </div>
 
                 {/* Center - Main Preview */}
-                <div className="flex-1 flex flex-col overflow-y-auto will-change-scroll bg-muted/10">
+                <div className="flex-1 flex flex-col overflow-y-auto scroll-container bg-muted/10">
                   <div className="w-full max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
                     {/* Main Preview Image */}
                     <div
-                      className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-2xl"
+                      className="relative w-full bg-gradient-to-br from-slate-950/95 via-slate-900/80 to-slate-800/70 shadow-xl preview-container"
                       style={{
                         aspectRatio: `${PDF_PAGE_WIDTH}/${PDF_PAGE_HEIGHT}`,
-                        transform: 'translateZ(0)',
-                        willChange: 'transform',
                       }}
                     >
-                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
                   {backgroundSrc ? (
                     <img
                       key={`${currentPage?.background?.key || pageLabel}-background`}
@@ -1479,40 +1495,41 @@ function Storybooks() {
                       key={`${currentPage?.character?.key || pageLabel}-character`}
                       src={characterSrc}
                       alt={`Character for page ${pageLabel}`}
-                      className="absolute bottom-0 object-contain drop-shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+                      className="absolute bottom-0 object-contain"
                       style={{
                         maxWidth: `${PDF_CHARACTER_MAX_WIDTH_RATIO * 100}%`,
                         maxHeight: `${PDF_CHARACTER_MAX_HEIGHT_RATIO * 100}%`,
                         [isCharacterOnRight ? 'right' : 'left']: '0%',
+                        filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.3))',
                       }}
                       decoding="async"
                       loading="eager"
                     />
                   ) : null}
-                  {hasCharacterAsset && !characterBackgroundRemoved ? (
-                    <div
-                      className="absolute bottom-[8%] max-w-xs bg-black/60 px-4 py-2 text-center text-xs font-medium uppercase tracking-[0.18em] text-white/80"
-                      style={{
-                        [isCharacterOnRight ? 'right' : 'left']: '8%',
-                      }}
-                    >
-                      Character still has original background
-                    </div>
-                  ) : null}
                   {textLines.length ? (
                     <div
-                      className="absolute bg-white/70 p-5 text-black shadow-[0_20px_45px_rgba(0,0,0,0.25)] backdrop-blur-sm"
+                      className="absolute"
                       style={{
                         top: bubbleTopPercent,
                         width: bubbleWidthPercent,
                         [isCharacterOnRight ? 'left' : 'right']: bubbleSidePercent,
-                        fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+                        backgroundColor: 'rgb(255, 255, 255)',
+                        opacity: 0.5,
+                        borderRadius: '24px',
+                        padding: '20px',
+                        fontFamily: 'Helvetica, Arial, sans-serif',
+                        fontSize: '16px',
+                        lineHeight: '22.4px',
+                        color: 'rgb(0, 0, 0)',
                       }}
                     >
                       {textLines.map((line, lineIndex) => (
                         <p
                           key={`page-${pageLabel}-line-${lineIndex}`}
-                          className="text-[16px] leading-[22.4px] text-slate-900"
+                          style={{
+                            margin: 0,
+                            padding: 0,
+                          }}
                         >
                           {line}
                         </p>
@@ -1521,23 +1538,45 @@ function Storybooks() {
                   ) : null}
                   {quoteLines.length ? (
                     <div
-                      className="absolute bg-white/60 px-5 py-4 text-[16px] font-semibold italic text-slate-900 shadow-[0_18px_35px_rgba(0,0,0,0.2)] backdrop-blur-sm"
+                      className="absolute"
                       style={{
                         top: quoteTopPercent,
                         width: quoteWidthPercent,
-                        lineHeight: `${PDF_LINE_HEIGHT}px`,
-                        fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+                        fontSize: '16px',
+                        lineHeight: '22.4px',
+                        fontFamily: 'Helvetica, Arial, sans-serif',
+                        fontWeight: 'bold',
+                        color: 'rgb(0, 0, 0)',
                         ...(isCharacterOnRight
                           ? { right: quoteRightPercent }
                           : { left: quoteLeftPercent }),
                       }}
                     >
                       {quoteLines.map((line, lineIndex) => (
-                        <p key={`quote-${pageLabel}-${lineIndex}`}>{line}</p>
+                        <p
+                          key={`quote-${pageLabel}-${lineIndex}`}
+                          style={{
+                            margin: 0,
+                            padding: 0,
+                          }}
+                        >
+                          {line}
+                        </p>
                       ))}
                     </div>
                   ) : null}
-                  <div className="absolute left-[3%] top-[4%] rounded-full bg-black/35 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/85 shadow-[0_10px_25px_rgba(0,0,0,0.35)]">
+                  <div
+                    className="absolute"
+                    style={{
+                      left: `${(PDF_TEXT_MARGIN / PDF_PAGE_WIDTH) * 100}%`,
+                      top: '8.3%',
+                      fontSize: '14px',
+                      fontFamily: 'Helvetica, Arial, sans-serif',
+                      fontWeight: 'bold',
+                      color: 'rgb(255, 255, 255)',
+                      opacity: 0.65,
+                    }}
+                  >
                     Page {pageLabel}
                   </div>
                 </div>
@@ -1648,7 +1687,7 @@ function Storybooks() {
                           return (
                             <div
                               key={candidate.key || candidate.url || candidateKey}
-                              className={`flex flex-col gap-2 border ${
+                              className={`candidate-card flex flex-col gap-2 border ${
                                 isSelected ? 'border-accent bg-accent/10' : 'border-border/40 bg-background'
                               } p-2 transition-colors hover:border-accent/70`}
                             >
