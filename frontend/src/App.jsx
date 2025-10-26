@@ -8,6 +8,8 @@ import Training from './pages/Training';
 import Generate from './pages/Generate';
 import Evaluate from './pages/Evaluate';
 import Storybooks from './pages/Storybooks';
+import Automate from './pages/Automate';
+import Dashboard from './pages/Dashboard';
 
 function App() {
   return (
@@ -40,10 +42,11 @@ function App() {
       />
       <div className="min-h-screen bg-background">
         <Navbar />
-        <main className="pt-24 sm:pt-28">
+        <main className="pt-32 sm:pt-36">
           <div className="page-wrapper">
             <Routes>
-              <Route path="/" element={<Books />} />
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/books" element={<Books />} />
               <Route path="/prompts" element={<Prompts />} />
               <Route path="/users" element={<Users />} />
@@ -51,6 +54,7 @@ function App() {
               <Route path="/generate" element={<Generate />} />
               <Route path="/evaluate" element={<Evaluate />} />
               <Route path="/storybooks" element={<Storybooks />} />
+              <Route path="/automate" element={<Automate />} />
             </Routes>
           </div>
         </main>

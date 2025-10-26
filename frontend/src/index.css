@@ -7,8 +7,10 @@
 }
 
 body {
-  @apply bg-background text-foreground min-h-screen antialiased overflow-x-hidden;
-  background-image: linear-gradient(160deg, #1c1e24 0%, #191b21 50%, #181920 100%);
+  @apply min-h-screen overflow-x-hidden bg-background text-foreground antialiased;
+  background-image: radial-gradient(circle at 0% 0%, rgba(58, 122, 254, 0.18), transparent 55%),
+    radial-gradient(circle at 100% 0%, rgba(140, 80, 255, 0.16), transparent 55%),
+    linear-gradient(170deg, #15171d 0%, #11131a 40%, #0e1016 100%);
 }
 
 .glass-panel {
@@ -16,7 +18,7 @@ body {
 }
 
 .page-wrapper {
-  @apply container py-8 sm:py-10 lg:py-12 space-y-8;
+  @apply container space-y-10 py-8 sm:space-y-12 sm:py-10 lg:py-12;
 }
 
 .section-card {
@@ -72,4 +74,61 @@ img {
 .backdrop-blur-sm {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
+}
+
+.nav-shell {
+  @apply mx-auto flex max-w-5xl items-center justify-between gap-4 rounded-2xl border border-white/10 bg-background/80 px-4 py-3 shadow-subtle backdrop-blur;
+}
+
+.nav-links {
+  @apply hidden items-center gap-2 rounded-full border border-transparent bg-transparent px-2 py-1 md:flex;
+}
+
+.nav-link {
+  @apply rounded-full px-3.5 py-2 text-sm font-medium text-foreground/70 transition hover:text-foreground;
+}
+
+.nav-link--active {
+  @apply bg-accent text-accent-foreground shadow-subtle;
+}
+
+.dashboard-hero {
+  @apply rounded-3xl border border-white/10 bg-white/10 p-6 sm:p-8;
+  background-image: radial-gradient(circle at top right, rgba(58, 122, 254, 0.25), transparent 45%);
+}
+
+.stat-grid {
+  @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
+}
+
+.stat-card {
+  @apply rounded-2xl border border-white/10 bg-background/70 p-5 shadow-subtle transition hover:border-white/20;
+}
+
+.stat-card__title {
+  @apply text-sm font-medium text-foreground/70;
+}
+
+.stat-card__value {
+  @apply mt-1 text-3xl font-semibold tracking-tight text-foreground;
+}
+
+.stat-card__meta {
+  @apply mt-2 text-xs font-medium text-foreground/55;
+}
+
+.panel {
+  @apply rounded-3xl border border-white/10 bg-background/70 p-6 shadow-subtle;
+}
+
+.panel-header {
+  @apply flex items-center justify-between gap-4;
+}
+
+.panel-title {
+  @apply text-lg font-semibold tracking-tight text-foreground;
+}
+
+.badge-ghost {
+  @apply inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-medium text-foreground/75;
 }

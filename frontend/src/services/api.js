@@ -132,4 +132,14 @@ export const promptAPI = {
     }),
 };
 
+// Automation API
+export const automationAPI = {
+  start: (formData) =>
+    api.post('/automation', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  getAll: (params) => api.get('/automation', { params }),
+  getById: (id) => api.get(`/automation/${id}`),
+};
+
 export default api;

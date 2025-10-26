@@ -13,6 +13,8 @@ const evalRoutes = require('./routes/evalRoutes');
 const bookRoutes = require('./routes/bookRoutes');
 const promptRoutes = require('./routes/promptRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const automationRoutes = require('./routes/automationRoutes');
+const { initialiseAutomationWatchers } = require('./services/automationWorkflow');
 
 // Initialize express app
 const app = express();
@@ -39,6 +41,7 @@ app.use('/api/trainings', trainingRoutes);
 app.use('/api/generations', generationRoutes);
 app.use('/api/evals', evalRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/automation', automationRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -62,6 +65,7 @@ app.get('/', (req, res) => {
       trainings: '/api/trainings',
       generations: '/api/generations',
       evals: '/api/evals',
+      automation: '/api/automation',
       health: '/health',
     },
   });
@@ -95,6 +99,9 @@ const startServer = async () => {
 
     // Connect to database
     await connectDatabase();
+
+    // Initialise automation watchers
+    initialiseAutomationWatchers();
 
     // Start listening
     app.listen(PORT, () => {
