@@ -65,7 +65,7 @@ function App() {
         <div className="min-h-screen bg-background">
           <Sidebar />
           <main className="min-h-screen lg:pl-72">
-            <div className="page-wrapper pt-16 lg:pt-6">
+            <div className="page-wrapper pt-[70px] lg:pt-6">
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/dashboard" element={<Dashboard />} />

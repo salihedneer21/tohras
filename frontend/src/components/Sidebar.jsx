@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -11,7 +11,8 @@ import {
   BarChart3,
   Menu,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  X
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -72,6 +73,29 @@ function Sidebar() {
   const { theme, toggleTheme } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
   const [expandedItems, setExpandedItems] = useState(['Users', 'Studio']);
+  const [showButton, setShowButton] = useState(true);
+
+  useEffect(() => {
+    let lastScroll = 0;
+
+    const handleScroll = () => {
+      const currentScroll = window.pageYOffset;
+
+      if (currentScroll <= 10) {
+        setShowButton(true);
+      } else if (currentScroll > lastScroll) {
+        setShowButton(false);
+      }
+
+      lastScroll = currentScroll;
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   const isActive = (path) => {
     if (path === '/dashboard') {
@@ -93,19 +117,25 @@ function Sidebar() {
 
   return (
     <>
-      {/* Mobile Menu Button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="fixed top-4 left-4 z-50 flex h-12 w-12 items-center justify-center rounded-lg bg-card border border-border shadow-md lg:hidden touch-manipulation active:scale-95 transition-all"
-        aria-label={isOpen ? "Close menu" : "Open menu"}
-      >
-        <Menu className="h-6 w-6" />
-      </button>
+      {/* Mobile Menu Button - Shows at top only when closed */}
+      {!isOpen && (
+        <button
+          onClick={() => setIsOpen(true)}
+          className={cn(
+            "fixed top-3 left-3 z-[60] flex h-10 w-10 items-center justify-center rounded-lg bg-card border border-border shadow-lg lg:hidden touch-manipulation active:scale-95 transition-all duration-300",
+            showButton ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"
+          )}
+          aria-label="Open menu"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          <Menu className="h-[18px] w-[18px] text-foreground" />
+        </button>
+      )}
 
       {/* Backdrop for mobile */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-[50] bg-black/50 lg:hidden backdrop-blur-sm"
           onClick={() => setIsOpen(false)}
           aria-hidden="true"
         />
@@ -114,14 +144,14 @@ function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          "fixed top-0 left-0 z-40 h-screen w-72 border-r border-border bg-card transition-transform duration-200 lg:translate-x-0",
+          "fixed top-0 left-0 z-[50] h-screen w-72 border-r border-border bg-card transition-transform duration-300 ease-in-out lg:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
         aria-label="Main navigation"
       >
         <div className="flex h-full flex-col">
           {/* Logo */}
-          <div className="flex h-16 items-center border-b border-border px-6">
+          <div className="flex h-16 items-center justify-between border-b border-border px-6">
             <Link
               to="/dashboard"
               className="flex items-center gap-3"
@@ -137,10 +167,18 @@ function Sidebar() {
                 </span>
               </div>
             </Link>
+            {/* Close button - mobile only */}
+            <button
+              onClick={() => setIsOpen(false)}
+              className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-secondary transition-colors lg:hidden touch-manipulation"
+              aria-label="Close menu"
+            >
+              <X className="h-5 w-5 text-muted-foreground" />
+            </button>
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 overflow-y-auto px-4 py-6">
+          <nav className="flex-1 overflow-y-auto px-4 py-6 scrollbar-hide">
             <div className="space-y-6">
               {NAVIGATION.map((section) => (
                 <div key={section.section}>

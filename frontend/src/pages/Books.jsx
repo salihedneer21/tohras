@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
 import { formatFileSize } from '@/utils/file';
 
@@ -406,11 +407,41 @@ function Books() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-foreground/60">
-        <BookOpen className="h-9 w-9 animate-spin text-foreground/40" />
-        <p className="text-sm uppercase tracking-[0.2em] text-foreground/40">
-          Loading books
-        </p>
+      <div className="space-y-6">
+        {/* Header skeleton */}
+        <div className="flex items-end justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <Skeleton className="h-10 w-32" />
+        </div>
+
+        {/* Books grid skeleton */}
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-6 w-40" />
+                <Skeleton className="h-4 w-32" />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-10 w-full" />
+                </div>
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-20 w-full" />
+                </div>
+              </CardContent>
+              <CardFooter className="gap-2">
+                <Skeleton className="h-10 flex-1" />
+                <Skeleton className="h-10 w-10" />
+              </CardFooter>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }

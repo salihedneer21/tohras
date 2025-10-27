@@ -37,6 +37,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 const JOB_HISTORY_LIMIT = 10;
@@ -1799,11 +1801,36 @@ function Storybooks() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-foreground/60">
-        <BookOpen className="h-8 w-8 animate-spin text-foreground/40" />
-        <p className="text-sm uppercase tracking-[0.2em] text-foreground/40">
-          Loading books
-        </p>
+      <div className="space-y-8">
+        {/* Header skeleton */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-10 w-32" />
+          </div>
+        </div>
+
+        {/* Books grid skeleton */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-6 w-32" />
+                <Skeleton className="h-4 w-48" />
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4" />
+              </CardContent>
+              <CardFooter>
+                <Skeleton className="h-10 w-full" />
+              </CardFooter>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }
@@ -1847,22 +1874,19 @@ function Storybooks() {
           <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="book">Book</Label>
-              <Select
+              <SearchableSelect
                 value={selectedBookId}
                 onValueChange={setSelectedBookId}
+                options={books.map((book) => ({
+                  value: book._id,
+                  label: book.name,
+                  searchText: book.name,
+                }))}
+                placeholder="Select a book"
+                searchPlaceholder="Search books..."
+                emptyText="No books found."
                 disabled={!books.length}
-              >
-                <SelectTrigger id="book">
-                  <SelectValue placeholder="Select a book" />
-                </SelectTrigger>
-                <SelectContent>
-                  {books.map((book) => (
-                    <SelectItem key={book._id} value={book._id}>
-                      {book.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="title">Storybook title</Label>
@@ -1876,23 +1900,22 @@ function Storybooks() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="reader">Reader</Label>
-              <Select
+              <SearchableSelect
                 value={selectedUserId || '__none'}
                 onValueChange={(value) => setSelectedUserId(value === '__none' ? '' : value)}
+                options={[
+                  { value: '__none', label: 'No reader', searchText: 'none' },
+                  ...users.map((user) => ({
+                    value: user._id,
+                    label: user.name,
+                    searchText: user.name,
+                  }))
+                ]}
+                placeholder="Select a reader"
+                searchPlaceholder="Search users..."
+                emptyText="No users found."
                 disabled={!users.length}
-              >
-                <SelectTrigger id="reader">
-                  <SelectValue placeholder="Select a reader" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none">No reader</SelectItem>
-                  {users.map((user) => (
-                    <SelectItem key={user._id} value={user._id}>
-                      {user.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
               <p className="text-xs text-foreground/50">
                 Replaces any {'{name}'} placeholders in the story text.
               </p>
@@ -1913,25 +1936,24 @@ function Storybooks() {
               <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="training">Training model</Label>
-                  <Select
+                  <SearchableSelect
                     value={selectedTrainingId || '__none'}
                     onValueChange={(value) =>
                       setSelectedTrainingId(value === '__none' ? '' : value)
                     }
+                    options={[
+                      { value: '__none', label: 'Select training', searchText: 'none' },
+                      ...trainings.map((training) => ({
+                        value: training._id,
+                        label: training.modelName,
+                        searchText: training.modelName,
+                      }))
+                    ]}
+                    placeholder="Select a training"
+                    searchPlaceholder="Search trainings..."
+                    emptyText="No trainings found."
                     disabled={!selectedUserId || !trainings.length}
-                  >
-                    <SelectTrigger id="training">
-                      <SelectValue placeholder="Select a training" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">Select training</SelectItem>
-                      {trainings.map((training) => (
-                        <SelectItem key={training._id} value={training._id}>
-                          {training.modelName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                   {!selectedUserId && (
                     <p className="text-xs text-foreground/50">
                       Pick a reader to load their successful trainings.

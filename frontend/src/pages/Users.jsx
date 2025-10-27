@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
 import { formatFileSize } from '@/utils/file';
 import EvaluationImageCard from '@/components/evaluation/EvaluationImageCard';
@@ -634,11 +635,42 @@ function Users() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-foreground/60">
-        <UsersIcon className="h-8 w-8 animate-spin text-foreground/40" />
-        <p className="text-sm uppercase tracking-[0.2em] text-foreground/40">
-          Loading users
-        </p>
+      <div className="space-y-6">
+        {/* Header skeleton */}
+        <div className="flex items-end justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <Skeleton className="h-10 w-32" />
+        </div>
+
+        {/* Users grid skeleton */}
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="space-y-2">
+                    <Skeleton className="h-6 w-32" />
+                    <Skeleton className="h-4 w-24" />
+                  </div>
+                  <Skeleton className="h-9 w-9 rounded-full" />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-4 w-full" />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Skeleton className="aspect-square w-full" />
+                  <Skeleton className="aspect-square w-full" />
+                  <Skeleton className="aspect-square w-full" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }

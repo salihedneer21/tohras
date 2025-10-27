@@ -32,6 +32,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { Skeleton } from '@/components/ui/skeleton';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 
 const DEFAULT_CONFIG = Object.freeze({
   numOutputs: 1,
@@ -389,11 +391,44 @@ function Generate() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-foreground/60">
-        <Sparkles className="h-8 w-8 animate-spin text-foreground/40" />
-        <p className="text-sm uppercase tracking-[0.2em] text-foreground/40">
-          Loading generations
-        </p>
+      <div className="space-y-8">
+        {/* Header skeleton */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-10 w-32" />
+            <Skeleton className="h-10 w-40" />
+          </div>
+        </div>
+
+        {/* Feed skeleton */}
+        <div className="space-y-4">
+          <Skeleton className="h-6 w-40" />
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardHeader className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-6 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-6 w-20" />
+                </div>
+                <Skeleton className="h-16 w-full" />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Skeleton className="h-24 w-full" />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Skeleton className="h-48 w-full" />
+                  <Skeleton className="h-48 w-full" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }
@@ -450,42 +485,36 @@ function Generate() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>User *</Label>
-                  <Select
+                  <SearchableSelect
                     value={formData.userId}
                     onValueChange={handleUserChange}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select user" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {users.map((user) => (
-                        <SelectItem key={user._id} value={user._id}>
-                          {user.name} · {user.email}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={users.map((user) => ({
+                      value: user._id,
+                      label: `${user.name} · ${user.email}`,
+                      searchText: `${user.name} ${user.email}`,
+                    }))}
+                    placeholder="Select user"
+                    searchPlaceholder="Search users..."
+                    emptyText="No users found."
+                  />
                 </div>
                 <div className="grid gap-2">
                   <Label>Trained model *</Label>
-                  <Select
+                  <SearchableSelect
                     value={formData.trainingId}
                     onValueChange={(value) => setFormData((prev) => ({ ...prev, trainingId: value }))}
+                    options={trainings.map((training) => ({
+                      value: training._id,
+                      label: `${training.modelName} · ${new Date(training.completedAt).toLocaleDateString()}`,
+                      searchText: `${training.modelName} ${new Date(training.completedAt).toLocaleDateString()}`,
+                    }))}
+                    placeholder={formData.userId ? 'Select model' : 'Pick a user first'}
+                    searchPlaceholder="Search models..."
+                    emptyText="No models found."
                     disabled={!formData.userId || trainings.length === 0}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={formData.userId ? 'Select model' : 'Pick a user first'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {trainings.map((training) => (
-                        <SelectItem key={training._id} value={training._id}>
-                          {training.modelName} · {new Date(training.completedAt).toLocaleDateString()}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                   {formData.userId && trainings.length === 0 && (
-                    <p className="text-xs text-amber-300">
+                    <p className="text-xs text-foreground/60">
                       No successful trainings found for this user yet.
                     </p>
                   )}
@@ -567,9 +596,9 @@ function Generate() {
 
                 <div className="grid gap-6 sm:grid-cols-2">
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs text-foreground/50">
-                      <Label>Guidance scale</Label>
-                      <span>{formData.config.guidanceScale.toFixed(1)}</span>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm font-medium">Guidance scale</Label>
+                      <span className="text-sm font-medium text-foreground">{formData.config.guidanceScale.toFixed(1)}</span>
                     </div>
                     <Slider
                       value={[formData.config.guidanceScale]}
@@ -578,15 +607,15 @@ function Generate() {
                       step={0.5}
                       onValueChange={(value) => handleConfigUpdate('guidanceScale', value[0])}
                     />
-                    <p className="text-xs text-foreground/45">
+                    <p className="text-xs text-muted-foreground">
                       Higher values enforce the prompt more strictly.
                     </p>
                   </div>
 
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs text-foreground/50">
-                      <Label>Output quality</Label>
-                      <span>{formData.config.outputQuality}%</span>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm font-medium">Output quality</Label>
+                      <span className="text-sm font-medium text-foreground">{formData.config.outputQuality}%</span>
                     </div>
                     <Slider
                       value={[formData.config.outputQuality]}
@@ -595,7 +624,7 @@ function Generate() {
                       step={5}
                       onValueChange={(value) => handleConfigUpdate('outputQuality', value[0])}
                     />
-                    <p className="text-xs text-foreground/45">
+                    <p className="text-xs text-muted-foreground">
                       Balance fidelity against generation speed.
                     </p>
                   </div>
@@ -629,47 +658,36 @@ function Generate() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>User *</Label>
-                  <Select
+                  <SearchableSelect
                     value={rankForm.userId}
                     onValueChange={handleRankUserChange}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select user" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {users.map((user) => (
-                        <SelectItem key={user._id} value={user._id}>
-                          {user.name} · {user.email}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={users.map((user) => ({
+                      value: user._id,
+                      label: `${user.name} · ${user.email}`,
+                      searchText: `${user.name} ${user.email}`,
+                    }))}
+                    placeholder="Select user"
+                    searchPlaceholder="Search users..."
+                    emptyText="No users found."
+                  />
                 </div>
                 <div className="grid gap-2">
                   <Label>Trained model *</Label>
-                  <Select
+                  <SearchableSelect
                     value={rankForm.trainingId}
                     onValueChange={(value) => setRankForm((prev) => ({ ...prev, trainingId: value }))}
+                    options={rankTrainings.map((training) => ({
+                      value: training._id,
+                      label: `${training.modelName} · ${training.completedAt ? new Date(training.completedAt).toLocaleDateString() : 'recent'}`,
+                      searchText: `${training.modelName}`,
+                    }))}
+                    placeholder={rankForm.userId ? 'Select model' : 'Pick a user first'}
+                    searchPlaceholder="Search models..."
+                    emptyText="No models found."
                     disabled={!rankForm.userId || rankTrainings.length === 0}
-                  >
-                    <SelectTrigger>
-                      <SelectValue
-                        placeholder={rankForm.userId ? 'Select model' : 'Pick a user first'}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {rankTrainings.map((training) => (
-                        <SelectItem key={training._id} value={training._id}>
-                          {training.modelName} ·{' '}
-                          {training.completedAt
-                            ? new Date(training.completedAt).toLocaleDateString()
-                            : 'recent'}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                   {rankForm.userId && rankTrainings.length === 0 && (
-                    <p className="text-xs text-amber-300">
+                    <p className="text-xs text-foreground/60">
                       No successful trainings found for this user yet.
                     </p>
                   )}

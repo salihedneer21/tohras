@@ -181,66 +181,61 @@ function Prompts() {
   }, []);
 
   return (
-    <div className="page-wrapper">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="section-card">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              AI Content Generation
-            </p>
-            <h1 className="mt-2 text-2xl font-bold tracking-tight text-foreground">
-              Prompt Studio
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Upload character references and craft regeneration-ready prompts optimised for fine-tuning.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">
-              {uploads.length} {uploads.length === 1 ? 'Image' : 'Images'}
-            </Badge>
-            <Badge variant="outline">
-              {formatFileSize(totalSize)}
-            </Badge>
-            <Button variant="outline" onClick={clearAll} disabled={!uploads.length}>
-              Reset
-            </Button>
-          </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Prompt Studio
+          </h1>
+          <p className="mt-1 text-sm text-foreground/60">
+            Upload character references and craft regeneration-ready prompts optimised for fine-tuning.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="bg-foreground/5 text-foreground/70">
+            {uploads.length} {uploads.length === 1 ? 'Image' : 'Images'}
+          </Badge>
+          <Badge variant="outline" className="bg-foreground/5 text-foreground/70">
+            {formatFileSize(totalSize)}
+          </Badge>
+          <Button variant="outline" onClick={clearAll} disabled={!uploads.length}>
+            Reset
+          </Button>
         </div>
       </div>
 
       {/* Main Content Grid */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
         {/* Left Column - Upload & Images */}
         <div className="space-y-6">
-          {/* Upload Controls Card */}
+          {/* Configuration Card */}
           <Card>
             <CardHeader>
-              <CardTitle>Configuration</CardTitle>
+              <CardTitle className="text-base">Configuration</CardTitle>
               <CardDescription>
-                Add optional context to guide the AI in generating consistent prompts across all images.
+                Add optional context to guide prompt generation for consistency.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label className="text-sm font-medium text-foreground">Additional Context (Optional)</Label>
+                <Label className="text-sm font-medium">Additional Context (Optional)</Label>
                 <Textarea
-                  rows={4}
+                  rows={3}
                   placeholder="e.g., 'soft studio lighting, professional headshot, neutral background'"
                   value={additionalContext}
                   onChange={(event) => setAdditionalContext(event.target.value)}
                   className="resize-none"
                 />
                 <p className="text-xs text-muted-foreground">
-                  This context will be applied to all prompts for consistency.
+                  Applied to all prompts for consistency.
                 </p>
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="flex flex-col gap-2.5 sm:flex-row">
                 <Button
                   variant="outline"
-                  className="gap-2 flex-1 sm:flex-none"
+                  className="gap-2"
                   onClick={() => document.getElementById('prompt-studio-input')?.click()}
                 >
                   <UploadCloud className="h-4 w-4" />
@@ -255,14 +250,14 @@ function Prompts() {
                   onChange={handleFileInput}
                 />
                 <Button
-                  className="gap-2 flex-1 bg-foreground hover:bg-foreground/90 text-background"
+                  className="gap-2 bg-foreground hover:bg-foreground/90 text-background"
                   onClick={generatePrompts}
                   disabled={!uploads.length || isGenerating}
                 >
                   {isGenerating ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Generating Prompts...
+                      Generating...
                     </>
                   ) : (
                     <>
@@ -310,12 +305,12 @@ function Prompts() {
 
                     {/* Image Info & Controls */}
                     <div className="p-4 space-y-3">
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">{item.file.name}</p>
+                          <p className="text-sm font-medium truncate">{item.file.name}</p>
                           <p className="text-xs text-muted-foreground">{formatFileSize(item.file.size)}</p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <Badge
                             variant={
                               item.status === 'complete'
@@ -333,7 +328,7 @@ function Prompts() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
                             onClick={() => removeUpload(item.id)}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -343,19 +338,19 @@ function Prompts() {
 
                       {/* Error Message */}
                       {item.error && (
-                        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
-                          <p className="text-xs text-red-600 dark:text-red-400">{item.error}</p>
+                        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2">
+                          <p className="text-xs text-destructive">{item.error}</p>
                         </div>
                       )}
 
                       {/* Prompt Section */}
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
-                          <Label className="text-xs font-semibold text-foreground">Generated Prompt</Label>
+                          <Label className="text-sm font-medium">Generated Prompt</Label>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="gap-1.5 h-7 text-xs"
+                            className="gap-1.5 h-8"
                             disabled={!item.prompt}
                             onClick={() => copyToClipboard(item.id)}
                           >
@@ -376,7 +371,7 @@ function Prompts() {
                           value={item.prompt || ''}
                           readOnly
                           placeholder="Generated prompt will appear here..."
-                          className="min-h-[120px] resize-y text-xs leading-relaxed"
+                          className="min-h-[100px] resize-y text-sm"
                         />
                       </div>
                     </div>
@@ -385,16 +380,16 @@ function Prompts() {
               ))}
             </div>
           ) : (
-            <Card className="overflow-hidden">
-              <CardContent className="p-12">
+            <Card>
+              <CardContent className="py-12">
                 <div className="flex flex-col items-center gap-4 text-center">
-                  <div className="rounded-full bg-secondary p-4">
-                    <UploadCloud className="h-10 w-10 text-foreground/70" />
+                  <div className="rounded-full bg-muted p-4">
+                    <UploadCloud className="h-10 w-10 text-muted-foreground" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-semibold text-foreground">No Images Yet</h3>
+                    <h3 className="text-lg font-semibold">No Images Yet</h3>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Upload character reference images to generate optimised prompts for fine-tuning.
+                      Upload character reference images to generate optimized prompts.
                     </p>
                   </div>
                   <Button
@@ -411,50 +406,50 @@ function Prompts() {
           )}
         </div>
 
-        {/* Right Column - Tips */}
+        {/* Right Column - Best Practices */}
         <Card className="h-fit">
           <CardHeader>
             <CardTitle className="text-base">Best Practices</CardTitle>
-            <CardDescription className="text-xs">
+            <CardDescription>
               Tips for optimal prompt generation
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <ul className="space-y-3">
               <li className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/70" />
-                <span className="text-muted-foreground leading-relaxed">
+                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground" />
+                <span className="text-muted-foreground">
                   Keep framing and composition consistent across images
                 </span>
               </li>
               <li className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/70" />
-                <span className="text-muted-foreground leading-relaxed">
+                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground" />
+                <span className="text-muted-foreground">
                   Use clear, well-lit reference photos
                 </span>
               </li>
               <li className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/70" />
-                <span className="text-muted-foreground leading-relaxed">
-                  The AI extracts pose and expression without inventing physical traits
+                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground" />
+                <span className="text-muted-foreground">
+                  AI extracts pose and expression without inventing traits
                 </span>
               </li>
               <li className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/70" />
-                <span className="text-muted-foreground leading-relaxed">
+                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground" />
+                <span className="text-muted-foreground">
                   Add context to guide lighting and framing preferences
                 </span>
               </li>
               <li className="flex items-start gap-3 text-sm">
-                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/70" />
-                <span className="text-muted-foreground leading-relaxed">
+                <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground" />
+                <span className="text-muted-foreground">
                   Upload multiple angles for comprehensive training data
                 </span>
               </li>
             </ul>
-            <div className="mt-4 rounded-lg border border-border bg-secondary/50 p-3">
+            <div className="rounded-lg border border-border bg-muted/50 p-3">
               <p className="text-xs text-muted-foreground">
-                <strong className="text-foreground">Note:</strong> Generated prompts are optimized for consistency across your fine-tuning dataset.
+                <strong className="font-medium text-foreground">Note:</strong> Generated prompts are optimized for consistency across your fine-tuning dataset.
               </p>
             </div>
           </CardContent>
