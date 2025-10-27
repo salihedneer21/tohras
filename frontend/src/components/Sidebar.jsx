@@ -10,7 +10,6 @@ import {
   Wand2,
   BarChart3,
   Menu,
-  X,
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
@@ -36,6 +35,11 @@ const NAVIGATION = [
         path: '/books',
         label: 'Book',
         icon: BookOpen
+      },
+      {
+        path: '/storybooks',
+        label: 'Storybooks',
+        icon: GraduationCap
       },
     ]
   },
@@ -92,9 +96,10 @@ function Sidebar() {
       {/* Mobile Menu Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="fixed top-4 left-4 z-50 flex h-10 w-10 items-center justify-center rounded-lg bg-card border border-border shadow-sm lg:hidden"
+        className="fixed top-4 left-4 z-50 flex h-12 w-12 items-center justify-center rounded-lg bg-card border border-border shadow-md lg:hidden touch-manipulation active:scale-95 transition-all"
+        aria-label={isOpen ? "Close menu" : "Open menu"}
       >
-        {isOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        <Menu className="h-6 w-6" />
       </button>
 
       {/* Backdrop for mobile */}
@@ -102,6 +107,7 @@ function Sidebar() {
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
           onClick={() => setIsOpen(false)}
+          aria-hidden="true"
         />
       )}
 
@@ -111,6 +117,7 @@ function Sidebar() {
           "fixed top-0 left-0 z-40 h-screen w-72 border-r border-border bg-card transition-transform duration-200 lg:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
+        aria-label="Main navigation"
       >
         <div className="flex h-full flex-col">
           {/* Logo */}
@@ -120,7 +127,7 @@ function Sidebar() {
               className="flex items-center gap-3"
               onClick={() => setIsOpen(false)}
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-base font-bold text-white">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground text-base font-bold text-background">
                 AI
               </div>
               <div className="flex flex-col leading-tight">
@@ -153,7 +160,7 @@ function Sidebar() {
                               className={cn(
                                 "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                                 hasActiveChild
-                                  ? "bg-brand-500/10 text-brand-500"
+                                  ? "bg-secondary text-foreground"
                                   : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                               )}
                             >
@@ -177,7 +184,7 @@ function Sidebar() {
                                     className={cn(
                                       "block rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                                       isActive(child.path)
-                                        ? "bg-brand-500/10 text-brand-500"
+                                        ? "bg-secondary text-foreground"
                                         : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                                     )}
                                   >
@@ -198,7 +205,7 @@ function Sidebar() {
                           className={cn(
                             "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                             isActive(item.path)
-                              ? "bg-brand-500 text-white shadow-md"
+                              ? "bg-secondary text-foreground"
                               : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                           )}
                         >

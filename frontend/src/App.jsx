@@ -19,29 +19,53 @@ function App() {
         <Toaster
           position="top-right"
           toastOptions={{
-            duration: 4200,
-            className: 'bg-card border border-border text-foreground shadow-lg rounded-lg',
+            duration: 4000,
             style: {
-              borderRadius: '0.5rem',
+              background: 'hsl(var(--card))',
+              color: 'hsl(var(--foreground))',
+              border: '1px solid hsl(var(--border))',
+              borderRadius: '0.75rem',
+              padding: '16px',
+              fontSize: '14px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+              maxWidth: '400px',
             },
             success: {
+              duration: 3000,
               iconTheme: {
-                primary: '#4318FF',
-                secondary: '#ffffff',
+                primary: 'hsl(var(--foreground))',
+                secondary: 'hsl(var(--card))',
+              },
+              style: {
+                background: 'hsl(var(--card))',
+                color: 'hsl(var(--foreground))',
+                border: '1px solid hsl(var(--border))',
               },
             },
             error: {
+              duration: 4500,
               iconTheme: {
                 primary: '#ef4444',
                 secondary: '#ffffff',
+              },
+              style: {
+                background: 'hsl(var(--card))',
+                color: 'hsl(var(--foreground))',
+                border: '1px solid #ef4444',
+              },
+            },
+            loading: {
+              iconTheme: {
+                primary: 'hsl(var(--foreground))',
+                secondary: 'hsl(var(--card))',
               },
             },
           }}
         />
         <div className="min-h-screen bg-background">
           <Sidebar />
-          <main className="lg:pl-72">
-            <div className="page-wrapper">
+          <main className="min-h-screen lg:pl-72">
+            <div className="page-wrapper pt-16 lg:pt-6">
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/dashboard" element={<Dashboard />} />

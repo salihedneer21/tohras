@@ -484,16 +484,16 @@ function Automate() {
           all from one place. Once launched, the pipeline continues on the server and keeps detailed
           logs you can revisit anytime.
         </p>
-        <div className="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wide text-foreground/60">
-          <span className="inline-flex items-center gap-2 rounded-full border border-border/60 px-3 py-1">
+        <div className="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wide text-foreground/70">
+          <span className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/50 px-3 py-1">
             <UsersIcon className="h-3.5 w-3.5" />
             {totalRuns} runs
           </span>
-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/60 bg-emerald-500/10 px-3 py-1 text-emerald-200">
+          <span className="inline-flex items-center gap-2 rounded-full border border-foreground/20 bg-foreground/10 px-3 py-1">
             <CircleCheck className="h-3.5 w-3.5" />
             {completedRuns} completed
           </span>
-          <span className="inline-flex items-center gap-2 rounded-full border border-red-500/50 bg-red-500/10 px-3 py-1 text-red-200">
+          <span className="inline-flex items-center gap-2 rounded-full border border-foreground/20 bg-foreground/10 px-3 py-1">
             <AlertTriangle className="h-3.5 w-3.5" />
             {failedRuns} failed
           </span>
@@ -683,7 +683,7 @@ function Automate() {
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                className="text-xs text-red-300 hover:text-red-200"
+                                className="text-xs text-foreground/50 hover:text-foreground"
                                 onClick={() => handleRemoveFormImage(item.id)}
                                 disabled={item.status === 'uploading'}
                               >
@@ -707,13 +707,13 @@ function Automate() {
 
                         {item.status === 'evaluating' || item.status === 'pending' ? (
                           <div className="flex items-center gap-2 text-xs text-foreground/60">
-                            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                            <Loader2 className="h-4 w-4 animate-spin text-foreground/70" />
                             Evaluating photo quality…
                           </div>
                         ) : null}
 
                         {item.status === 'evaluation_failed' ? (
-                          <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-400/10 p-3 text-xs text-amber-200">
+                          <div className="rounded-lg border border-dashed border-foreground/20 bg-foreground/10 p-3 text-xs text-foreground/70">
                             Evaluation failed: {item.error}
                           </div>
                         ) : null}
@@ -727,7 +727,7 @@ function Automate() {
                               <span className="flex items-center gap-2">
                                 <input
                                   type="checkbox"
-                                  className="h-3.5 w-3.5 rounded border-border/60 accent-accent"
+                                  className="h-3.5 w-3.5 rounded border-border/60 accent-foreground"
                                   checked={item.include}
                                   onChange={(event) =>
                                     handleToggleFormInclude(item.id, event.target.checked)
@@ -736,7 +736,7 @@ function Automate() {
                                 Include in automation
                               </span>
                               {item.include && !item.evaluation?.acceptable ? (
-                                <span className="text-amber-300">Override enabled</span>
+                                <span className="text-foreground/60 italic">Override enabled</span>
                               ) : null}
                             </label>
                           </EvaluationImageCard>
@@ -823,7 +823,7 @@ function Automate() {
                       </div>
                       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-border/40">
                         <div
-                          className="h-2 rounded-full bg-accent transition-all duration-700 ease-out"
+                          className="h-2 rounded-full bg-foreground transition-all duration-700 ease-out"
                           style={{ width: `${run.progress || 0}%` }}
                         />
                       </div>
@@ -852,16 +852,18 @@ function Automate() {
                               'pending'}
                           </p>
                           {trainingSnapshot?.error ? (
-                            <p className="text-xs text-destructive">
-                              Error: {trainingSnapshot.error}
-                            </p>
+                            <div className="mt-2 rounded-lg border border-foreground/20 bg-foreground/10 p-2.5">
+                              <p className="text-xs font-medium text-foreground/70">
+                                Error: {trainingSnapshot.error}
+                              </p>
+                            </div>
                           ) : null}
                           {trainingSnapshot?.logsUrl ? (
                             <a
                               href={trainingSnapshot.logsUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center text-xs font-semibold text-accent hover:underline"
+                              className="inline-flex items-center text-xs font-semibold text-foreground hover:underline"
                             >
                               View logs
                             </a>
@@ -892,16 +894,18 @@ function Automate() {
                               : '—'}
                           </p>
                           {storybookSnapshot?.error ? (
-                            <p className="text-xs text-destructive">
-                              Error: {storybookSnapshot.error}
-                            </p>
+                            <div className="mt-2 rounded-lg border border-foreground/20 bg-foreground/10 p-2.5">
+                              <p className="text-xs font-medium text-foreground/70">
+                                Error: {storybookSnapshot.error}
+                              </p>
+                            </div>
                           ) : null}
                           {storybookSnapshot?.pdfAsset?.url ? (
                             <a
                               href={storybookSnapshot.pdfAsset.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center text-xs font-semibold text-accent hover:underline"
+                              className="inline-flex items-center text-xs font-semibold text-foreground hover:underline"
                             >
                               View generated PDF
                             </a>
@@ -936,9 +940,11 @@ function Automate() {
                     ) : null}
 
                     {run.error ? (
-                      <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-                        {run.error}
-                      </p>
+                      <div className="rounded-lg border border-foreground/20 bg-foreground/10 p-3">
+                        <p className="text-sm font-medium text-foreground/70">
+                          {run.error}
+                        </p>
+                      </div>
                     ) : null}
                   </CardContent>
                 </Card>

@@ -4,48 +4,48 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 0 0% 98%;
+    --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 240 10% 3.9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 257 100% 57%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 271 81% 56%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 257 100% 57%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 271 81% 56%;
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 8%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 257 100% 57%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 7%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 7%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 271 81% 56%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
     --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 257 100% 57%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 271 81% 56%;
   }
 }
 
@@ -53,24 +53,83 @@
   * {
     @apply border-border;
   }
+
+  html {
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
+    min-height: 100vh;
+    position: relative;
+  }
+
+  /* Prevent mobile safari zoom on input focus */
+  @media screen and (max-width: 640px) {
+    input[type="text"],
+    input[type="email"],
+    input[type="number"],
+    input[type="tel"],
+    input[type="url"],
+    textarea,
+    select {
+      font-size: 16px;
+    }
   }
 }
 
 @layer components {
   .page-wrapper {
-    @apply container mx-auto px-4 py-6 space-y-6 max-w-7xl;
+    @apply w-full mx-auto px-4 py-6 space-y-6 max-w-7xl;
+  }
+
+  @media (max-width: 640px) {
+    .page-wrapper {
+      @apply px-3 py-4 space-y-4;
+    }
   }
 
   .section-card {
-    @apply rounded-xl px-6 py-6 space-y-4 shadow-sm;
+    @apply rounded-xl px-4 py-4 space-y-3 shadow-sm transition-all duration-200 ease-in-out;
     background-color: hsl(var(--card));
     border: 1px solid hsl(var(--border));
   }
 
+  @media (min-width: 640px) {
+    .section-card {
+      @apply px-6 py-6 space-y-4;
+    }
+  }
+
+  .section-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  }
+
   .grid-responsive {
     @apply grid gap-4 sm:gap-5 lg:gap-6;
+  }
+
+  /* Mobile responsive text */
+  h1, h2, h3, h4, h5, h6 {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    hyphens: auto;
+  }
+
+  /* Ensure images don't overflow */
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Mobile friendly buttons */
+  @media (max-width: 640px) {
+    button {
+      min-height: 44px; /* iOS touch target */
+    }
   }
 }
 
@@ -121,15 +180,52 @@ img {
   -webkit-backdrop-filter: blur(4px);
 }
 
+/* Smooth animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out;
+}
+
 @layer components {
   .stat-grid {
     @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
   }
 
   .stat-card {
-    @apply rounded-xl p-5 shadow-sm transition-all hover:shadow-md;
+    @apply rounded-xl p-5 shadow-sm transition-all duration-200 ease-in-out;
     background-color: hsl(var(--card));
     border: 1px solid hsl(var(--border));
+  }
+
+  .stat-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    border-color: hsl(var(--muted-foreground) / 0.2);
   }
 
   .stat-card__title {
@@ -148,9 +244,13 @@ img {
   }
 
   .panel {
-    @apply rounded-xl p-6 shadow-sm;
+    @apply rounded-xl p-6 shadow-sm transition-all duration-200 ease-in-out;
     background-color: hsl(var(--card));
     border: 1px solid hsl(var(--border));
+  }
+
+  .panel:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
   }
 
   .panel-header {
@@ -163,9 +263,111 @@ img {
   }
 
   .badge-ghost {
-    @apply inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors duration-150;
     background-color: hsl(var(--secondary));
     border: 1px solid hsl(var(--border));
     color: hsl(var(--secondary-foreground));
+  }
+}
+
+/* Select Dropdown Scrolling */
+[data-radix-select-viewport] {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar {
+  width: 6px;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Toast Notifications - Custom Styling */
+@layer components {
+  /* Toast enter animation */
+  @keyframes toast-enter {
+    from {
+      opacity: 0;
+      transform: translateX(100%) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0) scale(1);
+    }
+  }
+
+  /* Toast exit animation */
+  @keyframes toast-exit {
+    from {
+      opacity: 1;
+      transform: translateX(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateX(100%) scale(0.95);
+    }
+  }
+
+  /* Apply animations to toasts */
+  [data-sonner-toast] {
+    animation: toast-enter 0.2s cubic-bezier(0.21, 1.02, 0.73, 1) forwards;
+  }
+
+  [data-sonner-toast][data-removed="true"] {
+    animation: toast-exit 0.2s cubic-bezier(0.06, 0.71, 0.55, 1) forwards;
+  }
+
+  /* Custom toast styling for react-hot-toast */
+  .react-hot-toast {
+    font-family: inherit !important;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  /* Toast icon styling */
+  .react-hot-toast > div:first-child {
+    flex-shrink: 0;
+  }
+
+  /* Success toast custom styles */
+  [data-type="success"] {
+    border-left: 3px solid hsl(var(--foreground)) !important;
+  }
+
+  /* Error toast custom styles */
+  [data-type="error"] {
+    border-left: 3px solid #ef4444 !important;
+  }
+
+  /* Loading toast custom styles */
+  [data-type="loading"] {
+    border-left: 3px solid hsl(var(--muted-foreground)) !important;
+  }
+
+  /* Toast progress bar */
+  .toast-progress {
+    height: 2px;
+    background: linear-gradient(
+      to right,
+      hsl(var(--foreground)),
+      hsl(var(--muted-foreground))
+    );
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-radius: 0 0 0.75rem 0.75rem;
+    opacity: 0.3;
   }
 }

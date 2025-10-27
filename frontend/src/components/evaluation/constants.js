@@ -1,9 +1,9 @@
 export const EVALUATION_TIPS = [
-  'Upload 10-15 high-resolution images; the more variety the better.',
-  'Ensure the child’s face is clearly visible with no sunglasses, hats, or obstructions.',
-  'Use torso-up, front-facing photos that capture head and shoulders.',
-  'Only the child should be in the frame.',
-  'Include multiple expressions (smile, neutral, etc.) and varied lighting/backgrounds.',
+  'Choose a sharp, high-resolution photo of the child.',
+  'Ensure the child’s face is fully visible without hats, sunglasses, or motion blur.',
+  'Use a front-facing or slightly angled torso-up shot that captures head and shoulders.',
+  'Keep other people and distracting objects out of the frame.',
+  'Aim for natural lighting and minimal filters to maintain accurate skin tones.',
 ];
 
 export const CRITERIA_LABELS = {

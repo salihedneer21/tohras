@@ -4,21 +4,21 @@ import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 ring-offset-background',
+  'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-semibold transition-all duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 ring-offset-background active:scale-95',
   {
     variants: {
       variant: {
         default:
-          'bg-accent text-accent-foreground shadow-subtle hover:bg-accent/85',
+          'bg-accent text-accent-foreground shadow-sm hover:bg-accent/90 hover:shadow-md',
         secondary:
           'bg-muted text-muted-foreground hover:bg-muted/80',
         ghost: 'bg-transparent hover:bg-muted/70',
         outline:
-          'border border-border bg-background text-foreground hover:bg-muted',
+          'border border-border bg-background text-foreground hover:bg-muted hover:border-muted-foreground/20',
         destructive:
-          'bg-red-500 text-white hover:bg-red-400 focus-visible:ring-red-500/60',
+          'bg-red-500 text-white shadow-sm hover:bg-red-600 hover:shadow-md focus-visible:ring-red-500/60',
         success:
-          'bg-emerald-500 text-white shadow-subtle hover:bg-emerald-400 focus-visible:ring-emerald-500/60',
+          'bg-emerald-500 text-white shadow-sm hover:bg-emerald-600 hover:shadow-md focus-visible:ring-emerald-500/60',
       },
       size: {
         default: 'h-10 px-4 py-2',

@@ -407,7 +407,7 @@ function Dashboard() {
               />
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </Button>
-            <Button asChild className="bg-brand-500 hover:bg-brand-600">
+            <Button asChild className="bg-foreground hover:bg-foreground/90 text-background">
               <Link to="/books">
                 New book
                 <ArrowUpRight className="ml-2 h-4 w-4" />
@@ -465,8 +465,8 @@ function Dashboard() {
               <article key={key} className="stat-card">
                 <div className="flex items-center justify-between">
                   <p className="stat-card__title">{label}</p>
-                  <span className="rounded-lg bg-brand-500/10 p-2">
-                    <Icon className="h-5 w-5 text-brand-500" />
+                  <span className="rounded-lg bg-secondary p-2">
+                    <Icon className="h-5 w-5 text-foreground/70" />
                   </span>
                 </div>
                 <p className="stat-card__value">{formatNumber(stat.value)}</p>
@@ -506,11 +506,11 @@ function Dashboard() {
                 <Link
                   key={event.id}
                   to={event.href}
-                  className="group flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 transition-all hover:shadow-md hover:border-brand-500/30"
+                  className="group flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 transition-all hover:shadow-md hover:border-foreground/20"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="rounded-lg bg-brand-500/10 p-2">
-                      <event.icon className="h-5 w-5 text-brand-500" />
+                    <span className="rounded-lg bg-secondary p-2">
+                      <event.icon className="h-5 w-5 text-foreground/70" />
                     </span>
                     <div>
                       <p className="text-sm font-semibold text-foreground">
@@ -522,7 +522,7 @@ function Dashboard() {
                       </p>
                     </div>
                   </div>
-                  <ArrowUpRight className="h-4 w-4 text-muted-foreground transition group-hover:text-brand-500" />
+                  <ArrowUpRight className="h-4 w-4 text-muted-foreground transition group-hover:text-foreground" />
                 </Link>
               ))
             )}
@@ -547,7 +547,7 @@ function Dashboard() {
               </div>
               <div className="h-2 rounded-full bg-secondary">
                 <div
-                  className="h-full rounded-full bg-brand-500"
+                  className="h-full rounded-full bg-foreground"
                   style={{ width: `${Math.min(healthSummary.trainingLoad, 100)}%` }}
                 />
               </div>
@@ -559,14 +559,14 @@ function Dashboard() {
               </div>
               <div className="h-2 rounded-full bg-secondary">
                 <div
-                  className="h-full rounded-full bg-emerald-500"
+                  className="h-full rounded-full bg-foreground"
                   style={{ width: `${Math.min(healthSummary.generationSuccess, 100)}%` }}
                 />
               </div>
             </div>
             <div className="rounded-lg border border-border bg-secondary/50 p-4 text-xs">
               <p className="flex items-center gap-2 font-medium text-foreground">
-                <BarChart3 className="h-4 w-4 text-brand-500" />
+                <BarChart3 className="h-4 w-4 text-foreground/70" />
                 Focus points
               </p>
               <p className="mt-2 text-muted-foreground">
@@ -647,7 +647,7 @@ function Dashboard() {
             </Button>
             <Button
               asChild
-              className="justify-between px-4 py-5 h-auto text-left bg-brand-500 hover:bg-brand-600"
+              className="justify-between px-4 py-5 h-auto text-left bg-foreground hover:bg-foreground/90 text-background"
             >
               <Link to="/generate">
                 <span className="font-semibold">Launch image generation</span>
@@ -667,7 +667,7 @@ function Dashboard() {
           </div>
           <div className="rounded-lg border border-border bg-secondary/50 p-4 text-xs">
             <p className="flex items-center gap-2 font-medium text-foreground">
-              <Sparkles className="h-4 w-4 text-brand-500" />
+              <Sparkles className="h-4 w-4 text-foreground/70" />
               Pro tip
             </p>
             <p className="mt-2 text-muted-foreground">
