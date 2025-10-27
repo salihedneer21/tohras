@@ -6,6 +6,7 @@ const fontkit = require('@pdf-lib/fontkit');
 const fetch = require('node-fetch');
 const Replicate = require('replicate');
 const { downloadFromS3 } = require('../config/s3');
+const { createCanvas, loadImage } = require('canvas');
 
 const replicate = new Replicate();
 
@@ -18,6 +19,12 @@ const TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const TEXT_MARGIN = 40;
 const FONT_SIZE = 16;
 const LINE_HEIGHT = FONT_SIZE * 1.4;
+const TEXT_BG_LEFT_PADDING = 90;
+const TEXT_BG_RIGHT_PADDING = 60;
+const TEXT_BG_VERTICAL_PADDING = 40;
+const HEBREW_BASE_FONT_SIZE = 16;
+const HEBREW_WAVE_AMPLITUDE = 8;
+const HEBREW_LINE_SPACING = HEBREW_BASE_FONT_SIZE * 1.4;
 
 const HTTP_AGENT = new https.Agent({
   keepAlive: true,
@@ -334,25 +341,213 @@ const removeBackground = async (character) => {
   return null;
 };
 
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const boxBlur = (imageData, width, height, radius) => {
+  if (!radius || radius < 1) {
+    return imageData;
+  }
+
+  const pixels = imageData.data;
+  const tempPixels = new Uint8ClampedArray(pixels);
+
+  // Horizontal pass
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let count = 0;
+
+      for (let k = -radius; k <= radius; k += 1) {
+        const px = x + k;
+        if (px >= 0 && px < width) {
+          const idx = (y * width + px) * 4;
+          r += pixels[idx];
+          g += pixels[idx + 1];
+          b += pixels[idx + 2];
+          a += pixels[idx + 3];
+          count += 1;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      tempPixels[idx] = r / count;
+      tempPixels[idx + 1] = g / count;
+      tempPixels[idx + 2] = b / count;
+      tempPixels[idx + 3] = a / count;
+    }
+  }
+
+  // Vertical pass
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let count = 0;
+
+      for (let k = -radius; k <= radius; k += 1) {
+        const py = y + k;
+        if (py >= 0 && py < height) {
+          const idx = (py * width + x) * 4;
+          r += tempPixels[idx];
+          g += tempPixels[idx + 1];
+          b += tempPixels[idx + 2];
+          a += tempPixels[idx + 3];
+          count += 1;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      pixels[idx] = r / count;
+      pixels[idx + 1] = g / count;
+      pixels[idx + 2] = b / count;
+      pixels[idx + 3] = a / count;
+    }
+  }
+
+  return imageData;
+};
+
+const createBlurredBackground = async (
+  backgroundBuffer,
+  x,
+  y,
+  width,
+  height,
+  blurRadius = 15
+) => {
+  const safeWidth = Math.max(1, Math.round(width));
+  const safeHeight = Math.max(1, Math.round(height));
+  const safeX = clamp(Math.floor(x), 0, PAGE_WIDTH);
+  const safeY = clamp(Math.floor(y), 0, PAGE_HEIGHT);
+
+  if (!backgroundBuffer || safeWidth <= 0 || safeHeight <= 0) {
+    return null;
+  }
+
+  try {
+    const backgroundImage = await loadImage(backgroundBuffer);
+
+    const scaleX = backgroundImage.width / PAGE_WIDTH;
+    const scaleY = backgroundImage.height / PAGE_HEIGHT;
+
+    const sourceX = clamp(Math.floor(safeX * scaleX), 0, backgroundImage.width);
+    const sourceY = clamp(
+      Math.floor((PAGE_HEIGHT - safeY - safeHeight) * scaleY),
+      0,
+      backgroundImage.height
+    );
+    const sourceWidth = clamp(
+      Math.floor(safeWidth * scaleX),
+      1,
+      backgroundImage.width - sourceX
+    );
+    const sourceHeight = clamp(
+      Math.floor(safeHeight * scaleY),
+      1,
+      backgroundImage.height - sourceY
+    );
+
+    const canvas = createCanvas(safeWidth, safeHeight);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(
+      backgroundImage,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      safeWidth,
+      safeHeight
+    );
+
+    let imageData = ctx.getImageData(0, 0, safeWidth, safeHeight);
+    imageData = boxBlur(imageData, safeWidth, safeHeight, blurRadius);
+    imageData = boxBlur(imageData, safeWidth, safeHeight, blurRadius);
+    ctx.putImageData(imageData, 0, 0);
+
+    const maskedCanvas = createCanvas(safeWidth, safeHeight);
+    const maskedCtx = maskedCanvas.getContext('2d');
+    maskedCtx.drawImage(canvas, 0, 0);
+
+    const maskData = maskedCtx.getImageData(0, 0, safeWidth, safeHeight);
+    const pixels = maskData.data;
+
+    const centerX = safeWidth / 2;
+    const centerY = safeHeight / 2;
+    const radiusX = safeWidth / 2.2;
+    const radiusY = safeHeight / 2;
+    const featherSize = Math.max(20, Math.min(safeWidth, safeHeight) * 0.12);
+    const maxRadius = Math.min(radiusX, radiusY);
+
+    for (let py = 0; py < safeHeight; py += 1) {
+      for (let px = 0; px < safeWidth; px += 1) {
+        const dx = (px - centerX) / radiusX;
+        const dy = (py - centerY) / radiusY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        let alpha = 1;
+        if (distance > 1) {
+          alpha = 0;
+        } else if (distance > 1 - featherSize / maxRadius) {
+          const featherDistance = (1 - distance) / (featherSize / maxRadius);
+          alpha = Math.max(0, Math.pow(featherDistance, 1.5));
+        }
+
+        const idx = (py * safeWidth + px) * 4 + 3;
+        pixels[idx] = Math.min(255, pixels[idx] * alpha);
+      }
+    }
+
+    maskedCtx.putImageData(maskData, 0, 0);
+    return maskedCanvas.toBuffer('image/png');
+  } catch (error) {
+    console.error('[pdf] createBlurredBackground failed:', error.message);
+    const fallbackCanvas = createCanvas(safeWidth, safeHeight);
+    const fallbackCtx = fallbackCanvas.getContext('2d');
+    fallbackCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    fallbackCtx.fillRect(0, 0, safeWidth, safeHeight);
+    return fallbackCanvas.toBuffer('image/png');
+  }
+};
+
 const wrapText = (text, maxWidth, fontSize) => {
   if (!text) return [];
+
   const words = text.split(/\s+/);
   const lines = [];
   let currentLine = '';
   const avgCharWidth = fontSize * 0.45;
+  const maxCharsPerLine = Math.max(1, Math.floor(maxWidth / Math.max(avgCharWidth, 1)));
 
   words.forEach((word) => {
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
-    const lineWidth = testLine.length * avgCharWidth;
-    if (lineWidth <= maxWidth) {
-      currentLine = testLine;
+    const tentative = currentLine ? `${currentLine} ${word}` : word;
+    const estimatedWidth = tentative.length * avgCharWidth;
+
+    if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
+      currentLine = tentative;
     } else {
-      if (currentLine) lines.push(currentLine);
-      currentLine = word;
+      if (currentLine) {
+        lines.push(currentLine);
+      }
+      if (word.length * avgCharWidth > maxWidth) {
+        lines.push(word);
+        currentLine = '';
+      } else {
+        currentLine = word;
+      }
     }
   });
 
-  if (currentLine) lines.push(currentLine);
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
   return lines;
 };
 
@@ -369,9 +564,11 @@ async function generateStorybookPdf({ title, pages }) {
 
   let bodyFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
   let accentFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  let hebrewFont = bodyFont;
 
   const bodyFontPath = optionalFontPath('STORYBOOK_BODY_FONT', 'fonts/CanvaSans-Regular.otf');
   const accentFontPath = optionalFontPath('STORYBOOK_ACCENT_FONT', 'fonts/CanvaSans-Bold.otf');
+  const hebrewFontPath = optionalFontPath('STORYBOOK_HEBREW_FONT', null);
 
   const customBodyFont = await tryEmbedCustomFont(pdfDoc, bodyFontPath);
   if (customBodyFont) {
@@ -381,11 +578,19 @@ async function generateStorybookPdf({ title, pages }) {
   if (customAccentFont) {
     accentFont = customAccentFont;
   }
+  const customHebrewFont = await tryEmbedCustomFont(pdfDoc, hebrewFontPath);
+  if (customHebrewFont) {
+    hebrewFont = customHebrewFont;
+  }
 
   for (let index = 0; index < pages.length; index += 1) {
     const pageData = pages[index];
     const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     const isCharacterOnRight = index % 2 === 0;
+    let charWidth = 0;
+    let charHeight = 0;
+    let charX = isCharacterOnRight ? PAGE_WIDTH - PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO : 0;
+    const charY = 0;
 
     const backgroundBuffer = await getImageBuffer(pageData.background);
     if (backgroundBuffer) {
@@ -460,8 +665,6 @@ async function generateStorybookPdf({ title, pages }) {
       const maxCharWidth = PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO;
       const maxCharHeight = PAGE_HEIGHT * CHARACTER_MAX_HEIGHT_RATIO;
 
-      let charWidth;
-      let charHeight;
       if (aspectRatio > maxCharWidth / maxCharHeight) {
         charWidth = maxCharWidth;
         charHeight = charWidth / aspectRatio;
@@ -470,14 +673,80 @@ async function generateStorybookPdf({ title, pages }) {
         charWidth = charHeight * aspectRatio;
       }
 
-      const charX = isCharacterOnRight ? PAGE_WIDTH - charWidth : 0;
-      const charY = 0;
+      charX = isCharacterOnRight ? PAGE_WIDTH - charWidth : 0;
 
       page.drawImage(characterImage, {
         x: charX,
         y: charY,
         width: charWidth,
         height: charHeight,
+      });
+    }
+
+    const hebrewQuote = (pageData.hebrewQuote || pageData.quote || '').trim();
+    if (hebrewQuote) {
+      const availableHebrewWidth = clamp(
+        Math.max(charWidth * 0.8, PAGE_WIDTH * 0.3),
+        80,
+        PAGE_WIDTH - TEXT_MARGIN * 2
+      );
+      const quoteXBase = charWidth
+        ? charX + charWidth * 0.1
+        : isCharacterOnRight
+        ? TEXT_MARGIN
+        : PAGE_WIDTH - availableHebrewWidth - TEXT_MARGIN;
+      const quoteMinX = TEXT_MARGIN;
+      const quoteMaxX = Math.max(TEXT_MARGIN, PAGE_WIDTH - availableHebrewWidth - TEXT_MARGIN);
+      const quoteX = clamp(quoteXBase, quoteMinX, quoteMaxX);
+      const quoteYBase = charY + charHeight + 20;
+      const quoteMinY = TEXT_MARGIN;
+      const quoteMaxY = Math.max(TEXT_MARGIN, PAGE_HEIGHT - HEBREW_BASE_FONT_SIZE);
+      const quoteY = clamp(quoteYBase, quoteMinY, quoteMaxY);
+      const hebrewLines = wrapText(hebrewQuote, availableHebrewWidth, HEBREW_BASE_FONT_SIZE);
+
+      hebrewLines.forEach((line, lineIndex) => {
+        const chars = line.split('');
+        const baselineY = quoteY - lineIndex * HEBREW_LINE_SPACING;
+        let cursorX = quoteX;
+
+        chars.forEach((char, charIndex) => {
+          const totalChars = Math.max(chars.length - 1, 1);
+          const progress = totalChars > 0 ? charIndex / totalChars : 0.5;
+          const waveOffset = Math.sin(progress * Math.PI) * HEBREW_WAVE_AMPLITUDE;
+          const sizeFactor = 1 + Math.cos(progress * Math.PI) * 0.3;
+          const fontSize = HEBREW_BASE_FONT_SIZE * sizeFactor;
+          const charWidthEstimate = fontSize * 0.6;
+          const x = cursorX;
+          const y = baselineY + waveOffset;
+
+          const outlineOffsets = [
+            [-0.4, 0],
+            [0.4, 0],
+            [0, -0.4],
+            [0, 0.4],
+          ];
+
+          outlineOffsets.forEach(([dx, dy]) => {
+            page.drawText(char, {
+              x: x + dx,
+              y: y + dy,
+              size: fontSize,
+              font: hebrewFont,
+              color: rgb(0, 0, 0),
+              opacity: 0.7,
+            });
+          });
+
+          page.drawText(char, {
+            x,
+            y,
+            size: fontSize,
+            font: hebrewFont,
+            color: rgb(1, 1, 1),
+          });
+
+          cursorX += charWidthEstimate;
+        });
       });
     }
 
@@ -489,20 +758,61 @@ async function generateStorybookPdf({ title, pages }) {
     const textX = isCharacterOnRight ? TEXT_MARGIN : PAGE_WIDTH - textBlockWidth - TEXT_MARGIN;
     const textY = PAGE_HEIGHT * 0.7;
 
-    const textLines = wrapText(pageData.text || '', textBlockWidth, FONT_SIZE);
+    const storyText = pageData.text || '';
+    const textLines = wrapText(storyText, textBlockWidth, FONT_SIZE);
     const textHeight = textLines.length * LINE_HEIGHT;
 
     if (textLines.length) {
-      page.drawRectangle({
-        x: textX - 20,
-        y: textY - textHeight - 20,
-        width: textBlockWidth + 40,
-        height: textHeight + 40,
-        color: rgb(1, 1, 1),
-        opacity: 0.5,
-        borderColor: rgb(1, 1, 1),
-        borderRadius: 24,
-      });
+      const rawBgX = textX - TEXT_BG_LEFT_PADDING;
+      const rawBgY = textY - textHeight - TEXT_BG_VERTICAL_PADDING;
+      const rawBgWidth = textBlockWidth + TEXT_BG_LEFT_PADDING + TEXT_BG_RIGHT_PADDING;
+      const rawBgHeight = textHeight + TEXT_BG_VERTICAL_PADDING * 2;
+
+      const bgX = clamp(rawBgX, 0, PAGE_WIDTH - 1);
+      const bgY = clamp(rawBgY, 0, PAGE_HEIGHT - 1);
+      const xOffset = bgX - rawBgX;
+      const yOffset = bgY - rawBgY;
+      const availableWidth = Math.max(1, Math.round(PAGE_WIDTH - bgX));
+      const availableHeight = Math.max(1, Math.round(PAGE_HEIGHT - bgY));
+      const bgWidth = Math.min(
+        Math.max(1, Math.round(rawBgWidth - xOffset)),
+        availableWidth
+      );
+      const bgHeight = Math.min(
+        Math.max(1, Math.round(rawBgHeight - yOffset)),
+        availableHeight
+      );
+
+      let blurredBgBuffer = null;
+      if (backgroundBuffer) {
+        blurredBgBuffer = await createBlurredBackground(
+          backgroundBuffer,
+          bgX,
+          bgY,
+          bgWidth,
+          bgHeight,
+          15
+        );
+      }
+
+      if (blurredBgBuffer) {
+        const blurredBgImage = await embedImage(pdfDoc, blurredBgBuffer);
+        page.drawImage(blurredBgImage, {
+          x: bgX,
+          y: bgY,
+          width: bgWidth,
+          height: bgHeight,
+        });
+      } else {
+        page.drawRectangle({
+          x: bgX,
+          y: bgY,
+          width: bgWidth,
+          height: bgHeight,
+          color: rgb(0, 0, 0),
+          opacity: 0.45,
+        });
+      }
 
       textLines.forEach((line, lineIndex) => {
         const y = textY - lineIndex * LINE_HEIGHT - 18;
@@ -511,34 +821,10 @@ async function generateStorybookPdf({ title, pages }) {
           y,
           size: FONT_SIZE,
           font: bodyFont,
-          color: rgb(0, 0, 0),
+          color: rgb(1, 1, 1),
         });
       });
     }
-
-    if (pageData.quote) {
-      const quoteLines = wrapText(pageData.quote, PAGE_WIDTH * 0.3, FONT_SIZE);
-      quoteLines.forEach((line, lineIndex) => {
-        const x = isCharacterOnRight ? PAGE_WIDTH - 260 : TEXT_MARGIN;
-        const y = PAGE_HEIGHT - 80 - lineIndex * LINE_HEIGHT;
-        page.drawText(line, {
-          x,
-          y,
-          size: FONT_SIZE,
-          font: accentFont,
-          color: rgb(0, 0, 0),
-        });
-      });
-    }
-
-    page.drawText(`Page ${pageData.order || index + 1}`, {
-      x: TEXT_MARGIN,
-      y: Math.max(PAGE_HEIGHT - 35, TEXT_MARGIN),
-      size: 14,
-      font: accentFont,
-      color: rgb(1, 1, 1),
-      opacity: 0.65,
-    });
   }
 
   const pdfBytes = await pdfDoc.save();

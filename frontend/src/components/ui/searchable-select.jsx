@@ -89,10 +89,16 @@ function SearchableSelect({
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.value}
+                  value={option.label}
                   keywords={[option.label, option.searchText].filter(Boolean)}
-                  onSelect={(currentValue) => {
-                    onValueChange(currentValue === value ? '' : currentValue);
+                  onSelect={() => {
+                    onValueChange(option.value === value ? '' : option.value);
+                    setOpen(false);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onValueChange(option.value === value ? '' : option.value);
                     setOpen(false);
                   }}
                   className="cursor-pointer"

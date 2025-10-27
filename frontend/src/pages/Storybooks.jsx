@@ -162,6 +162,13 @@ const PDF_TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const PDF_TEXT_MARGIN = 40;
 const PDF_FONT_SIZE = 16;
 const PDF_LINE_HEIGHT = PDF_FONT_SIZE * 1.4;
+const TEXT_BASELINE_OFFSET = 18;
+const TEXT_BG_LEFT_PADDING = 90;
+const TEXT_BG_RIGHT_PADDING = 60;
+const TEXT_BG_VERTICAL_PADDING = 40;
+const HEBREW_BASE_FONT_SIZE = 16;
+const HEBREW_LINE_HEIGHT = HEBREW_BASE_FONT_SIZE * 1.4;
+const HEBREW_WAVE_AMPLITUDE = 8;
 
 const wrapTextToLines = (text, maxWidth, fontSize) => {
   if (!text) return [];
@@ -169,21 +176,35 @@ const wrapTextToLines = (text, maxWidth, fontSize) => {
   const lines = [];
   let currentLine = '';
   const avgCharWidth = fontSize * 0.45;
+  const maxCharsPerLine = Math.max(1, Math.floor(maxWidth / Math.max(avgCharWidth, 1)));
 
   words.forEach((word) => {
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
-    const lineWidth = testLine.length * avgCharWidth;
-    if (lineWidth <= maxWidth) {
-      currentLine = testLine;
+    const tentative = currentLine ? `${currentLine} ${word}` : word;
+    const estimatedWidth = tentative.length * avgCharWidth;
+
+    if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
+      currentLine = tentative;
     } else {
-      if (currentLine) lines.push(currentLine);
-      currentLine = word;
+      if (currentLine) {
+        lines.push(currentLine);
+      }
+      if (word.length * avgCharWidth > maxWidth) {
+        lines.push(word);
+        currentLine = '';
+      } else {
+        currentLine = word;
+      }
     }
   });
 
-  if (currentLine) lines.push(currentLine);
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
   return lines;
 };
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const withCacheBust = (url, token) => {
   if (!url) return '';
@@ -222,13 +243,73 @@ const buildPagePreviewModel = ({
   const backgroundSrc = withCacheBust(backgroundUrl, `${cacheToken}-background-${pageLabel}`);
   const characterSrc = withCacheBust(characterUrl, `${cacheToken}-character-${pageLabel}`);
 
+  const hasCharacter = Boolean(characterSrc);
+  const characterMaxWidth = hasCharacter ? PDF_PAGE_WIDTH * PDF_CHARACTER_MAX_WIDTH_RATIO : 0;
+  const characterMaxHeight = hasCharacter ? PDF_PAGE_HEIGHT * PDF_CHARACTER_MAX_HEIGHT_RATIO : 0;
+  const characterX = isCharacterOnRight ? PDF_PAGE_WIDTH - characterMaxWidth : 0;
+  const characterSvgY = PDF_PAGE_HEIGHT - (characterMaxHeight + 0);
+  const characterFrame = hasCharacter
+    ? {
+        x: characterX,
+        y: characterSvgY,
+        width: characterMaxWidth,
+        height: characterMaxHeight,
+        preserveAspectRatio: isCharacterOnRight ? 'xMaxYMax meet' : 'xMinYMax meet',
+      }
+    : null;
+
   const textBlockWidth = Math.min(
     Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
     PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
   );
   const textLines = wrapTextToLines(page.text || '', textBlockWidth, PDF_FONT_SIZE);
-  const quoteLines = wrapTextToLines(page.quote || '', PDF_PAGE_WIDTH * 0.3, PDF_FONT_SIZE);
+  const textBaseline = PDF_PAGE_HEIGHT * 0.7;
   const textHeight = textLines.length * PDF_LINE_HEIGHT;
+  const textX = isCharacterOnRight
+    ? PDF_TEXT_MARGIN
+    : PDF_PAGE_WIDTH - textBlockWidth - PDF_TEXT_MARGIN;
+
+  const rawBgX = textX - TEXT_BG_LEFT_PADDING;
+  const rawBgY = textBaseline - textHeight - TEXT_BG_VERTICAL_PADDING;
+  const rawBgWidth = textBlockWidth + TEXT_BG_LEFT_PADDING + TEXT_BG_RIGHT_PADDING;
+  const rawBgHeight = textHeight + TEXT_BG_VERTICAL_PADDING * 2;
+
+  const bgX = clamp(rawBgX, 0, PDF_PAGE_WIDTH - 1);
+  const bgY = clamp(rawBgY, 0, PDF_PAGE_HEIGHT - 1);
+  const xOffset = bgX - rawBgX;
+  const yOffset = bgY - rawBgY;
+  const availableWidth = Math.max(1, PDF_PAGE_WIDTH - bgX);
+  const availableHeight = Math.max(1, PDF_PAGE_HEIGHT - bgY);
+  const bgWidth = Math.min(Math.max(1, rawBgWidth - xOffset), availableWidth);
+  const bgHeight = Math.min(Math.max(1, rawBgHeight - yOffset), availableHeight);
+  const bgSvgY = PDF_PAGE_HEIGHT - (bgY + bgHeight);
+
+  const hebrewQuote = (page.hebrewQuote || page.quote || '').trim();
+  const availableHebrewWidth = clamp(
+    Math.max(characterMaxWidth * 0.8, PDF_PAGE_WIDTH * 0.3),
+    80,
+    PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
+  );
+  const hebrewLines = hebrewQuote
+    ? wrapTextToLines(hebrewQuote, availableHebrewWidth, HEBREW_BASE_FONT_SIZE)
+    : [];
+  const hebrewBaseX = characterMaxWidth
+    ? characterX + characterMaxWidth * 0.1
+    : isCharacterOnRight
+    ? PDF_TEXT_MARGIN
+    : PDF_PAGE_WIDTH - availableHebrewWidth - PDF_TEXT_MARGIN;
+  const hebrewMinX = PDF_TEXT_MARGIN;
+  const hebrewMaxX = Math.max(
+    hebrewMinX,
+    PDF_PAGE_WIDTH - availableHebrewWidth - PDF_TEXT_MARGIN
+  );
+  const hebrewX = clamp(hebrewBaseX, hebrewMinX, hebrewMaxX);
+  const hebrewBaseY = characterMaxHeight + 20;
+  const hebrewY = clamp(
+    hebrewBaseY,
+    PDF_TEXT_MARGIN,
+    PDF_PAGE_HEIGHT - HEBREW_BASE_FONT_SIZE
+  );
 
   return {
     cacheToken,
@@ -236,10 +317,25 @@ const buildPagePreviewModel = ({
     isCharacterOnRight,
     backgroundSrc,
     characterSrc,
-    textLines,
-    quoteLines,
-    textBlockWidth,
-    textHeight,
+    characterFrame,
+    text: {
+      lines: textLines,
+      x: textX,
+      baseline: textBaseline,
+      blockWidth: textBlockWidth,
+      overlay: {
+        x: bgX,
+        y: bgSvgY,
+        width: bgWidth,
+        height: bgHeight,
+      },
+    },
+    hebrew: {
+      lines: hebrewLines,
+      x: hebrewX,
+      baseline: hebrewY,
+      width: availableHebrewWidth,
+    },
   };
 };
 
@@ -247,42 +343,13 @@ const StorybookPageSvg = React.memo(
   ({ model, className = '' }) => {
     if (!model) return null;
 
-    const {
-      backgroundSrc,
-      characterSrc,
-      isCharacterOnRight,
-      pageLabel,
-      textLines,
-      quoteLines,
-      textBlockWidth,
-      textHeight,
-    } = model;
-
-    const textBaseline = PDF_PAGE_HEIGHT * 0.7;
-    const textRectWidth = textBlockWidth + 40;
-    const textRectHeight = textHeight + 40;
-    const textRectX = isCharacterOnRight
-      ? Math.max(PDF_TEXT_MARGIN - 20, 0)
-      : PDF_PAGE_WIDTH - textBlockWidth - PDF_TEXT_MARGIN - 20;
-    const textX = isCharacterOnRight
-      ? PDF_TEXT_MARGIN
-      : PDF_PAGE_WIDTH - textBlockWidth - PDF_TEXT_MARGIN;
-    const textRectBottom = textBaseline - textHeight - 20;
-    const textRectSvgY = PDF_PAGE_HEIGHT - (textRectBottom + textRectHeight);
-
-    const quoteX = isCharacterOnRight ? PDF_PAGE_WIDTH - 260 : PDF_TEXT_MARGIN;
-    const quoteBaselineStart = PDF_PAGE_HEIGHT - 80;
-
-    const labelY = Math.max(PDF_PAGE_HEIGHT - 35, PDF_TEXT_MARGIN);
-    const labelSvgY = PDF_PAGE_HEIGHT - labelY;
-
-    const characterWidth = PDF_PAGE_WIDTH * PDF_CHARACTER_MAX_WIDTH_RATIO;
-    const characterHeight = PDF_PAGE_HEIGHT * PDF_CHARACTER_MAX_HEIGHT_RATIO;
-    const characterX = isCharacterOnRight ? PDF_PAGE_WIDTH - characterWidth : 0;
-    const characterY = PDF_PAGE_HEIGHT - characterHeight;
-    const characterPreserveAspectRatio = isCharacterOnRight ? 'xMaxYMax meet' : 'xMinYMax meet';
-
+    const { backgroundSrc, characterSrc, characterFrame, pageLabel, text, hebrew } = model;
+    const hasTextOverlay = Boolean(text?.lines?.length && text.overlay);
+    const hasHebrew = Boolean(hebrew?.lines?.length);
+    const blurId = React.useMemo(() => `storybook-blur-${pageLabel}`, [pageLabel]);
+    const maskId = React.useMemo(() => `storybook-mask-${pageLabel}`, [pageLabel]);
     const svgClasses = ['h-full', 'w-full', className].filter(Boolean).join(' ');
+    const toSvgY = (pdfY) => PDF_PAGE_HEIGHT - pdfY;
 
     return (
       <svg
@@ -293,6 +360,30 @@ const StorybookPageSvg = React.memo(
         xmlns="http://www.w3.org/2000/svg"
         preserveAspectRatio="xMidYMid meet"
       >
+        <defs>
+          {hasTextOverlay ? (
+            <>
+              <filter id={blurId} x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="15" edgeMode="duplicate" />
+              </filter>
+              <radialGradient id={`${maskId}-gradient`} cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0%" stopColor="white" stopOpacity="1" />
+                <stop offset="82%" stopColor="white" stopOpacity="1" />
+                <stop offset="100%" stopColor="white" stopOpacity="0" />
+              </radialGradient>
+              <mask id={maskId}>
+                <ellipse
+                  cx={text.overlay.x + text.overlay.width / 2}
+                  cy={text.overlay.y + text.overlay.height / 2}
+                  rx={text.overlay.width / 2.2}
+                  ry={text.overlay.height / 2}
+                  fill={`url(#${maskId}-gradient)`}
+                />
+              </mask>
+            </>
+          ) : null}
+        </defs>
+
         {backgroundSrc ? (
           <image
             href={backgroundSrc}
@@ -303,41 +394,54 @@ const StorybookPageSvg = React.memo(
             preserveAspectRatio="none"
           />
         ) : (
-          <rect x="0" y="0" width={PDF_PAGE_WIDTH} height={PDF_PAGE_HEIGHT} fill="#ffffff" />
+          <rect x="0" y="0" width={PDF_PAGE_WIDTH} height={PDF_PAGE_HEIGHT} fill="#10131a" />
         )}
 
-        {characterSrc ? (
+        {characterSrc && characterFrame ? (
           <image
             href={characterSrc}
-            x={characterX}
-            y={characterY}
-            width={characterWidth}
-            height={characterHeight}
-            preserveAspectRatio={characterPreserveAspectRatio}
+            x={characterFrame.x}
+            y={characterFrame.y}
+            width={characterFrame.width}
+            height={characterFrame.height}
+            preserveAspectRatio={characterFrame.preserveAspectRatio}
           />
         ) : null}
 
-        {textLines.length ? (
+        {hasTextOverlay ? (
           <>
-            <rect
-              x={textRectX}
-              y={textRectSvgY}
-              width={textRectWidth}
-              height={textRectHeight}
-              fill="#ffffff"
-              fillOpacity="0.5"
-            />
-            {textLines.map((line, index) => {
-              const baseline = textBaseline - index * PDF_LINE_HEIGHT - 18;
-              const svgY = PDF_PAGE_HEIGHT - baseline;
+            <g mask={`url(#${maskId})`}>
+              {backgroundSrc ? (
+                <image
+                  href={backgroundSrc}
+                  x="0"
+                  y="0"
+                  width={PDF_PAGE_WIDTH}
+                  height={PDF_PAGE_HEIGHT}
+                  preserveAspectRatio="none"
+                  filter={`url(#${blurId})`}
+                />
+              ) : (
+                <rect
+                  x={text.overlay.x}
+                  y={text.overlay.y}
+                  width={text.overlay.width}
+                  height={text.overlay.height}
+                  fill="rgba(0, 0, 0, 0.45)"
+                />
+              )}
+            </g>
+            {text.lines.map((line, index) => {
+              const baseline = text.baseline - index * PDF_LINE_HEIGHT - TEXT_BASELINE_OFFSET;
+              const svgY = toSvgY(baseline);
               return (
                 <text
                   key={`text-line-${pageLabel}-${index}`}
-                  x={textX}
+                  x={text.x}
                   y={svgY}
                   fontSize={PDF_FONT_SIZE}
                   fontFamily="Helvetica, Arial, sans-serif"
-                  fill="#000000"
+                  fill="#ffffff"
                   dominantBaseline="alphabetic"
                 >
                   {line}
@@ -347,39 +451,57 @@ const StorybookPageSvg = React.memo(
           </>
         ) : null}
 
-        {quoteLines.length
-          ? quoteLines.map((line, index) => {
-              const baseline = quoteBaselineStart - index * PDF_LINE_HEIGHT;
-              const svgY = PDF_PAGE_HEIGHT - baseline;
+        {hasHebrew ? (
+          <g>
+            {hebrew.lines.map((line, lineIndex) => {
+              const chars = line.split('');
+              if (!chars.length) return null;
+              const totalChars = Math.max(chars.length - 1, 1);
+              let cursorX = hebrew.x;
               return (
-                <text
-                  key={`quote-line-${pageLabel}-${index}`}
-                  x={quoteX}
-                  y={svgY}
-                  fontSize={PDF_FONT_SIZE}
-                  fontFamily="Helvetica, Arial, sans-serif"
-                  fontWeight="700"
-                  fill="#000000"
-                  dominantBaseline="alphabetic"
-                >
-                  {line}
-                </text>
+                <React.Fragment key={`hebrew-line-${pageLabel}-${lineIndex}`}>
+                  {chars.map((char, charIndex) => {
+                    const progress = totalChars > 0 ? charIndex / totalChars : 0.5;
+                    const sizeFactor = 1 + Math.cos(progress * Math.PI) * 0.3;
+                    const fontSize = HEBREW_BASE_FONT_SIZE * sizeFactor;
+                    const waveOffset = Math.sin(progress * Math.PI) * HEBREW_WAVE_AMPLITUDE;
+                    const pdfY =
+                      hebrew.baseline - lineIndex * HEBREW_LINE_HEIGHT + waveOffset;
+                    const svgY = toSvgY(pdfY);
+                    const x = cursorX;
+                    cursorX += fontSize * 0.6;
+                    const key = `hebrew-char-${pageLabel}-${lineIndex}-${charIndex}`;
+                    return (
+                      <React.Fragment key={key}>
+                        {[[-0.4, 0], [0.4, 0], [0, -0.4], [0, 0.4]].map(([dx, dy], outlineIdx) => (
+                          <text
+                            key={`${key}-outline-${outlineIdx}`}
+                            x={x + dx}
+                            y={svgY + dy}
+                            fontSize={fontSize}
+                            fontFamily="Helvetica, Arial, sans-serif"
+                            fill="rgba(0, 0, 0, 0.7)"
+                          >
+                            {char}
+                          </text>
+                        ))}
+                        <text
+                          x={x}
+                          y={svgY}
+                          fontSize={fontSize}
+                          fontFamily="Helvetica, Arial, sans-serif"
+                          fill="#ffffff"
+                        >
+                          {char}
+                        </text>
+                      </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
               );
-            })
-          : null}
-
-        <text
-          x={PDF_TEXT_MARGIN}
-          y={labelSvgY}
-          fontSize={14}
-          fontFamily="Helvetica, Arial, sans-serif"
-          fontWeight="700"
-          fill="#ffffff"
-          fillOpacity="0.65"
-          dominantBaseline="alphabetic"
-        >
-          {`Page ${pageLabel}`}
-        </text>
+            })}
+          </g>
+        ) : null}
       </svg>
     );
   },
@@ -391,8 +513,8 @@ const StorybookPageSvg = React.memo(
       prev.model.pageLabel === next.model.pageLabel &&
       prev.model.backgroundSrc === next.model.backgroundSrc &&
       prev.model.characterSrc === next.model.characterSrc &&
-      prev.model.textLines.join('\n') === next.model.textLines.join('\n') &&
-      prev.model.quoteLines.join('\n') === next.model.quoteLines.join('\n')
+      prev.model.text.lines.join('\n') === next.model.text.lines.join('\n') &&
+      prev.model.hebrew.lines.join('\n') === next.model.hebrew.lines.join('\n')
     );
   }
 );
