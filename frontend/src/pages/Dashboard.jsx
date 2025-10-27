@@ -380,23 +380,22 @@ function Dashboard() {
 
   return (
     <div className="page-wrapper">
-      <section className="dashboard-hero space-y-6">
+      <section className="section-card">
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.28em] text-foreground/50">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Operations overview
             </p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-              Stay ahead of every book, training, and generation run.
+            <h1 className="mt-2 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+              Dashboard
             </h1>
-            <p className="mt-3 text-sm text-foreground/70">
-              Scan high-impact metrics at a glance and jump into the right tool when something needs your attention.
+            <p className="mt-2 text-sm text-muted-foreground">
+              Monitor your books, trainings, and generation runs at a glance.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="outline"
-              className="border-white/20 bg-white/10 text-foreground/80 hover:bg-white/20"
               onClick={handleRefresh}
               disabled={refreshing}
             >
@@ -406,9 +405,9 @@ function Dashboard() {
                   refreshing && 'animate-spin'
                 )}
               />
-              {refreshing ? 'Refreshing…' : 'Refresh data'}
+              {refreshing ? 'Refreshing…' : 'Refresh'}
             </Button>
-            <Button asChild>
+            <Button asChild className="bg-brand-500 hover:bg-brand-600">
               <Link to="/books">
                 New book
                 <ArrowUpRight className="ml-2 h-4 w-4" />
@@ -416,22 +415,22 @@ function Dashboard() {
             </Button>
           </div>
         </header>
-        <div className="flex flex-wrap gap-3 text-xs text-foreground/70">
+        <div className="flex flex-wrap gap-2 text-xs">
           <span className="badge-ghost">
-            <Sparkles className="h-3 w-3 text-accent" />
+            <Sparkles className="h-3 w-3" />
             {formatPercent(generationStats.successRate)} generation success
           </span>
           <span className="badge-ghost">
-            <Users className="h-3 w-3 text-sky-300" />
+            <Users className="h-3 w-3" />
             {formatNumber(userStats.total)} active users
           </span>
           <span className="badge-ghost">
-            <Flame className="h-3 w-3 text-orange-300" />
+            <Flame className="h-3 w-3" />
             {formatNumber(trainingStats.total)} training runs
           </span>
           {lastUpdated && (
             <span className="badge-ghost">
-              <CheckCircle2 className="h-3 w-3 text-emerald-300" />
+              <CheckCircle2 className="h-3 w-3" />
               Updated {formatRelativeTime(lastUpdated)}
             </span>
           )}
@@ -439,12 +438,12 @@ function Dashboard() {
       </section>
 
       {errorMessages.length > 0 && (
-        <div className="panel border border-amber-500/30 bg-amber-500/10 text-sm text-amber-100">
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-200" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
             <div>
-              <p className="font-medium">Some data could not be refreshed.</p>
-              <p className="mt-1 text-foreground/75">
+              <p className="font-medium text-amber-900 dark:text-amber-100">Some data could not be refreshed.</p>
+              <p className="mt-1 text-amber-800 dark:text-amber-200">
                 {errorMessages.join(' • ')}
               </p>
             </div>
@@ -466,8 +465,8 @@ function Dashboard() {
               <article key={key} className="stat-card">
                 <div className="flex items-center justify-between">
                   <p className="stat-card__title">{label}</p>
-                  <span className="rounded-xl bg-white/10 p-2">
-                    <Icon className="h-5 w-5 text-accent/80" />
+                  <span className="rounded-lg bg-brand-500/10 p-2">
+                    <Icon className="h-5 w-5 text-brand-500" />
                   </span>
                 </div>
                 <p className="stat-card__value">{formatNumber(stat.value)}</p>
@@ -475,7 +474,7 @@ function Dashboard() {
                   <p
                     className={cn(
                       'stat-card__meta',
-                      stat.tone === 'warning' ? 'text-amber-300' : 'text-emerald-300'
+                      stat.tone === 'warning' ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
                     )}
                   >
                     {stat.delta}
@@ -492,14 +491,14 @@ function Dashboard() {
           <header className="panel-header">
             <div>
               <h3 className="panel-title">Latest activity</h3>
-              <p className="text-xs text-foreground/60">
+              <p className="text-xs text-muted-foreground">
                 Books, trainings, and generations arriving in chronological order.
               </p>
             </div>
           </header>
-          <div className="mt-5 space-y-3">
+          <div className="mt-5 space-y-2">
             {activityFeed.length === 0 && !loading ? (
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-foreground/70">
+              <div className="rounded-lg border border-border bg-secondary/50 p-4 text-sm text-muted-foreground">
                 No recent actions. Kick things off with a new book or training run.
               </div>
             ) : (
@@ -507,23 +506,23 @@ function Dashboard() {
                 <Link
                   key={event.id}
                   to={event.href}
-                  className="group flex items-center justify-between gap-4 rounded-2xl border border-transparent bg-transparent p-4 transition hover:border-white/20 hover:bg-white/10"
+                  className="group flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 transition-all hover:shadow-md hover:border-brand-500/30"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="rounded-xl bg-white/10 p-2">
-                      <event.icon className="h-5 w-5 text-accent/80" />
+                    <span className="rounded-lg bg-brand-500/10 p-2">
+                      <event.icon className="h-5 w-5 text-brand-500" />
                     </span>
                     <div>
-                      <p className="text-sm font-semibold tracking-tight text-foreground">
+                      <p className="text-sm font-semibold text-foreground">
                         {event.title}
                       </p>
-                      <p className="text-xs text-foreground/55">
+                      <p className="text-xs text-muted-foreground">
                         {event.status ? `${event.status} • ` : ''}
                         {formatRelativeTime(event.timestamp)}
                       </p>
                     </div>
                   </div>
-                  <ArrowUpRight className="h-4 w-4 text-foreground/50 transition group-hover:text-accent" />
+                  <ArrowUpRight className="h-4 w-4 text-muted-foreground transition group-hover:text-brand-500" />
                 </Link>
               ))
             )}
@@ -534,43 +533,43 @@ function Dashboard() {
           <header className="panel-header">
             <div>
               <h3 className="panel-title">System health</h3>
-              <p className="text-xs text-foreground/60">At-a-glance readiness across the stack.</p>
+              <p className="text-xs text-muted-foreground">At-a-glance readiness across the stack.</p>
             </div>
-            <div className="rounded-full border border-emerald-400/30 bg-emerald-400/15 px-3 py-1 text-xs font-medium text-emerald-200">
+            <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
               {formatPercent(healthSummary.systemScore)} healthy
             </div>
           </header>
           <div className="space-y-4 text-sm">
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-foreground/60">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>Training capacity</span>
-                <span>{formatPercent(healthSummary.trainingLoad)}</span>
+                <span className="font-medium text-foreground">{formatPercent(healthSummary.trainingLoad)}</span>
               </div>
-              <div className="h-2 rounded-full bg-white/10">
+              <div className="h-2 rounded-full bg-secondary">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-sky-400 via-accent to-purple-400"
+                  className="h-full rounded-full bg-brand-500"
                   style={{ width: `${Math.min(healthSummary.trainingLoad, 100)}%` }}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-foreground/60">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>Generation success</span>
-                <span>{formatPercent(healthSummary.generationSuccess)}</span>
+                <span className="font-medium text-foreground">{formatPercent(healthSummary.generationSuccess)}</span>
               </div>
-              <div className="h-2 rounded-full bg-white/10">
+              <div className="h-2 rounded-full bg-secondary">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-lime-400 to-emerald-500"
+                  className="h-full rounded-full bg-emerald-500"
                   style={{ width: `${Math.min(healthSummary.generationSuccess, 100)}%` }}
                 />
               </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-xs text-foreground/65">
-              <p className="flex items-center gap-2 font-medium text-foreground/75">
-                <BarChart3 className="h-4 w-4 text-accent" />
+            <div className="rounded-lg border border-border bg-secondary/50 p-4 text-xs">
+              <p className="flex items-center gap-2 font-medium text-foreground">
+                <BarChart3 className="h-4 w-4 text-brand-500" />
                 Focus points
               </p>
-              <p className="mt-2">
+              <p className="mt-2 text-muted-foreground">
                 {healthSummary.attentionItems ? (
                   <>
                     Review {formatNumber(healthSummary.attentionItems)} user
@@ -590,36 +589,36 @@ function Dashboard() {
           <header className="panel-header">
             <div>
               <h3 className="panel-title">Training pipeline</h3>
-              <p className="text-xs text-foreground/60">Where models stand right now.</p>
+              <p className="text-xs text-muted-foreground">Where models stand right now.</p>
             </div>
-            <Badge className="bg-emerald-500/20 text-emerald-200">
+            <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
               {formatPercent(trainingStats.successRate)} success
             </Badge>
           </header>
           <div className="grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-foreground/55">Active</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Active</p>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-foreground">
                 {formatNumber(trainingStats.active)}
               </p>
-              <p className="mt-1 text-xs text-foreground/60">Currently running jobs</p>
+              <p className="mt-1 text-xs text-muted-foreground">Currently running jobs</p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-foreground/55">Ready</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Ready</p>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-foreground">
                 {formatNumber(trainingStats.readyUsers)}
               </p>
-              <p className="mt-1 text-xs text-foreground/60">Users ready to generate</p>
+              <p className="mt-1 text-xs text-muted-foreground">Users ready to generate</p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-foreground/55">Needs review</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight text-amber-200">
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Needs review</p>
+              <p className="mt-2 text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
                 {formatNumber(trainingStats.failedUsers)}
               </p>
-              <p className="mt-1 text-xs text-foreground/60">Users flagged for action</p>
+              <p className="mt-1 text-xs text-muted-foreground">Users flagged for action</p>
             </div>
           </div>
-          <div className="space-y-3 text-xs text-foreground/60">
+          <div className="space-y-2 text-xs text-muted-foreground">
             <p>
               • Restart failed runs with updated datasets to recover {formatPercent(Math.min(trainingStats.successRate + 6, 100))}{' '}
               success rates.
@@ -632,46 +631,46 @@ function Dashboard() {
           <header className="panel-header">
             <div>
               <h3 className="panel-title">Quick actions</h3>
-              <p className="text-xs text-foreground/60">Tackle the next priority in seconds.</p>
+              <p className="text-xs text-muted-foreground">Tackle the next priority in seconds.</p>
             </div>
           </header>
           <div className="grid gap-3">
             <Button
               asChild
-              variant="secondary"
-              className="justify-between rounded-2xl border border-white/10 bg-white/10 px-4 py-5 text-left text-sm font-semibold hover:bg-white/20"
+              variant="outline"
+              className="justify-between px-4 py-5 h-auto text-left"
             >
               <Link to="/users">
-                Enroll a new user
+                <span className="font-semibold">Enroll a new user</span>
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </Button>
             <Button
               asChild
-              className="justify-between rounded-2xl border border-white/10 bg-white/10 px-4 py-5 text-left text-sm font-semibold hover:bg-white/20"
+              className="justify-between px-4 py-5 h-auto text-left bg-brand-500 hover:bg-brand-600"
             >
               <Link to="/generate">
-                Launch image generation
+                <span className="font-semibold">Launch image generation</span>
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </Button>
             <Button
               asChild
               variant="outline"
-              className="justify-between rounded-2xl border border-white/10 bg-transparent px-4 py-5 text-left text-sm font-semibold hover:bg-white/10"
+              className="justify-between px-4 py-5 h-auto text-left"
             >
               <Link to="/automate">
-                Configure automation workflow
+                <span className="font-semibold">Configure automation workflow</span>
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </Button>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-xs text-foreground/65">
-            <p className="flex items-center gap-2 font-medium text-foreground/75">
-              <Sparkles className="h-4 w-4 text-accent" />
+          <div className="rounded-lg border border-border bg-secondary/50 p-4 text-xs">
+            <p className="flex items-center gap-2 font-medium text-foreground">
+              <Sparkles className="h-4 w-4 text-brand-500" />
               Pro tip
             </p>
-            <p className="mt-2">
+            <p className="mt-2 text-muted-foreground">
               Keep the dashboard clean by clearing failed trainings after you re-run them. The health score reflects resolved items immediately.
             </p>
           </div>

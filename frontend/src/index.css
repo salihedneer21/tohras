@@ -2,31 +2,76 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 257 100% 57%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 257 100% 57%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 8%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 8%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 257 100% 57%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 257 100% 57%;
+  }
 }
 
-body {
-  @apply min-h-screen overflow-x-hidden bg-background text-foreground antialiased;
-  background-image: radial-gradient(circle at 0% 0%, rgba(58, 122, 254, 0.18), transparent 55%),
-    radial-gradient(circle at 100% 0%, rgba(140, 80, 255, 0.16), transparent 55%),
-    linear-gradient(170deg, #15171d 0%, #11131a 40%, #0e1016 100%);
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
 }
 
-.glass-panel {
-  @apply bg-card border border-border/80 shadow-subtle;
-}
+@layer components {
+  .page-wrapper {
+    @apply container mx-auto px-4 py-6 space-y-6 max-w-7xl;
+  }
 
-.page-wrapper {
-  @apply container space-y-10 py-8 sm:space-y-12 sm:py-10 lg:py-12;
-}
+  .section-card {
+    @apply rounded-xl px-6 py-6 space-y-4 shadow-sm;
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
 
-.section-card {
-  @apply glass-panel rounded-lg px-6 py-6 sm:px-8 sm:py-8 space-y-6;
-}
-
-.grid-responsive {
-  @apply grid gap-4 sm:gap-6 lg:gap-8;
+  .grid-responsive {
+    @apply grid gap-4 sm:gap-5 lg:gap-6;
+  }
 }
 
 /* Performance optimizations for preview modal */
@@ -76,59 +121,51 @@ img {
   -webkit-backdrop-filter: blur(4px);
 }
 
-.nav-shell {
-  @apply mx-auto flex max-w-5xl items-center justify-between gap-4 rounded-2xl border border-white/10 bg-background/80 px-4 py-3 shadow-subtle backdrop-blur;
-}
+@layer components {
+  .stat-grid {
+    @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
+  }
 
-.nav-links {
-  @apply hidden items-center gap-2 rounded-full border border-transparent bg-transparent px-2 py-1 md:flex;
-}
+  .stat-card {
+    @apply rounded-xl p-5 shadow-sm transition-all hover:shadow-md;
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
 
-.nav-link {
-  @apply rounded-full px-3.5 py-2 text-sm font-medium text-foreground/70 transition hover:text-foreground;
-}
+  .stat-card__title {
+    @apply text-sm font-medium;
+    color: hsl(var(--muted-foreground));
+  }
 
-.nav-link--active {
-  @apply bg-accent text-accent-foreground shadow-subtle;
-}
+  .stat-card__value {
+    @apply mt-1 text-3xl font-bold tracking-tight;
+    color: hsl(var(--foreground));
+  }
 
-.dashboard-hero {
-  @apply rounded-3xl border border-white/10 bg-white/10 p-6 sm:p-8;
-  background-image: radial-gradient(circle at top right, rgba(58, 122, 254, 0.25), transparent 45%);
-}
+  .stat-card__meta {
+    @apply mt-2 text-xs font-medium;
+    color: hsl(var(--muted-foreground));
+  }
 
-.stat-grid {
-  @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
-}
+  .panel {
+    @apply rounded-xl p-6 shadow-sm;
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+  }
 
-.stat-card {
-  @apply rounded-2xl border border-white/10 bg-background/70 p-5 shadow-subtle transition hover:border-white/20;
-}
+  .panel-header {
+    @apply flex items-center justify-between gap-4 mb-4;
+  }
 
-.stat-card__title {
-  @apply text-sm font-medium text-foreground/70;
-}
+  .panel-title {
+    @apply text-lg font-semibold tracking-tight;
+    color: hsl(var(--foreground));
+  }
 
-.stat-card__value {
-  @apply mt-1 text-3xl font-semibold tracking-tight text-foreground;
-}
-
-.stat-card__meta {
-  @apply mt-2 text-xs font-medium text-foreground/55;
-}
-
-.panel {
-  @apply rounded-3xl border border-white/10 bg-background/70 p-6 shadow-subtle;
-}
-
-.panel-header {
-  @apply flex items-center justify-between gap-4;
-}
-
-.panel-title {
-  @apply text-lg font-semibold tracking-tight text-foreground;
-}
-
-.badge-ghost {
-  @apply inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-medium text-foreground/75;
+  .badge-ghost {
+    @apply inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium;
+    background-color: hsl(var(--secondary));
+    border: 1px solid hsl(var(--border));
+    color: hsl(var(--secondary-foreground));
+  }
 }

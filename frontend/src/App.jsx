@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import Navbar from './components/Navbar';
+import { ThemeProvider } from './contexts/ThemeContext';
+import Sidebar from './components/Sidebar';
 import Books from './pages/Books';
 import Prompts from './pages/Prompts';
 import Users from './pages/Users';
@@ -13,53 +14,51 @@ import Dashboard from './pages/Dashboard';
 
 function App() {
   return (
-    <Router>
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 4200,
-          className:
-            'glass-panel border border-border bg-card text-foreground shadow-subtle',
-          style: {
-            background: '#2a2d33',
-            color: '#f3f3f3',
-            borderRadius: '0.8rem',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-          },
-          success: {
-            iconTheme: {
-              primary: '#569cd6',
-              secondary: '#1e1e1e',
+    <ThemeProvider>
+      <Router>
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4200,
+            className: 'bg-card border border-border text-foreground shadow-lg rounded-lg',
+            style: {
+              borderRadius: '0.5rem',
             },
-          },
-          error: {
-            iconTheme: {
-              primary: '#f97316',
-              secondary: '#1e1e1e',
+            success: {
+              iconTheme: {
+                primary: '#4318FF',
+                secondary: '#ffffff',
+              },
             },
-          },
-        }}
-      />
-      <div className="min-h-screen bg-background">
-        <Navbar />
-        <main className="pt-32 sm:pt-36">
-          <div className="page-wrapper">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/books" element={<Books />} />
-              <Route path="/prompts" element={<Prompts />} />
-              <Route path="/users" element={<Users />} />
-              <Route path="/training" element={<Training />} />
-              <Route path="/generate" element={<Generate />} />
-              <Route path="/evaluate" element={<Evaluate />} />
-              <Route path="/storybooks" element={<Storybooks />} />
-              <Route path="/automate" element={<Automate />} />
-            </Routes>
-          </div>
-        </main>
-      </div>
-    </Router>
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#ffffff',
+              },
+            },
+          }}
+        />
+        <div className="min-h-screen bg-background">
+          <Sidebar />
+          <main className="lg:pl-72">
+            <div className="page-wrapper">
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/books" element={<Books />} />
+                <Route path="/prompts" element={<Prompts />} />
+                <Route path="/users" element={<Users />} />
+                <Route path="/training" element={<Training />} />
+                <Route path="/generate" element={<Generate />} />
+                <Route path="/evaluate" element={<Evaluate />} />
+                <Route path="/storybooks" element={<Storybooks />} />
+                <Route path="/automate" element={<Automate />} />
+              </Routes>
+            </div>
+          </main>
+        </div>
+      </Router>
+    </ThemeProvider>
   );
 }
 
