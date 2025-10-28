@@ -731,6 +731,64 @@ exports.createBook = async (req, res) => {
       );
     }
 
+    // Handle cover page data
+    let coverPageData = null;
+    if (req.body.coverPage) {
+      const coverPagePayload = typeof req.body.coverPage === 'string'
+        ? JSON.parse(req.body.coverPage)
+        : req.body.coverPage;
+
+      const coverPageBgFile = req.files?.coverPageBackgroundImage?.[0];
+      const coverPageCharFile = req.files?.coverPageCharacterImage?.[0];
+      const coverPageQrFile = req.files?.coverPageQrCode?.[0];
+
+      let backgroundImage = null;
+      let characterImage = null;
+      let qrCode = null;
+
+      if (coverPageBgFile) {
+        const bgKey = `books/${slug}/cover-page/background-${Date.now()}.${coverPageBgFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageBgFile.buffer, bgKey, coverPageBgFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(bgKey);
+        backgroundImage = buildImageResponse(coverPageBgFile, bgKey, url);
+      }
+
+      if (coverPageCharFile) {
+        const charKey = `books/${slug}/cover-page/character-${Date.now()}.${coverPageCharFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageCharFile.buffer, charKey, coverPageCharFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(charKey);
+        characterImage = buildImageResponse(coverPageCharFile, charKey, url);
+      }
+
+      if (coverPageQrFile) {
+        const qrKey = `books/${slug}/cover-page/qr-${Date.now()}.${coverPageQrFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageQrFile.buffer, qrKey, coverPageQrFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(qrKey);
+        qrCode = buildImageResponse(coverPageQrFile, qrKey, url);
+      }
+
+      coverPageData = {
+        backgroundImage,
+        characterImage,
+        leftSide: {
+          title: normalizeString(coverPagePayload.leftSide?.title),
+          content: normalizeString(coverPagePayload.leftSide?.content),
+          bottomText: normalizeString(coverPagePayload.leftSide?.bottomText),
+        },
+        qrCode,
+        rightSide: {
+          mainTitle: normalizeString(coverPagePayload.rightSide?.mainTitle),
+          subtitle: normalizeString(coverPagePayload.rightSide?.subtitle),
+        },
+      };
+    }
+
     const book = await Book.create({
       name,
       description,
@@ -739,6 +797,7 @@ exports.createBook = async (req, res) => {
       slug,
       coverImage,
       pages,
+      coverPage: coverPageData,
     });
 
     res.status(201).json({
@@ -978,6 +1037,90 @@ exports.updateBook = async (req, res) => {
     }
     book.coverImage = coverImage;
     book.pages = pages;
+
+    // Handle cover page data
+    if (req.body.coverPage) {
+      const coverPagePayload = typeof req.body.coverPage === 'string'
+        ? JSON.parse(req.body.coverPage)
+        : req.body.coverPage;
+
+      const coverPageBgFile = req.files?.coverPageBackgroundImage?.[0];
+      const coverPageCharFile = req.files?.coverPageCharacterImage?.[0];
+      const coverPageQrFile = req.files?.coverPageQrCode?.[0];
+
+      let backgroundImage = book.coverPage?.backgroundImage || null;
+      let characterImage = book.coverPage?.characterImage || null;
+      let qrCode = book.coverPage?.qrCode || null;
+
+      // Handle background image
+      if (coverPageBgFile) {
+        if (backgroundImage?.key) {
+          keysToDelete.push(backgroundImage.key);
+        }
+        const bgKey = `books/${slug}/cover-page/background-${Date.now()}.${coverPageBgFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageBgFile.buffer, bgKey, coverPageBgFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(bgKey);
+        backgroundImage = buildImageResponse(coverPageBgFile, bgKey, url);
+      } else if (coverPagePayload.removeBackgroundImage) {
+        if (backgroundImage?.key) {
+          keysToDelete.push(backgroundImage.key);
+        }
+        backgroundImage = null;
+      }
+
+      // Handle character image
+      if (coverPageCharFile) {
+        if (characterImage?.key) {
+          keysToDelete.push(characterImage.key);
+        }
+        const charKey = `books/${slug}/cover-page/character-${Date.now()}.${coverPageCharFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageCharFile.buffer, charKey, coverPageCharFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(charKey);
+        characterImage = buildImageResponse(coverPageCharFile, charKey, url);
+      } else if (coverPagePayload.removeCharacterImage) {
+        if (characterImage?.key) {
+          keysToDelete.push(characterImage.key);
+        }
+        characterImage = null;
+      }
+
+      // Handle QR code
+      if (coverPageQrFile) {
+        if (qrCode?.key) {
+          keysToDelete.push(qrCode.key);
+        }
+        const qrKey = `books/${slug}/cover-page/qr-${Date.now()}.${coverPageQrFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(coverPageQrFile.buffer, qrKey, coverPageQrFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(qrKey);
+        qrCode = buildImageResponse(coverPageQrFile, qrKey, url);
+      } else if (coverPagePayload.removeQrCode) {
+        if (qrCode?.key) {
+          keysToDelete.push(qrCode.key);
+        }
+        qrCode = null;
+      }
+
+      book.coverPage = {
+        backgroundImage,
+        characterImage,
+        leftSide: {
+          title: normalizeString(coverPagePayload.leftSide?.title),
+          content: normalizeString(coverPagePayload.leftSide?.content),
+          bottomText: normalizeString(coverPagePayload.leftSide?.bottomText),
+        },
+        qrCode,
+        rightSide: {
+          mainTitle: normalizeString(coverPagePayload.rightSide?.mainTitle),
+          subtitle: normalizeString(coverPagePayload.rightSide?.subtitle),
+        },
+      };
+    }
 
     const updatedBook = await book.save();
 
@@ -1725,6 +1868,78 @@ exports.updateBookStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update book status',
+      error: error.message,
+    });
+  }
+};
+
+exports.generateCoverPreview = async (req, res) => {
+  try {
+    const { leftSide, rightSide, backgroundImageUrl, characterImageUrl, qrCodeUrl } = req.body;
+    const files = req.files || {};
+
+    // Parse JSON data
+    const leftSideData = leftSide ? JSON.parse(leftSide) : {};
+    const rightSideData = rightSide ? JSON.parse(rightSide) : {};
+
+    // Get background image (either from file upload or URL)
+    let backgroundImageBuffer;
+    if (files.backgroundImage && files.backgroundImage[0]) {
+      backgroundImageBuffer = files.backgroundImage[0].buffer;
+    } else if (backgroundImageUrl) {
+      // If URL is provided, we'll pass it to the generator
+      // The generator can handle fetching from S3 signed URL
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Background image is required',
+      });
+    }
+
+    // Get character image (optional)
+    let characterImageBuffer;
+    if (files.characterImage && files.characterImage[0]) {
+      characterImageBuffer = files.characterImage[0].buffer;
+    }
+
+    // Get QR code image (optional)
+    let qrCodeBuffer;
+    if (files.qrCode && files.qrCode[0]) {
+      qrCodeBuffer = files.qrCode[0].buffer;
+    }
+
+    // Import the cover generator
+    const { generateCoverPage } = require('../utils/coverGenerator');
+
+    // Generate the cover preview
+    const previewBuffer = await generateCoverPage({
+      backgroundImage: backgroundImageBuffer || backgroundImageUrl,
+      characterImage: characterImageBuffer || characterImageUrl,
+      leftSide: leftSideData,
+      rightSide: rightSideData,
+      qrCode: qrCodeBuffer || qrCodeUrl,
+    });
+
+    // Upload to S3 temporarily with a preview key
+    const previewKey = `temp/cover-previews/${Date.now()}-${Math.random().toString(36).substring(7)}.png`;
+    await uploadBufferToS3(previewBuffer, previewKey, 'image/png');
+
+    // Get a signed URL for the preview (expires in 1 hour)
+    const previewUrl = await getSignedUrlForKey(previewKey, 3600);
+
+    res.status(200).json({
+      success: true,
+      message: 'Cover preview generated successfully',
+      data: {
+        previewUrl,
+        previewKey,
+      },
+    });
+  } catch (error) {
+    console.error('Error generating cover preview:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate cover preview',
       error: error.message,
     });
   }
