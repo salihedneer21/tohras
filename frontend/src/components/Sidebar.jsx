@@ -12,7 +12,8 @@ import {
   Menu,
   ChevronDown,
   ChevronRight,
-  X
+  X,
+  Settings as SettingsIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -41,6 +42,11 @@ const NAVIGATION = [
         path: '/storybooks',
         label: 'Storybooks',
         icon: GraduationCap
+      },
+      {
+        path: '/settings',
+        label: 'Settings',
+        icon: SettingsIcon
       },
     ]
   },
