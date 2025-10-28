@@ -65,6 +65,10 @@ export const bookAPI = {
     api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/select`, data),
   getStorybookJobs: (id, params) => api.get(`/books/${id}/storybooks/jobs`, { params }),
   getStorybookJob: (id, jobId) => api.get(`/books/${id}/storybooks/jobs/${jobId}`),
+  generateCoverPreview: (formData) =>
+    api.post('/books/cover-preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 };
 
 // User API

@@ -33,6 +33,7 @@ import {
   SelectItem,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
@@ -89,6 +90,38 @@ const createEmptyBookForm = () => ({
     action: 'remove',
   },
   pages: [createEmptyPage()],
+  coverPage: {
+    backgroundImage: {
+      existing: null,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      remove: false,
+    },
+    characterImage: {
+      existing: null,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      remove: false,
+    },
+    leftSide: {
+      title: '',
+      content: '',
+      bottomText: '',
+    },
+    qrCode: {
+      existing: null,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      remove: false,
+    },
+    rightSide: {
+      mainTitle: '',
+      subtitle: '',
+    },
+  },
 });
 
 const revokeIfNeeded = (preview, isObjectUrl) => {
@@ -106,6 +139,9 @@ function Books() {
   const [editingBook, setEditingBook] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [viewerImage, setViewerImage] = useState(null);
+  const [activeTab, setActiveTab] = useState('story-pages');
+  const [coverPreview, setCoverPreview] = useState(null);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
 
   useEffect(() => {
     fetchBooks();
@@ -136,12 +172,19 @@ function Books() {
         revokeIfNeeded(page.qr.preview, page.qr.previewIsObject);
       }
     });
+    // Revoke cover page image URLs
+    if (formState.coverPage) {
+      revokeIfNeeded(formState.coverPage.backgroundImage?.preview, formState.coverPage.backgroundImage?.previewIsObject);
+      revokeIfNeeded(formState.coverPage.characterImage?.preview, formState.coverPage.characterImage?.previewIsObject);
+      revokeIfNeeded(formState.coverPage.qrCode?.preview, formState.coverPage.qrCode?.previewIsObject);
+    }
     setFormState(createEmptyBookForm());
     setEditingBook(null);
     setFormMode('create');
     setShowForm(false);
     setIsSaving(false);
-  }, [formState.cover, formState.pages]);
+    setActiveTab('story-pages');
+  }, [formState.cover, formState.pages, formState.coverPage]);
 
   const openCreateForm = () => {
     resetForm();
@@ -210,6 +253,38 @@ function Books() {
               };
             })
           : [createEmptyPage()],
+      coverPage: {
+        backgroundImage: {
+          existing: book.coverPage?.backgroundImage || null,
+          file: null,
+          preview: book.coverPage?.backgroundImage?.url || null,
+          previewIsObject: false,
+          remove: false,
+        },
+        characterImage: {
+          existing: book.coverPage?.characterImage || null,
+          file: null,
+          preview: book.coverPage?.characterImage?.url || null,
+          previewIsObject: false,
+          remove: false,
+        },
+        leftSide: {
+          title: book.coverPage?.leftSide?.title || '',
+          content: book.coverPage?.leftSide?.content || '',
+          bottomText: book.coverPage?.leftSide?.bottomText || '',
+        },
+        qrCode: {
+          existing: book.coverPage?.qrCode || null,
+          file: null,
+          preview: book.coverPage?.qrCode?.url || null,
+          previewIsObject: false,
+          remove: false,
+        },
+        rightSide: {
+          mainTitle: book.coverPage?.rightSide?.mainTitle || '',
+          subtitle: book.coverPage?.rightSide?.subtitle || '',
+        },
+      },
     });
 
     setEditingBook(book);
@@ -455,6 +530,200 @@ const handleRemovePageImage = (index) => {
   });
 };
 
+  // Cover Page handlers
+  const handleCoverPageBgChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.backgroundImage.preview, nextCoverPage.backgroundImage.previewIsObject);
+
+      nextCoverPage.backgroundImage = {
+        ...nextCoverPage.backgroundImage,
+        file,
+        preview: URL.createObjectURL(file),
+        previewIsObject: true,
+        remove: false,
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleRemoveCoverPageBg = () => {
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.backgroundImage.preview, nextCoverPage.backgroundImage.previewIsObject);
+
+      nextCoverPage.backgroundImage = {
+        existing: nextCoverPage.backgroundImage.existing,
+        file: null,
+        preview: null,
+        previewIsObject: false,
+        remove: Boolean(nextCoverPage.backgroundImage.existing),
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleCoverPageCharacterChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.characterImage.preview, nextCoverPage.characterImage.previewIsObject);
+
+      nextCoverPage.characterImage = {
+        ...nextCoverPage.characterImage,
+        file,
+        preview: URL.createObjectURL(file),
+        previewIsObject: true,
+        remove: false,
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleRemoveCoverPageCharacter = () => {
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.characterImage.preview, nextCoverPage.characterImage.previewIsObject);
+
+      nextCoverPage.characterImage = {
+        existing: nextCoverPage.characterImage.existing,
+        file: null,
+        preview: null,
+        previewIsObject: false,
+        remove: Boolean(nextCoverPage.characterImage.existing),
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleCoverPageQrChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.qrCode.preview, nextCoverPage.qrCode.previewIsObject);
+
+      nextCoverPage.qrCode = {
+        ...nextCoverPage.qrCode,
+        file,
+        preview: URL.createObjectURL(file),
+        previewIsObject: true,
+        remove: false,
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleRemoveCoverPageQr = () => {
+    setFormState((prev) => {
+      const nextCoverPage = { ...prev.coverPage };
+      revokeIfNeeded(nextCoverPage.qrCode.preview, nextCoverPage.qrCode.previewIsObject);
+
+      nextCoverPage.qrCode = {
+        existing: nextCoverPage.qrCode.existing,
+        file: null,
+        preview: null,
+        previewIsObject: false,
+        remove: Boolean(nextCoverPage.qrCode.existing),
+      };
+
+      return { ...prev, coverPage: nextCoverPage };
+    });
+  };
+
+  const handleCoverPageFieldChange = (section, field, value) => {
+    setFormState((prev) => ({
+      ...prev,
+      coverPage: {
+        ...prev.coverPage,
+        [section]: {
+          ...prev.coverPage[section],
+          [field]: value,
+        },
+      },
+    }));
+  };
+
+  const handleGeneratePreview = async () => {
+    // Validate required fields
+    if (!formState.coverPage.backgroundImage.preview) {
+      toast.error('Please upload a background image first');
+      return;
+    }
+
+    const hasLeftContent =
+      formState.coverPage.leftSide.title ||
+      formState.coverPage.leftSide.content;
+    const hasRightContent = formState.coverPage.rightSide.mainTitle;
+
+    if (!hasLeftContent && !hasRightContent) {
+      toast.error('Please fill in at least some text fields');
+      return;
+    }
+
+    setIsGeneratingPreview(true);
+
+    try {
+      const formData = new FormData();
+
+      // Add cover page data
+      formData.append('leftSide', JSON.stringify({
+        title: formState.coverPage.leftSide.title || '',
+        content: formState.coverPage.leftSide.content || '',
+        bottomText: formState.coverPage.leftSide.bottomText || '',
+      }));
+      formData.append('rightSide', JSON.stringify({
+        mainTitle: formState.coverPage.rightSide.mainTitle || '',
+        subtitle: formState.coverPage.rightSide.subtitle || '',
+      }));
+
+      // Add background image
+      if (formState.coverPage.backgroundImage.file) {
+        formData.append('backgroundImage', formState.coverPage.backgroundImage.file);
+      } else if (formState.coverPage.backgroundImage.existing?.url) {
+        formData.append('backgroundImageUrl', formState.coverPage.backgroundImage.existing.url);
+      }
+
+      // Add character image
+      if (formState.coverPage.characterImage.file) {
+        formData.append('characterImage', formState.coverPage.characterImage.file);
+      } else if (formState.coverPage.characterImage.existing?.url) {
+        formData.append('characterImageUrl', formState.coverPage.characterImage.existing.url);
+      }
+
+      // Add QR code if present
+      if (formState.coverPage.qrCode.file) {
+        formData.append('qrCode', formState.coverPage.qrCode.file);
+      } else if (formState.coverPage.qrCode.existing?.url) {
+        formData.append('qrCodeUrl', formState.coverPage.qrCode.existing.url);
+      }
+
+      // Call API to generate preview
+      const response = await bookAPI.generateCoverPreview(formData);
+
+      if (response.data?.previewUrl) {
+        setCoverPreview(response.data.previewUrl);
+        toast.success('Preview generated successfully!');
+      }
+    } catch (error) {
+      toast.error(`Failed to generate preview: ${error.message}`);
+      console.error('Preview generation error:', error);
+    } finally {
+      setIsGeneratingPreview(false);
+    }
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (isSaving) return;
@@ -563,6 +832,36 @@ const handleRemovePageImage = (index) => {
     pageQrFiles.forEach((file) => {
       formData.append('pageQrImages', file);
     });
+
+    // Add cover page data
+    const coverPageData = {
+      leftSide: {
+        title: formState.coverPage.leftSide.title || '',
+        content: formState.coverPage.leftSide.content || '',
+        bottomText: formState.coverPage.leftSide.bottomText || '',
+      },
+      rightSide: {
+        mainTitle: formState.coverPage.rightSide.mainTitle || '',
+        subtitle: formState.coverPage.rightSide.subtitle || '',
+      },
+      hasNewBackgroundImage: Boolean(formState.coverPage.backgroundImage.file),
+      removeBackgroundImage: Boolean(formState.coverPage.backgroundImage.remove) && !formState.coverPage.backgroundImage.file,
+      hasNewCharacterImage: Boolean(formState.coverPage.characterImage.file),
+      removeCharacterImage: Boolean(formState.coverPage.characterImage.remove) && !formState.coverPage.characterImage.file,
+      hasNewQrCode: Boolean(formState.coverPage.qrCode.file),
+      removeQrCode: Boolean(formState.coverPage.qrCode.remove) && !formState.coverPage.qrCode.file,
+    };
+    formData.append('coverPage', JSON.stringify(coverPageData));
+
+    if (formState.coverPage.backgroundImage.file) {
+      formData.append('coverPageBackgroundImage', formState.coverPage.backgroundImage.file);
+    }
+    if (formState.coverPage.characterImage.file) {
+      formData.append('coverPageCharacterImage', formState.coverPage.characterImage.file);
+    }
+    if (formState.coverPage.qrCode.file) {
+      formData.append('coverPageQrCode', formState.coverPage.qrCode.file);
+    }
 
     setIsSaving(true);
 
@@ -835,18 +1134,25 @@ const handleRemovePageImage = (index) => {
               </div>
 
               <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <Label>Pages</Label>
-                    <p className="text-xs text-foreground/50">
-                      Add story beats with accompanying background visuals for each page.
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" className="gap-2" onClick={handleAddPage}>
-                    <Plus className="h-4 w-4" />
-                    Add page
-                  </Button>
-                </div>
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="story-pages">Story Pages</TabsTrigger>
+                    <TabsTrigger value="cover-page">Cover Page</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="story-pages" className="space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <Label>Story Pages</Label>
+                        <p className="text-xs text-foreground/50">
+                          Add story beats with accompanying background visuals for each page.
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" className="gap-2" onClick={handleAddPage}>
+                        <Plus className="h-4 w-4" />
+                        Add page
+                      </Button>
+                    </div>
 
                 <div className="space-y-4">
                   {formState.pages.map((page, index) => (
@@ -888,22 +1194,6 @@ const handleRemovePageImage = (index) => {
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor={`page-type-${index}`}>Page type</Label>
-                        <Select
-                          value={page.pageType === 'cover' ? 'cover' : 'story'}
-                          onValueChange={(value) => handlePageTypeChange(index, value)}
-                        >
-                          <SelectTrigger id={`page-type-${index}`} className="w-full sm:w-48">
-                            <SelectValue placeholder="Select page type" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="story">Story page</SelectItem>
-                            <SelectItem value="cover">Cover page</SelectItem>
-                          </SelectContent>
-                        </Select>
                       </div>
 
                       <div className="space-y-2">
@@ -996,148 +1286,323 @@ const handleRemovePageImage = (index) => {
                           Saved for future character image generation.
                         </p>
                       </div>
-
-                      {page.pageType === 'cover' && (
-                        <>
-                          <div className="space-y-2">
-                            <Label htmlFor={`page-cover-headline-${index}`}>
-                              Cover headline
-                            </Label>
-                            <Textarea
-                              id={`page-cover-headline-${index}`}
-                              minRows={2}
-                              placeholder="Join {name} on an unforgettable adventure..."
-                              value={page.cover?.headline || ''}
-                              onChange={(event) =>
-                                handleCoverHeadlineChange(index, event.target.value)
-                              }
-                            />
-                            <p className="text-xs text-foreground/50">
-                              This text renders above the blur panel. Use {`{name}`} to inject the reader's name.
-                            </p>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor={`page-cover-body-${index}`}>
-                              Cover body (optional)
-                            </Label>
-                            <Textarea
-                              id={`page-cover-body-${index}`}
-                              minRows={4}
-                              placeholder="Leave blank to reuse the narration above."
-                              value={page.cover?.bodyOverride || ''}
-                              onChange={(event) =>
-                                handleCoverBodyOverrideChange(index, event.target.value)
-                              }
-                            />
-                            <p className="text-xs text-foreground/50">
-                              If provided, this replaces the narration text for the blurred copy block on the back cover.
-                            </p>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor={`page-cover-footer-${index}`}>
-                              Cover footer
-                            </Label>
-                            <Textarea
-                              id={`page-cover-footer-${index}`}
-                              minRows={2}
-                              placeholder="Shop more books at …"
-                              value={page.cover?.footer || ''}
-                              onChange={(event) =>
-                                handleCoverFooterChange(index, event.target.value)
-                              }
-                            />
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <input
-                              id={`page-cover-uppercase-${index}`}
-                              type="checkbox"
-                              checked={page.cover?.uppercaseName ?? true}
-                              onChange={(event) =>
-                                handleCoverUppercaseChange(index, event.target.checked)
-                              }
-                              className="h-4 w-4"
-                            />
-                            <Label htmlFor={`page-cover-uppercase-${index}`} className="text-sm">
-                              Render {`{name}`} in uppercase for the headline and body.
-                            </Label>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label>QR code image</Label>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  document
-                                    .getElementById(`page-qr-${index}`)
-                                    ?.click()
-                                }
-                              >
-                                <ImageIcon className="mr-2 h-4 w-4" />
-                                {page.qr?.preview ? 'Change QR code' : 'Upload QR code'}
-                              </Button>
-                              {page.qr?.preview && (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-red-300 hover:text-red-200"
-                                  onClick={() => handleRemoveCoverQr(index)}
-                                >
-                                  Remove
-                                </Button>
-                              )}
-                              <input
-                                id={`page-qr-${index}`}
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                                onChange={(event) => handleCoverQrChange(index, event)}
-                              />
-                            </div>
-                            {page.qr?.preview ? (
-                              <div className="relative w-40 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
-                                <img
-                                  src={page.qr.preview}
-                                  alt={`Page ${index + 1} QR code`}
-                                  className="h-40 w-full object-contain"
-                                  onClick={() =>
-                                    openImageViewer(
-                                      page.qr.file
-                                        ? {
-                                            url: page.qr.preview,
-                                            size: page.qr.file.size,
-                                            originalName: page.qr.file.name,
-                                          }
-                                        : page.qr.existing,
-                                      `Page ${index + 1} QR code`
-                                    )
-                                  }
-                                />
-                              </div>
-                            ) : (
-                              <p className="text-xs text-foreground/50">
-                                Attach the QR artwork displayed on the cover.
-                              </p>
-                            )}
-                          </div>
-                        </>
-                      )}
                     </div>
                   ))}
                 </div>
+                  </TabsContent>
+
+                  <TabsContent value="cover-page" className="space-y-4">
+                    <div className="space-y-3">
+                      <div>
+                        <Label className="text-base">Cover Page Editor</Label>
+                        <p className="text-xs text-foreground/50 mt-1">
+                          Design the backcover of your book with customizable text and images. Use {'{name}'} as a dynamic placeholder.
+                        </p>
+                      </div>
+
+                      {/* Background Image */}
+                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <Label>Background Image</Label>
+                            <p className="text-xs text-foreground/50">
+                              Upload the background image for the cover page.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => document.getElementById('coverPageBgInput')?.click()}
+                            >
+                              <ImageIcon className="mr-2 h-4 w-4" />
+                              {formState.coverPage.backgroundImage.preview ? 'Change image' : 'Upload image'}
+                            </Button>
+                            {formState.coverPage.backgroundImage.preview && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-300 hover:text-red-200"
+                                onClick={handleRemoveCoverPageBg}
+                              >
+                                Remove
+                              </Button>
+                            )}
+                            <input
+                              id="coverPageBgInput"
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={handleCoverPageBgChange}
+                            />
+                          </div>
+                        </div>
+                        {formState.coverPage.backgroundImage.preview ? (
+                          <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+                            <img
+                              src={formState.coverPage.backgroundImage.preview}
+                              alt="Cover page background"
+                              className="h-48 w-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <p className="text-xs text-foreground/50">No background image selected.</p>
+                        )}
+                      </div>
+
+                      {/* Character Image */}
+                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <Label>Character Image</Label>
+                            <p className="text-xs text-foreground/50">
+                              Upload the character image to be displayed on the cover.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => document.getElementById('coverPageCharacterInput')?.click()}
+                            >
+                              <ImageIcon className="mr-2 h-4 w-4" />
+                              {formState.coverPage.characterImage.preview ? 'Change image' : 'Upload image'}
+                            </Button>
+                            {formState.coverPage.characterImage.preview && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-300 hover:text-red-200"
+                                onClick={handleRemoveCoverPageCharacter}
+                              >
+                                Remove
+                              </Button>
+                            )}
+                            <input
+                              id="coverPageCharacterInput"
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={handleCoverPageCharacterChange}
+                            />
+                          </div>
+                        </div>
+                        {formState.coverPage.characterImage.preview ? (
+                          <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+                            <img
+                              src={formState.coverPage.characterImage.preview}
+                              alt="Cover page character"
+                              className="h-48 w-full object-contain"
+                            />
+                          </div>
+                        ) : (
+                          <p className="text-xs text-foreground/50">No character image selected.</p>
+                        )}
+                      </div>
+
+                      {/* Left Side Section */}
+                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
+                        <Label className="text-base">Left Side Content</Label>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="coverPageLeftTitle">Title</Label>
+                          <Textarea
+                            id="coverPageLeftTitle"
+                            minRows={2}
+                            placeholder="Join {name} on an Unforgettable Adventure Across Israel!"
+                            value={formState.coverPage.leftSide.title}
+                            onChange={(event) =>
+                              handleCoverPageFieldChange('leftSide', 'title', event.target.value)
+                            }
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Use {'{name}'} as a placeholder for the child's name.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="coverPageLeftContent">Content</Label>
+                          <Textarea
+                            id="coverPageLeftContent"
+                            minRows={6}
+                            placeholder="From the sparkling shores of the Kinneret to the ancient stones of the Kotel, {name} is on a journey like no other..."
+                            value={formState.coverPage.leftSide.content}
+                            onChange={(event) =>
+                              handleCoverPageFieldChange('leftSide', 'content', event.target.value)
+                            }
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Main description text. Use {'{name}'} for dynamic name insertion.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="coverPageLeftBottomText">Bottom Text</Label>
+                          <Input
+                            id="coverPageLeftBottomText"
+                            placeholder="Shop more books at Mytorahtales.com"
+                            value={formState.coverPage.leftSide.bottomText}
+                            onChange={(event) =>
+                              handleCoverPageFieldChange('leftSide', 'bottomText', event.target.value)
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      {/* QR Code Section */}
+                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <Label>QR Code Image</Label>
+                            <p className="text-xs text-foreground/50">
+                              Upload a QR code to be displayed on the cover.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => document.getElementById('coverPageQrInput')?.click()}
+                            >
+                              <ImageIcon className="mr-2 h-4 w-4" />
+                              {formState.coverPage.qrCode.preview ? 'Change QR code' : 'Upload QR code'}
+                            </Button>
+                            {formState.coverPage.qrCode.preview && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-300 hover:text-red-200"
+                                onClick={handleRemoveCoverPageQr}
+                              >
+                                Remove
+                              </Button>
+                            )}
+                            <input
+                              id="coverPageQrInput"
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={handleCoverPageQrChange}
+                            />
+                          </div>
+                        </div>
+                        {formState.coverPage.qrCode.preview ? (
+                          <div className="relative w-40 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+                            <img
+                              src={formState.coverPage.qrCode.preview}
+                              alt="Cover page QR code"
+                              className="h-40 w-full object-contain"
+                            />
+                          </div>
+                        ) : (
+                          <p className="text-xs text-foreground/50">No QR code uploaded.</p>
+                        )}
+                      </div>
+
+                      {/* Right Side Section */}
+                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
+                        <Label className="text-base">Right Side Content</Label>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="coverPageRightTitle">Main Title</Label>
+                          <Textarea
+                            id="coverPageRightTitle"
+                            minRows={2}
+                            placeholder="{name}'s TRIP TO ISRAEL"
+                            value={formState.coverPage.rightSide.mainTitle}
+                            onChange={(event) =>
+                              handleCoverPageFieldChange('rightSide', 'mainTitle', event.target.value)
+                            }
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Main title displayed prominently on the right. Use {'{name}'} for dynamic name insertion.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="coverPageRightSubtitle">Subtitle</Label>
+                          <Input
+                            id="coverPageRightSubtitle"
+                            placeholder="An amazing adventure"
+                            value={formState.coverPage.rightSide.subtitle}
+                            onChange={(event) =>
+                              handleCoverPageFieldChange('rightSide', 'subtitle', event.target.value)
+                            }
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Small text displayed below the main title.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </TabsContent>
+                </Tabs>
               </div>
 
-              <CardFooter className="flex flex-col-reverse gap-3 border-none p-0 sm:flex-row sm:justify-end">
-                <Button type="button" variant="secondary" onClick={resetForm} disabled={isSaving}>
-                  Cancel
-                </Button>
-                <Button type="submit" className="gap-2" disabled={isSaving}>
+              {/* Cover Preview Section */}
+              {activeTab === 'cover-page' && coverPreview && (
+                <div className="space-y-3 rounded-xl border border-border/60 bg-muted p-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-base">Preview</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setCoverPreview(null)}
+                    >
+                      Close Preview
+                    </Button>
+                  </div>
+                  <div className="relative overflow-hidden rounded-lg border border-border/60 bg-card">
+                    <img
+                      src={coverPreview}
+                      alt="Cover page preview"
+                      className="w-full object-contain"
+                      onClick={() =>
+                        openImageViewer(
+                          { url: coverPreview },
+                          'Cover page preview'
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+
+              <CardFooter className="flex flex-col-reverse gap-3 border-none p-0 sm:flex-row sm:justify-between">
+                <div className="flex gap-2">
+                  <Button type="button" variant="secondary" onClick={resetForm} disabled={isSaving || isGeneratingPreview}>
+                    Cancel
+                  </Button>
+                  {activeTab === 'cover-page' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2"
+                      onClick={handleGeneratePreview}
+                      disabled={isSaving || isGeneratingPreview}
+                    >
+                      {isGeneratingPreview ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Generating…
+                        </>
+                      ) : (
+                        <>
+                          <ImageIcon className="h-4 w-4" />
+                          Generate Preview
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+                <Button type="submit" className="gap-2" disabled={isSaving || isGeneratingPreview}>
                   {isSaving ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
