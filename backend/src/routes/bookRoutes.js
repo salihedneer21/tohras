@@ -16,6 +16,7 @@ const upload = multer({
 const uploadFields = upload.fields([
   { name: 'coverImage', maxCount: 1 },
   { name: 'pageImages', maxCount: 100 },
+  { name: 'pageQrImages', maxCount: 100 },
 ]);
 
 const storybookUpload = multer({

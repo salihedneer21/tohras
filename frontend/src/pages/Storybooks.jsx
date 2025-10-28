@@ -153,6 +153,563 @@ const replaceNamePlaceholders = (value, replacement) => {
   return value.replace(/\{name\}/gi, replacement);
 };
 
+const resolveCoverText = ({ cover = {}, bodyFallback = '', readerName = '' }) => {
+  const uppercaseName =
+    typeof cover.uppercaseName === 'boolean' ? cover.uppercaseName : true;
+  const baseName = readerName || cover.childName || '';
+  const resolvedName = uppercaseName ? baseName.toUpperCase() : baseName;
+  const apply = (text) => {
+    if (!text || typeof text !== 'string') return text || '';
+    if (!baseName) return text;
+    return text.replace(/\{name\}/gi, resolvedName || baseName);
+  };
+
+  const headline = apply(cover.headline || '');
+  const footer = apply(cover.footer || '');
+  const bodyTextRaw = cover.bodyOverride ? apply(cover.bodyOverride) : apply(bodyFallback);
+
+  return {
+    headline,
+    footer,
+    bodyText: bodyTextRaw,
+    uppercaseName,
+    childName: resolvedName || baseName,
+  };
+};
+
+const loadImageElement = (src) =>
+  new Promise((resolve, reject) => {
+    if (!src) {
+      reject(new Error('Missing image source'));
+      return;
+    }
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Failed to load image ${src}`));
+    image.src = src;
+  });
+
+const coverDrawRoundedRect = (ctx, x, y, width, height, radius) => {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+};
+
+const coverBoxBlur = (imageData, width, height, radius) => {
+  const pixels = imageData.data;
+  const tempPixels = new Uint8ClampedArray(pixels);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let count = 0;
+
+      for (let kx = -radius; kx <= radius; kx += 1) {
+        const px = x + kx;
+        if (px >= 0 && px < width) {
+          const idx = (y * width + px) * 4;
+          r += pixels[idx];
+          g += pixels[idx + 1];
+          b += pixels[idx + 2];
+          a += pixels[idx + 3];
+          count += 1;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      tempPixels[idx] = r / count;
+      tempPixels[idx + 1] = g / count;
+      tempPixels[idx + 2] = b / count;
+      tempPixels[idx + 3] = a / count;
+    }
+  }
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let count = 0;
+
+      for (let ky = -radius; ky <= radius; ky += 1) {
+        const py = y + ky;
+        if (py >= 0 && py < height) {
+          const idx = (py * width + x) * 4;
+          r += tempPixels[idx];
+          g += tempPixels[idx + 1];
+          b += tempPixels[idx + 2];
+          a += tempPixels[idx + 3];
+          count += 1;
+        }
+      }
+
+      const idx = (y * width + x) * 4;
+      pixels[idx] = r / count;
+      pixels[idx + 1] = g / count;
+      pixels[idx + 2] = b / count;
+      pixels[idx + 3] = a / count;
+    }
+  }
+
+  return imageData;
+};
+
+const coverFitImage = (ctx, image, width, height) => {
+  if (!image) return;
+  const imgRatio = image.width / image.height;
+  const canvasRatio = width / height;
+  let drawWidth = width;
+  let drawHeight = height;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (imgRatio > canvasRatio) {
+    drawHeight = height;
+    drawWidth = drawHeight * imgRatio;
+    offsetX = -(drawWidth - width) / 2;
+  } else {
+    drawWidth = width;
+    drawHeight = drawWidth / imgRatio;
+    offsetY = -(drawHeight - height) / 2;
+  }
+
+  ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
+};
+
+const coverCreateSegments = ({ headline, bodyText, footer }) => {
+  const segments = [];
+  if (headline) {
+    segments.push({
+      type: 'text',
+      text: headline,
+      font: '600 100px Arial',
+      lineHeight: 1.08,
+      color: 'rgba(255,255,255,0.96)',
+    });
+    segments.push({ type: 'spacer', size: 28 });
+  }
+  if (bodyText) {
+    segments.push({
+      type: 'text',
+      text: bodyText,
+      font: '70px Arial',
+      lineHeight: 1.45,
+      color: 'rgba(255,255,255,0.92)',
+    });
+  }
+  segments.push({ type: 'qrBreak' });
+  segments.push({ type: 'spacer', size: 28 });
+  if (footer) {
+    segments.push({
+      type: 'text',
+      text: footer,
+      font: 'bold 60px Arial',
+      lineHeight: 1.1,
+      color: 'rgba(255,255,255,0.94)',
+    });
+  }
+  return segments;
+};
+
+const coverGetFontSize = (font) => {
+  const match = /([0-9]+(?:\.[0-9]+)?)px/.exec(font);
+  return match ? parseFloat(match[1]) : 24;
+};
+
+const coverLayoutText = (ctx, segments, startX, startY, maxWidth) => {
+  const groups = { before: [], after: [] };
+  let currentGroup = groups.before;
+
+  segments.forEach((segment) => {
+    if (segment.type === 'qrBreak') {
+      currentGroup = groups.after;
+      return;
+    }
+    if (segment.type === 'spacer') {
+      currentGroup.push({ type: 'spacer', size: segment.size ?? 24 });
+      return;
+    }
+    if (segment.type === 'text') {
+      const font = segment.font || '30px Arial';
+      const lineHeight = segment.lineHeight || 1.3;
+      const color = segment.color;
+      segment.text.split('\n').forEach((rawLine) => {
+        if (!rawLine.trim()) {
+          currentGroup.push({ type: 'spacer', size: coverGetFontSize(font) * (lineHeight + 0.2) });
+          return;
+        }
+        ctx.font = font;
+        const words = rawLine.split(' ');
+        let currentLine = '';
+        words.forEach((word) => {
+          const candidate = currentLine ? `${currentLine} ${word}` : word;
+          const width = ctx.measureText(candidate).width;
+          if (width > maxWidth && currentLine) {
+            currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
+            currentLine = word;
+          } else {
+            currentLine = candidate;
+          }
+        });
+        if (currentLine) {
+          currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
+        }
+      });
+    }
+  });
+
+  return groups;
+};
+
+const coverLayoutLines = (lines, startX, startY) => {
+  const positioned = [];
+  let cursorY = startY;
+  let top = Infinity;
+  let bottom = -Infinity;
+
+  lines.forEach((line) => {
+    if (line.type === 'spacer') {
+      cursorY += line.size;
+      return;
+    }
+    if (line.type === 'text') {
+      const fontSize = coverGetFontSize(line.font);
+      const leading = line.lineHeight || 1.3;
+      cursorY += fontSize;
+      positioned.push({ ...line, x: startX, y: cursorY });
+      top = Math.min(top, cursorY - fontSize * 1.05);
+      bottom = Math.max(bottom, cursorY);
+      cursorY += Math.round(fontSize * Math.max(leading - 1, 0.25));
+    }
+  });
+
+  if (!positioned.length) {
+    top = startY;
+    bottom = startY;
+  }
+
+  return { lines: positioned, top, bottom, cursor: cursorY };
+};
+
+const coverDrawHero = (ctx, childName, width, height) => {
+  const safeName = childName && childName.trim() ? childName.trim().toUpperCase() : 'YOUR CHILD';
+  const topLine = `${safeName}'S TRIP`;
+  const bottomLine = 'TO ISRAEL';
+
+  const textX = width * 0.75;
+  const bottomMargin = 250;
+  const topY = height - bottomMargin - 280;
+  const bottomY = topY + 280;
+
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  const topGradient = ctx.createLinearGradient(0, topY - 280, 0, topY);
+  topGradient.addColorStop(0, '#FFE082');
+  topGradient.addColorStop(0.3, '#FFD54F');
+  topGradient.addColorStop(0.7, '#FFB300');
+  topGradient.addColorStop(1, '#FF9800');
+
+  ctx.font = 'bold 280px Arial';
+  ctx.strokeStyle = '#1565C0';
+  ctx.lineWidth = 35;
+  ctx.strokeText(topLine, textX, topY);
+  ctx.fillStyle = topGradient;
+  ctx.fillText(topLine, textX, topY);
+
+  const bottomGradient = ctx.createLinearGradient(0, bottomY - 200, 0, bottomY);
+  bottomGradient.addColorStop(0, '#FFE082');
+  bottomGradient.addColorStop(0.3, '#FFD54F');
+  bottomGradient.addColorStop(0.7, '#FFB300');
+  bottomGradient.addColorStop(1, '#FF9800');
+
+  ctx.font = 'bold 200px Arial';
+  ctx.strokeStyle = '#1565C0';
+  ctx.lineWidth = 28;
+  ctx.strokeText(bottomLine, textX, bottomY);
+  ctx.fillStyle = bottomGradient;
+  ctx.fillText(bottomLine, textX, bottomY);
+};
+
+const renderCoverPreview = async (canvas, model, signal) => {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  canvas.width = PDF_PAGE_WIDTH;
+  canvas.height = PDF_PAGE_HEIGHT;
+
+  ctx.fillStyle = '#0b1d3a';
+  ctx.fillRect(0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+
+  let backgroundImage = null;
+  if (model.backgroundSrc) {
+    try {
+      backgroundImage = await loadImageElement(model.backgroundSrc);
+      if (signal?.cancelled) return;
+      coverFitImage(ctx, backgroundImage, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+    } catch (error) {
+      console.warn('[coverPreview] background load failed:', error.message);
+      ctx.fillStyle = '#0b1d3a';
+      ctx.fillRect(0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+    }
+  }
+
+  let characterImage = null;
+  if (model.characterSrc) {
+    try {
+      characterImage = await loadImageElement(model.characterSrc);
+      if (signal?.cancelled) return;
+    } catch (error) {
+      console.warn('[coverPreview] character load failed:', error.message);
+    }
+  }
+
+  let qrImage = null;
+  if (model.qrSrc) {
+    try {
+      qrImage = await loadImageElement(model.qrSrc);
+      if (signal?.cancelled) return;
+    } catch (error) {
+      console.warn('[coverPreview] qr load failed:', error.message);
+    }
+  }
+
+  if (characterImage) {
+    const charTargetWidth = PDF_PAGE_WIDTH * 0.5;
+    const charTargetHeight = PDF_PAGE_HEIGHT * 1.04;
+    const charX = PDF_PAGE_WIDTH * 0.5;
+    const charY = -PDF_PAGE_HEIGHT * 0.02;
+    const charAspectRatio = characterImage.width / characterImage.height;
+    const targetAspectRatio = charTargetWidth / charTargetHeight;
+    let drawWidth;
+    let drawHeight;
+    let drawX;
+    let drawY;
+    if (charAspectRatio > targetAspectRatio) {
+      drawWidth = charTargetWidth;
+      drawHeight = drawWidth / charAspectRatio;
+      drawX = charX;
+      drawY = charY + (charTargetHeight - drawHeight);
+    } else {
+      drawHeight = charTargetHeight;
+      drawWidth = drawHeight * charAspectRatio;
+      drawX = charX + (charTargetWidth - drawWidth) / 2;
+      drawY = charY;
+    }
+    ctx.drawImage(characterImage, drawX, drawY, drawWidth, drawHeight);
+  }
+
+  const bodyText = model.cover?.bodyOverride || model.bodyText || '';
+  const segments = coverCreateSegments({
+    headline: model.cover?.headline || '',
+    bodyText,
+    footer: model.cover?.footer || '',
+  });
+
+  const textX = PDF_PAGE_WIDTH * 0.06;
+  const textStartY = PDF_PAGE_HEIGHT * 0.22;
+  const textMaxWidth = PDF_PAGE_WIDTH * 0.32;
+  const textGroups = coverLayoutText(ctx, segments, textX, textStartY, textMaxWidth);
+  const beforeLayout = coverLayoutLines(textGroups.before, textX, textStartY);
+
+  const blurPaddingX = PDF_PAGE_WIDTH * 0.03;
+  const qrSize = qrImage
+    ? Math.min(PDF_PAGE_HEIGHT * 0.1, Math.max(PDF_PAGE_WIDTH * 0.06, 100))
+    : 0;
+  const blurX = Math.max(0, textX - blurPaddingX);
+  const blurWidth = Math.min(PDF_PAGE_WIDTH - blurX, textMaxWidth + blurPaddingX * 2);
+
+  const computeLayout = (qrYPosition) => {
+    const afterLayout = coverLayoutLines(
+      textGroups.after,
+      textX,
+      qrYPosition + (qrImage ? qrSize + 36 : 0)
+    );
+
+    const textBottom = afterLayout.lines.length ? afterLayout.bottom : beforeLayout.bottom;
+    const contentBottom = Math.max(
+      textBottom,
+      qrImage ? qrYPosition + qrSize : beforeLayout.bottom
+    );
+
+    const internalPadding = 80;
+    const textContentTop = beforeLayout.top - 10;
+    let textContentBottom = beforeLayout.bottom;
+    if (afterLayout.lines.length) {
+      textContentBottom = afterLayout.bottom;
+    }
+    if (qrImage) {
+      textContentBottom = Math.max(textContentBottom, qrYPosition + qrSize);
+    }
+
+    const blurHeight = textContentBottom - textContentTop + internalPadding * 2;
+    const blurY = PDF_PAGE_HEIGHT / 2 - blurHeight / 2;
+
+    return { afterLayout, blurY, blurHeight };
+  };
+
+  let qrY = qrImage ? beforeLayout.bottom + 50 : beforeLayout.bottom;
+  let { afterLayout, blurY, blurHeight } = computeLayout(qrY);
+
+  if (blurHeight > 0 && blurWidth > 0) {
+    const scale = 0.5;
+    const tempWidth = Math.max(1, Math.floor(blurWidth * scale));
+    const tempHeight = Math.max(1, Math.floor(blurHeight * scale));
+    const blurCanvas = document.createElement('canvas');
+    blurCanvas.width = tempWidth;
+    blurCanvas.height = tempHeight;
+    const blurCtx = blurCanvas.getContext('2d');
+
+    if (backgroundImage) {
+      blurCtx.drawImage(
+        backgroundImage,
+        blurX,
+        blurY,
+        blurWidth,
+        blurHeight,
+        0,
+        0,
+        tempWidth,
+        tempHeight
+      );
+    } else {
+      blurCtx.fillStyle = 'rgba(12, 32, 78, 0.85)';
+      blurCtx.fillRect(0, 0, tempWidth, tempHeight);
+    }
+
+    const imageData = blurCtx.getImageData(0, 0, tempWidth, tempHeight);
+    for (let i = 0; i < 8; i += 1) {
+      coverBoxBlur(imageData, tempWidth, tempHeight, 15);
+    }
+    blurCtx.putImageData(imageData, 0, 0);
+
+    ctx.save();
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, 20);
+    ctx.clip();
+    ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
+
+    const edgeFade = 20;
+    const fadeGradient = ctx.createLinearGradient(blurX, 0, blurX + edgeFade, 0);
+    fadeGradient.addColorStop(0, 'rgba(255, 255, 255, 0.05)');
+    fadeGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = fadeGradient;
+    ctx.fillRect(blurX, blurY, edgeFade, blurHeight);
+
+    ctx.restore();
+  }
+
+  const allLines = beforeLayout.lines.concat(afterLayout.lines);
+  ctx.textBaseline = 'alphabetic';
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+
+  allLines.forEach((line) => {
+    ctx.font = line.font;
+    ctx.fillStyle = line.color || '#ffffff';
+    if (line.text.toLowerCase().includes('shop more books')) {
+      ctx.textAlign = 'center';
+      const centerX = blurX + blurWidth / 2;
+      ctx.fillText(line.text, centerX, line.y);
+    } else {
+      ctx.textAlign = 'left';
+      ctx.fillText(line.text, line.x, line.y);
+    }
+  });
+
+  if (qrImage && blurHeight > 0) {
+    const qrX = blurX + (blurWidth - qrSize) / 2;
+    const frameX = qrX - 18;
+    const frameY = qrY - 18;
+    const frameSize = qrSize + 36;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 10;
+    coverDrawRoundedRect(ctx, frameX, frameY, frameSize, frameSize, 28);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fill();
+    ctx.restore();
+
+    ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
+  }
+
+  coverDrawHero(ctx, model.cover?.childName || '', PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+};
+
+const CoverPagePreview = React.memo(({ model, className = '' }) => {
+  const canvasRef = useRef(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const signal = { cancelled: false };
+    const canvas = canvasRef.current;
+    setError(null);
+    if (!canvas) return () => {
+      cancelled = true;
+      signal.cancelled = true;
+    };
+
+    renderCoverPreview(canvas, model, signal).catch((err) => {
+      if (!cancelled) {
+        console.warn('[coverPreview] rendering failed:', err.message);
+        setError(err);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      signal.cancelled = true;
+    };
+  }, [
+    model.cacheToken,
+    model.backgroundSrc,
+    model.characterSrc,
+    model.qrSrc,
+    model.cover?.headline,
+    model.cover?.footer,
+    model.cover?.bodyOverride,
+    model.cover?.childName,
+    model.bodyText,
+  ]);
+
+  if (error) {
+    return (
+      <div className={`flex h-full w-full items-center justify-center bg-muted text-xs ${className}`}>
+        Cover preview unavailable
+      </div>
+    );
+  }
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={['h-full w-full object-contain', className].filter(Boolean).join(' ')}
+    />
+  );
+});
+
 const PDF_PAGE_WIDTH = 842;
 const PDF_PAGE_HEIGHT = 421;
 const PDF_CHARACTER_MAX_WIDTH_RATIO = 0.4;
@@ -229,19 +786,50 @@ const buildPagePreviewModel = ({
   index = 0,
   assetIdentifier = 'storybook',
   assetUpdatedAt,
+  readerName = '',
 }) => {
   if (!page) return null;
 
   const safeIndex = Number.isInteger(index) ? index : 0;
   const pageLabel = page.order || safeIndex + 1;
+  const pageType = page.pageType === 'cover' ? 'cover' : 'story';
   const isCharacterOnRight = safeIndex % 2 === 0;
 
   const backgroundUrl = resolveAssetUrl(page.background);
   const characterUrl = resolveAssetUrl(page.character);
+  const coverQrUrl = page.cover ? resolveAssetUrl(page.cover.qrCodeImage) : '';
 
   const cacheToken = page.updatedAt || assetUpdatedAt || `${assetIdentifier}-${pageLabel}`;
   const backgroundSrc = withCacheBust(backgroundUrl, `${cacheToken}-background-${pageLabel}`);
   const characterSrc = withCacheBust(characterUrl, `${cacheToken}-character-${pageLabel}`);
+
+  if (pageType === 'cover') {
+    const qrSrc = coverQrUrl
+      ? withCacheBust(coverQrUrl, `${cacheToken}-qr-${pageLabel}`)
+      : '';
+    const { headline, footer, bodyText, uppercaseName, childName } = resolveCoverText({
+      cover: page.cover || {},
+      bodyFallback: page.text || '',
+      readerName,
+    });
+
+    return {
+      pageType: 'cover',
+      cacheToken,
+      pageLabel,
+      backgroundSrc,
+      characterSrc,
+      qrSrc,
+      cover: {
+        headline,
+        footer,
+        bodyOverride: page.cover?.bodyOverride ? bodyText : '',
+        uppercaseName,
+        childName,
+      },
+      bodyText,
+    };
+  }
 
   const hasCharacter = Boolean(characterSrc);
   const characterMaxWidth = hasCharacter ? PDF_PAGE_WIDTH * PDF_CHARACTER_MAX_WIDTH_RATIO : 0;
@@ -312,6 +900,7 @@ const buildPagePreviewModel = ({
   );
 
   return {
+    pageType: 'story',
     cacheToken,
     pageLabel,
     isCharacterOnRight,
@@ -342,6 +931,10 @@ const buildPagePreviewModel = ({
 const StorybookPageSvg = React.memo(
   ({ model, className = '' }) => {
     if (!model) return null;
+
+    if (model.pageType === 'cover') {
+      return <CoverPagePreview model={model} className={className} />;
+    }
 
     const { backgroundSrc, characterSrc, characterFrame, pageLabel, text, hebrew } = model;
     const hasTextOverlay = Boolean(text?.lines?.length && text.overlay);
@@ -508,6 +1101,22 @@ const StorybookPageSvg = React.memo(
   (prev, next) => {
     if (!prev.model && !next.model) return true;
     if (!prev.model || !next.model) return false;
+    if (prev.model.pageType !== next.model.pageType) return false;
+
+    if (prev.model.pageType === 'cover') {
+      return (
+        prev.model.cacheToken === next.model.cacheToken &&
+        prev.model.backgroundSrc === next.model.backgroundSrc &&
+        prev.model.characterSrc === next.model.characterSrc &&
+        prev.model.qrSrc === next.model.qrSrc &&
+        prev.model.cover?.headline === next.model.cover?.headline &&
+        prev.model.cover?.footer === next.model.cover?.footer &&
+        prev.model.cover?.bodyOverride === next.model.cover?.bodyOverride &&
+        prev.model.cover?.childName === next.model.cover?.childName &&
+        prev.model.bodyText === next.model.bodyText
+      );
+    }
+
     return (
       prev.model.cacheToken === next.model.cacheToken &&
       prev.model.pageLabel === next.model.pageLabel &&
@@ -519,28 +1128,71 @@ const StorybookPageSvg = React.memo(
   }
 );
 
+const cloneCoverConfig = (cover) => {
+  if (!cover || typeof cover !== 'object') return null;
+  const extractLegacy = () => {
+    if (!Array.isArray(cover.textSegments)) return { headline: '', body: '', footer: '' };
+    const textSegments = cover.textSegments.filter((segment) => segment?.type === 'text');
+    if (!textSegments.length) return { headline: '', body: '', footer: '' };
+    const headlineSegment = textSegments[0]?.text || '';
+    const footerSegment = textSegments.length > 1 ? textSegments[textSegments.length - 1].text || '' : '';
+    const middleSegments = textSegments.slice(1, Math.max(textSegments.length - 1, 1));
+    const body = middleSegments
+      .map((segment) => (typeof segment?.text === 'string' ? segment.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    return { headline: headlineSegment, body, footer: footerSegment };
+  };
+
+  const legacy = extractLegacy();
+
+  return {
+    headline:
+      typeof cover.headline === 'string' && cover.headline.trim()
+        ? cover.headline
+        : legacy.headline || '',
+    footer:
+      typeof cover.footer === 'string' && cover.footer.trim()
+        ? cover.footer
+        : legacy.footer || '',
+    bodyOverride:
+      typeof cover.bodyOverride === 'string' && cover.bodyOverride.trim()
+        ? cover.bodyOverride
+        : legacy.body || '',
+    uppercaseName:
+      typeof cover.uppercaseName === 'boolean' ? cover.uppercaseName : true,
+    qrCodeImage: cover.qrCodeImage ? { ...cover.qrCodeImage } : null,
+  };
+};
+
 const normaliseAssetPages = (pages) => {
   if (!Array.isArray(pages)) return [];
   return pages
-    .map((entry) => ({
-      ...entry,
-      background: entry?.background ? { ...entry.background } : null,
-      character: entry?.character ? { ...entry.character } : null,
-      characterOriginal: entry?.characterOriginal ? { ...entry.characterOriginal } : null,
-      candidateAssets: Array.isArray(entry?.candidateAssets)
-        ? entry.candidateAssets.map((asset) => ({ ...asset }))
-        : [],
-      selectedCandidateIndex: Number.isFinite(entry?.selectedCandidateIndex)
-        ? entry.selectedCandidateIndex
-        : null,
-      generationId: entry?.generationId || null,
-    }))
+    .map((entry) => {
+      const pageType = entry?.pageType === 'cover' ? 'cover' : 'story';
+      const cover = pageType === 'cover' ? cloneCoverConfig(entry.cover) : null;
+      return {
+        ...entry,
+        pageType,
+        cover,
+        background: entry?.background ? { ...entry.background } : null,
+        character: entry?.character ? { ...entry.character } : null,
+        characterOriginal: entry?.characterOriginal ? { ...entry.characterOriginal } : null,
+        candidateAssets: Array.isArray(entry?.candidateAssets)
+          ? entry.candidateAssets.map((asset) => ({ ...asset }))
+          : [],
+        selectedCandidateIndex: Number.isFinite(entry?.selectedCandidateIndex)
+          ? entry.selectedCandidateIndex
+          : null,
+        generationId: entry?.generationId || null,
+      };
+    })
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 };
 
 // Page Thumbnail Component - matches main preview exactly
 const PageThumbnail = React.memo(
-  ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier }) => {
+  ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier, readerName }) => {
     const previewModel = useMemo(
       () =>
         buildPagePreviewModel({
@@ -548,8 +1200,9 @@ const PageThumbnail = React.memo(
           index,
           assetUpdatedAt,
           assetIdentifier: assetIdentifier || 'storybook',
+          readerName,
         }),
-      [assetIdentifier, assetUpdatedAt, index, page]
+      [assetIdentifier, assetUpdatedAt, index, page, readerName]
     );
 
     return (
@@ -581,7 +1234,8 @@ const PageThumbnail = React.memo(
       prevProps.page.updatedAt === nextProps.page.updatedAt &&
       prevProps.assetUpdatedAt === nextProps.assetUpdatedAt &&
       prevProps.assetIdentifier === nextProps.assetIdentifier &&
-      prevProps.index === nextProps.index
+      prevProps.index === nextProps.index &&
+      prevProps.readerName === nextProps.readerName
     );
   }
 );
@@ -664,6 +1318,7 @@ function Storybooks() {
           (book.pages || []).map((page) => ({
             id: page._id,
             order: page.order,
+             pageType: page.pageType === 'cover' ? 'cover' : 'story',
             text: page.text || '',
             prompt: page.characterPrompt || page.prompt || '',
             useCharacter: true,
@@ -674,6 +1329,7 @@ function Storybooks() {
             characterPreview: '',
             characterUrl: page.characterImage?.url || '',
             quote: page.quote || page.hebrewQuote || '',
+            cover: page.pageType === 'cover' ? cloneCoverConfig(page.cover) : null,
           }))
         );
       } catch (error) {
@@ -1565,6 +2221,7 @@ function Storybooks() {
           index: safeIndex,
           assetIdentifier,
           assetUpdatedAt: activeAsset?.updatedAt,
+          readerName: selectedReader?.name || '',
         })
       : null;
     const canNavigatePrev = hasPages && safeIndex > 0;
@@ -1691,6 +2348,7 @@ function Storybooks() {
                         onClick={() => handlePageIndexChange(idx)}
                         assetUpdatedAt={activeAsset.updatedAt}
                         assetIdentifier={assetIdentifier}
+                        readerName={selectedReader?.name || ''}
                       />
                     ))}
                   </div>

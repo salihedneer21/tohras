@@ -139,6 +139,12 @@ const generateBookCharacterOverlayKey = (bookSlug, order, originalName) => {
   return buildKey('books', bookSlug, 'story', 'characters', `${order}-${timestamp}-${safeName}`);
 };
 
+const generateBookQrCodeKey = (bookSlug, order, originalName) => {
+  const timestamp = Date.now();
+  const safeName = sanitizeFileName(originalName, `qr-${order}-${timestamp}.png`);
+  return buildKey('books', bookSlug, 'pages', 'qr', `${order}-${timestamp}-${safeName}`);
+};
+
 const ensurePdfExtension = (value) => {
   if (!value) return 'storybook.pdf';
   return value.toLowerCase().endsWith('.pdf') ? value : `${value}.pdf`;
@@ -161,6 +167,7 @@ module.exports = {
   generateBookCoverKey,
   generateBookPageImageKey,
   generateBookCharacterOverlayKey,
+  generateBookQrCodeKey,
   generateBookPdfKey,
   getPublicUrl,
   downloadFromS3,

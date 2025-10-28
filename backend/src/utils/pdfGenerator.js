@@ -7,6 +7,7 @@ const fetch = require('node-fetch');
 const Replicate = require('replicate');
 const { downloadFromS3 } = require('../config/s3');
 const { createCanvas, loadImage } = require('canvas');
+const { generateCoverImage } = require('./coverRenderer');
 
 const replicate = new Replicate();
 
@@ -586,11 +587,59 @@ async function generateStorybookPdf({ title, pages }) {
   for (let index = 0; index < pages.length; index += 1) {
     const pageData = pages[index];
     const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    const isCoverPage = pageData.pageType === 'cover';
     const isCharacterOnRight = index % 2 === 0;
     let charWidth = 0;
     let charHeight = 0;
     let charX = isCharacterOnRight ? PAGE_WIDTH - PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO : 0;
     const charY = 0;
+
+    if (isCoverPage) {
+      const backgroundBuffer = await getImageBuffer(pageData.background);
+
+      let characterBuffer = null;
+      if (pageData.character) {
+        if (pageData.character.backgroundRemoved) {
+          characterBuffer = await getImageBuffer(pageData.character);
+        } else {
+          try {
+            characterBuffer = await removeBackground(pageData.character);
+          } catch (error) {
+            console.warn('[pdf] background removal failed for cover page:', error.message);
+            characterBuffer = await getImageBuffer(pageData.character);
+          }
+        }
+      }
+
+      const qrBuffer = pageData.cover?.qrCodeImage
+        ? await getImageBuffer(pageData.cover.qrCodeImage)
+        : null;
+
+      const bodyText = pageData.cover?.bodyOverride
+        ? pageData.cover.bodyOverride
+        : pageData.text || '';
+
+      const coverBuffer = await generateCoverImage({
+        pageWidth: PAGE_WIDTH,
+        pageHeight: PAGE_HEIGHT,
+        backgroundBuffer,
+        characterBuffer,
+        qrBuffer,
+        cover: pageData.cover || {},
+        bodyText,
+        childName: pageData.cover?.childName || '',
+      });
+
+      const coverImage = await pdfDoc.embedPng(coverBuffer);
+      page.drawImage(coverImage, {
+        x: 0,
+        y: 0,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+      });
+
+      continue;
+    }
 
     const backgroundBuffer = await getImageBuffer(pageData.background);
     if (backgroundBuffer) {

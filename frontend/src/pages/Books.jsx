@@ -49,8 +49,16 @@ const STATUS_OPTIONS = [
   { value: 'inactive', label: 'Inactive' },
 ];
 
+const defaultCoverConfig = () => ({
+  headline: '',
+  footer: '',
+  bodyOverride: '',
+  uppercaseName: true,
+});
+
 const createEmptyPage = () => ({
   id: null,
+  pageType: 'story',
   text: '',
   prompt: '',
   file: null,
@@ -58,6 +66,14 @@ const createEmptyPage = () => ({
   previewIsObject: false,
   existingImage: null,
   removeImage: false,
+  cover: defaultCoverConfig(),
+  qr: {
+    existing: null,
+    file: null,
+    preview: null,
+    previewIsObject: false,
+    remove: false,
+  },
 });
 
 const createEmptyBookForm = () => ({
@@ -114,9 +130,12 @@ function Books() {
 
   const resetForm = useCallback(() => {
     revokeIfNeeded(formState.cover.preview, formState.cover.previewIsObject);
-    formState.pages.forEach((page) =>
-      revokeIfNeeded(page.preview, page.previewIsObject)
-    );
+    formState.pages.forEach((page) => {
+      revokeIfNeeded(page.preview, page.previewIsObject);
+      if (page.qr) {
+        revokeIfNeeded(page.qr.preview, page.qr.previewIsObject);
+      }
+    });
     setFormState(createEmptyBookForm());
     setEditingBook(null);
     setFormMode('create');
@@ -131,9 +150,12 @@ function Books() {
 
   const openEditForm = (book) => {
     revokeIfNeeded(formState.cover.preview, formState.cover.previewIsObject);
-    formState.pages.forEach((page) =>
-      revokeIfNeeded(page.preview, page.previewIsObject)
-    );
+    formState.pages.forEach((page) => {
+      revokeIfNeeded(page.preview, page.previewIsObject);
+      if (page.qr) {
+        revokeIfNeeded(page.qr.preview, page.qr.previewIsObject);
+      }
+    });
 
     const sortedPages = [...(book.pages || [])].sort(
       (a, b) => (a.order || 0) - (b.order || 0)
@@ -153,16 +175,40 @@ function Books() {
       },
       pages:
         sortedPages.length > 0
-          ? sortedPages.map((page) => ({
-              id: page._id || null,
-              text: page.text || '',
-              prompt: page.characterPrompt || page.prompt || '',
-              file: null,
-              preview: page.backgroundImage?.url || page.characterImage?.url || null,
-              previewIsObject: false,
-              existingImage: page.backgroundImage || page.characterImage || null,
-              removeImage: false,
-            }))
+          ? sortedPages.map((page) => {
+              const pageType = page.pageType === 'cover' ? 'cover' : 'story';
+              const coverConfig = page.cover || null;
+              const qrAsset = coverConfig?.qrCodeImage || null;
+              const resolveAssetUrl = (asset) =>
+                asset?.url || asset?.downloadUrl || asset?.signedUrl || null;
+              return {
+                id: page._id || null,
+                pageType,
+                text: page.text || '',
+                prompt: page.characterPrompt || page.prompt || '',
+                file: null,
+                preview: page.backgroundImage?.url || page.characterImage?.url || null,
+                previewIsObject: false,
+                existingImage: page.backgroundImage || page.characterImage || null,
+                removeImage: false,
+                cover: {
+                  headline: coverConfig?.headline || '',
+                  footer: coverConfig?.footer || '',
+                  bodyOverride: coverConfig?.bodyOverride || '',
+                  uppercaseName:
+                    typeof coverConfig?.uppercaseName === 'boolean'
+                      ? coverConfig.uppercaseName
+                      : true,
+                },
+                qr: {
+                  existing: qrAsset,
+                  file: null,
+                  preview: resolveAssetUrl(qrAsset),
+                  previewIsObject: false,
+                  remove: false,
+                },
+              };
+            })
           : [createEmptyPage()],
     });
 
@@ -219,6 +265,9 @@ function Books() {
         nextPages.push(createEmptyPage());
       }
       revokeIfNeeded(removed.preview, removed.previewIsObject);
+      if (removed.qr) {
+        revokeIfNeeded(removed.qr.preview, removed.qr.previewIsObject);
+      }
       return {
         ...prev,
         pages: nextPages,
@@ -247,49 +296,164 @@ function Books() {
     });
   };
 
-  const handlePagePromptChange = (index, value) => {
-    setFormState((prev) => {
-      const nextPages = [...prev.pages];
-      nextPages[index] = { ...nextPages[index], prompt: value };
-      return { ...prev, pages: nextPages };
-    });
-  };
+const handlePagePromptChange = (index, value) => {
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    nextPages[index] = { ...nextPages[index], prompt: value };
+    return { ...prev, pages: nextPages };
+  });
+};
 
-  const handlePageImageChange = (index, event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+const updatePageCover = (index, updates) => {
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    if (!current) return prev;
+    const nextCover = {
+      ...defaultCoverConfig(),
+      ...(current.cover || {}),
+      ...updates,
+    };
+    nextPages[index] = {
+      ...current,
+      cover: nextCover,
+    };
+    return { ...prev, pages: nextPages };
+  });
+};
 
-    setFormState((prev) => {
-      const nextPages = [...prev.pages];
-      const current = nextPages[index];
-      revokeIfNeeded(current.preview, current.previewIsObject);
-      const preview = URL.createObjectURL(file);
+const handlePageTypeChange = (index, value) => {
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    if (!current) return prev;
+    const nextType = value === 'cover' ? 'cover' : 'story';
+    if (nextType === 'story') {
+      if (current.qr) {
+        revokeIfNeeded(current.qr.preview, current.qr.previewIsObject);
+      }
       nextPages[index] = {
         ...current,
-        file,
-        preview,
-        previewIsObject: true,
-        removeImage: false,
+        pageType: nextType,
+        cover: defaultCoverConfig(),
+        qr: {
+          existing: null,
+          file: null,
+          preview: null,
+          previewIsObject: false,
+          remove: false,
+        },
       };
-      return { ...prev, pages: nextPages };
-    });
-  };
-
-  const handleRemovePageImage = (index) => {
-    setFormState((prev) => {
-      const nextPages = [...prev.pages];
-      const current = nextPages[index];
-      revokeIfNeeded(current.preview, current.previewIsObject);
+    } else {
       nextPages[index] = {
         ...current,
-        file: null,
-        preview: null,
-        previewIsObject: false,
-        removeImage: Boolean(current.existingImage),
+        pageType: nextType,
+        cover: current.cover || defaultCoverConfig(),
+        qr: current.qr || {
+          existing: null,
+          file: null,
+          preview: null,
+          previewIsObject: false,
+          remove: false,
+        },
       };
-      return { ...prev, pages: nextPages };
-    });
-  };
+    }
+    return { ...prev, pages: nextPages };
+  });
+};
+
+const handleCoverHeadlineChange = (index, value) => {
+  updatePageCover(index, { headline: value });
+};
+
+const handleCoverFooterChange = (index, value) => {
+  updatePageCover(index, { footer: value });
+};
+
+const handleCoverBodyOverrideChange = (index, value) => {
+  updatePageCover(index, { bodyOverride: value });
+};
+
+const handleCoverUppercaseChange = (index, value) => {
+  updatePageCover(index, { uppercaseName: value });
+};
+
+const handleCoverQrChange = (index, event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    if (!current) return prev;
+    const nextQr = { ...(current.qr || {}) };
+    revokeIfNeeded(nextQr.preview, nextQr.previewIsObject);
+    nextQr.file = file;
+    nextQr.preview = URL.createObjectURL(file);
+    nextQr.previewIsObject = true;
+    nextQr.remove = false;
+    nextPages[index] = {
+      ...current,
+      qr: nextQr,
+    };
+    return { ...prev, pages: nextPages };
+  });
+};
+
+const handleRemoveCoverQr = (index) => {
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    if (!current) return prev;
+    const nextQr = { ...(current.qr || {}) };
+    revokeIfNeeded(nextQr.preview, nextQr.previewIsObject);
+    nextQr.file = null;
+    nextQr.preview = null;
+    nextQr.previewIsObject = false;
+    nextQr.remove = Boolean(nextQr.existing);
+    nextPages[index] = {
+      ...current,
+      qr: nextQr,
+    };
+    return { ...prev, pages: nextPages };
+  });
+};
+
+const handlePageImageChange = (index, event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    revokeIfNeeded(current.preview, current.previewIsObject);
+    const preview = URL.createObjectURL(file);
+    nextPages[index] = {
+      ...current,
+      file,
+      preview,
+      previewIsObject: true,
+      removeImage: false,
+    };
+    return { ...prev, pages: nextPages };
+  });
+};
+
+const handleRemovePageImage = (index) => {
+  setFormState((prev) => {
+    const nextPages = [...prev.pages];
+    const current = nextPages[index];
+    revokeIfNeeded(current.preview, current.previewIsObject);
+    nextPages[index] = {
+      ...current,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      removeImage: Boolean(current.existingImage),
+    };
+    return { ...prev, pages: nextPages };
+  });
+};
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -300,14 +464,74 @@ function Books() {
       return;
     }
 
-    const filteredPages = formState.pages.filter((page) => {
+    const shouldIncludePage = (page) => {
       const hasText = page.text?.trim?.();
       const hasPrompt = page.prompt?.trim?.();
-      return hasText || hasPrompt || page.file || page.existingImage;
-    });
+      const hasBackground = page.file || page.existingImage;
+      const hasCoverInputs =
+        page.pageType === 'cover' &&
+        (page.cover?.headline?.trim?.() ||
+          page.cover?.bodyOverride?.trim?.() ||
+          page.cover?.footer?.trim?.());
+      const hasQr =
+        page.pageType === 'cover' && (page.qr?.file || page.qr?.existing);
+      return (
+        hasText ||
+        hasPrompt ||
+        hasBackground ||
+        hasCoverInputs ||
+        hasQr ||
+        page.pageType === 'cover'
+      );
+    };
 
-    if (!filteredPages.length) {
-      toast.error('Add at least one page with text, a prompt, or an image');
+    const pagesPayload = [];
+    const pageImageFiles = [];
+    const pageQrFiles = [];
+
+    for (let idx = 0; idx < formState.pages.length; idx += 1) {
+      const page = formState.pages[idx];
+      if (!shouldIncludePage(page)) {
+        continue;
+      }
+
+      const coverConfig =
+        page.pageType === 'cover'
+          ? {
+              headline: page.cover?.headline?.trim?.() || '',
+              footer: page.cover?.footer?.trim?.() || '',
+              bodyOverride: page.cover?.bodyOverride?.trim?.() || '',
+              uppercaseName:
+                typeof page.cover?.uppercaseName === 'boolean'
+                  ? page.cover.uppercaseName
+                  : true,
+            }
+          : null;
+
+      pagesPayload.push({
+        id: page.id,
+        order: pagesPayload.length + 1,
+        text: page.text,
+        prompt: page.prompt?.trim?.() || '',
+        hasNewImage: Boolean(page.file),
+        removeImage: Boolean(page.removeImage) && !page.file,
+        pageType: page.pageType,
+        cover: coverConfig,
+        hasNewQrImage: page.pageType === 'cover' && Boolean(page.qr?.file),
+        removeQrImage:
+          page.pageType === 'cover' && Boolean(page.qr?.remove) && !page.qr?.file,
+      });
+
+      if (page.file) {
+        pageImageFiles.push(page.file);
+      }
+      if (page.pageType === 'cover' && page.qr?.file) {
+        pageQrFiles.push(page.qr.file);
+      }
+    }
+
+    if (!pagesPayload.length) {
+      toast.error('Add at least one page with content before saving');
       return;
     }
 
@@ -332,20 +556,12 @@ function Books() {
       formData.append('coverImage', formState.cover.file);
     }
 
-    const pagesPayload = filteredPages.map((page, index) => ({
-      id: page.id,
-      order: index + 1,
-      text: page.text,
-      prompt: page.prompt?.trim?.() || '',
-      hasNewImage: Boolean(page.file),
-      removeImage: Boolean(page.removeImage) && !page.file,
-    }));
     formData.append('pages', JSON.stringify(pagesPayload));
-
-    filteredPages.forEach((page) => {
-      if (page.file) {
-        formData.append('pageImages', page.file);
-      }
+    pageImageFiles.forEach((file) => {
+      formData.append('pageImages', file);
+    });
+    pageQrFiles.forEach((file) => {
+      formData.append('pageQrImages', file);
     });
 
     setIsSaving(true);
@@ -675,6 +891,22 @@ function Books() {
                       </div>
 
                       <div className="space-y-2">
+                        <Label htmlFor={`page-type-${index}`}>Page type</Label>
+                        <Select
+                          value={page.pageType === 'cover' ? 'cover' : 'story'}
+                          onValueChange={(value) => handlePageTypeChange(index, value)}
+                        >
+                          <SelectTrigger id={`page-type-${index}`} className="w-full sm:w-48">
+                            <SelectValue placeholder="Select page type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="story">Story page</SelectItem>
+                            <SelectItem value="cover">Cover page</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
                         <Label htmlFor={`page-text-${index}`}>Narration</Label>
                         <Textarea
                           id={`page-text-${index}`}
@@ -764,6 +996,138 @@ function Books() {
                           Saved for future character image generation.
                         </p>
                       </div>
+
+                      {page.pageType === 'cover' && (
+                        <>
+                          <div className="space-y-2">
+                            <Label htmlFor={`page-cover-headline-${index}`}>
+                              Cover headline
+                            </Label>
+                            <Textarea
+                              id={`page-cover-headline-${index}`}
+                              minRows={2}
+                              placeholder="Join {name} on an unforgettable adventure..."
+                              value={page.cover?.headline || ''}
+                              onChange={(event) =>
+                                handleCoverHeadlineChange(index, event.target.value)
+                              }
+                            />
+                            <p className="text-xs text-foreground/50">
+                              This text renders above the blur panel. Use {`{name}`} to inject the reader's name.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor={`page-cover-body-${index}`}>
+                              Cover body (optional)
+                            </Label>
+                            <Textarea
+                              id={`page-cover-body-${index}`}
+                              minRows={4}
+                              placeholder="Leave blank to reuse the narration above."
+                              value={page.cover?.bodyOverride || ''}
+                              onChange={(event) =>
+                                handleCoverBodyOverrideChange(index, event.target.value)
+                              }
+                            />
+                            <p className="text-xs text-foreground/50">
+                              If provided, this replaces the narration text for the blurred copy block on the back cover.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor={`page-cover-footer-${index}`}>
+                              Cover footer
+                            </Label>
+                            <Textarea
+                              id={`page-cover-footer-${index}`}
+                              minRows={2}
+                              placeholder="Shop more books at …"
+                              value={page.cover?.footer || ''}
+                              onChange={(event) =>
+                                handleCoverFooterChange(index, event.target.value)
+                              }
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <input
+                              id={`page-cover-uppercase-${index}`}
+                              type="checkbox"
+                              checked={page.cover?.uppercaseName ?? true}
+                              onChange={(event) =>
+                                handleCoverUppercaseChange(index, event.target.checked)
+                              }
+                              className="h-4 w-4"
+                            />
+                            <Label htmlFor={`page-cover-uppercase-${index}`} className="text-sm">
+                              Render {`{name}`} in uppercase for the headline and body.
+                            </Label>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>QR code image</Label>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  document
+                                    .getElementById(`page-qr-${index}`)
+                                    ?.click()
+                                }
+                              >
+                                <ImageIcon className="mr-2 h-4 w-4" />
+                                {page.qr?.preview ? 'Change QR code' : 'Upload QR code'}
+                              </Button>
+                              {page.qr?.preview && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-red-300 hover:text-red-200"
+                                  onClick={() => handleRemoveCoverQr(index)}
+                                >
+                                  Remove
+                                </Button>
+                              )}
+                              <input
+                                id={`page-qr-${index}`}
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(event) => handleCoverQrChange(index, event)}
+                              />
+                            </div>
+                            {page.qr?.preview ? (
+                              <div className="relative w-40 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+                                <img
+                                  src={page.qr.preview}
+                                  alt={`Page ${index + 1} QR code`}
+                                  className="h-40 w-full object-contain"
+                                  onClick={() =>
+                                    openImageViewer(
+                                      page.qr.file
+                                        ? {
+                                            url: page.qr.preview,
+                                            size: page.qr.file.size,
+                                            originalName: page.qr.file.name,
+                                          }
+                                        : page.qr.existing,
+                                      `Page ${index + 1} QR code`
+                                    )
+                                  }
+                                />
+                              </div>
+                            ) : (
+                              <p className="text-xs text-foreground/50">
+                                Attach the QR artwork displayed on the cover.
+                              </p>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

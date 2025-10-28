@@ -8,6 +8,7 @@ const {
   generateBookCoverKey,
   generateBookPageImageKey,
   generateBookCharacterOverlayKey,
+  generateBookQrCodeKey,
   generateBookPdfKey,
   getSignedUrlForKey,
 } = require('../config/s3');
@@ -47,7 +48,63 @@ const replaceReaderPlaceholders = (value, readerName) => {
     return value || '';
   }
   if (!readerName) return value;
-  return value.replace(/\{name\}/gi, readerName);
+  const upperName = readerName.toUpperCase();
+  return value.replace(/\{name\}/gi, (matched) => {
+    const inner = matched.slice(1, -1);
+    if (inner === inner.toUpperCase()) {
+      return upperName;
+    }
+    return readerName;
+  });
+};
+
+const clonePlainObject = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  return JSON.parse(JSON.stringify(value));
+};
+
+const cloneCoverConfig = (config) => clonePlainObject(config);
+
+const mergeCoverConfig = (existing, incoming) => {
+  if (!incoming || typeof incoming !== 'object') {
+    return existing ? cloneCoverConfig(existing) : null;
+  }
+
+  const base = existing ? cloneCoverConfig(existing) : {};
+  const headline = normalizeString(incoming.headline);
+  const footer = normalizeString(incoming.footer);
+  const bodyOverride = normalizeString(incoming.bodyOverride);
+
+  if (headline !== undefined) {
+    base.headline = headline;
+  }
+  if (footer !== undefined) {
+    base.footer = footer;
+  }
+  if (bodyOverride !== undefined) {
+    base.bodyOverride = bodyOverride;
+  }
+
+  if (typeof incoming.uppercaseName !== 'undefined') {
+    base.uppercaseName = normalizeBoolean(incoming.uppercaseName);
+  } else if (typeof base.uppercaseName === 'undefined') {
+    base.uppercaseName = true;
+  }
+
+  base.headline = normalizeString(base.headline) || '';
+  base.footer = normalizeString(base.footer) || '';
+  base.bodyOverride = normalizeString(base.bodyOverride) || '';
+  if (typeof base.uppercaseName === 'undefined') {
+    base.uppercaseName = true;
+  }
+
+  if (incoming.qrCodeImage) {
+    base.qrCodeImage = clonePlainObject(incoming.qrCodeImage);
+  } else if (!base.qrCodeImage) {
+    base.qrCodeImage = null;
+  }
+
+  return base;
 };
 
 const buildImageResponse = (file, key, url) => ({
@@ -107,6 +164,49 @@ const sanitizeAssetListForSnapshot = (assets) =>
         .map((asset) => sanitizeAssetForSnapshot(asset))
         .filter((asset) => Boolean(asset?.key || asset?.url))
     : [];
+
+const sanitizeCoverConfigForSnapshot = (cover) => {
+  if (!cover || typeof cover !== 'object') return null;
+  const cloned = clonePlainObject(cover) || {};
+  const uppercaseName =
+    typeof cloned.uppercaseName === 'undefined'
+      ? true
+      : normalizeBoolean(cloned.uppercaseName);
+
+  const fromSegments = () => {
+    if (!Array.isArray(cloned.textSegments)) return { headline: '', body: '', footer: '' };
+    const textSegments = cloned.textSegments.filter((segment) => segment?.type === 'text');
+    if (!textSegments.length) {
+      return { headline: '', body: '', footer: '' };
+    }
+    const headlineSegment = textSegments[0]?.text || '';
+    const footerSegment = textSegments.length > 1 ? textSegments[textSegments.length - 1].text || '' : '';
+    const middleSegments = textSegments.slice(1, Math.max(textSegments.length - 1, 1));
+    const body = middleSegments
+      .map((segment) => (typeof segment?.text === 'string' ? segment.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    return {
+      headline: normalizeString(headlineSegment),
+      footer: normalizeString(footerSegment),
+      body: normalizeString(body),
+    };
+  };
+
+  const legacy = fromSegments();
+  const headline = normalizeString(cloned.headline) || legacy.headline || '';
+  const footer = normalizeString(cloned.footer) || legacy.footer || '';
+  const bodyOverride = normalizeString(cloned.bodyOverride) || legacy.body || '';
+
+  return {
+    headline,
+    footer,
+    bodyOverride,
+    uppercaseName,
+    qrCodeImage: cloned.qrCodeImage ? sanitizeAssetForSnapshot(cloned.qrCodeImage) : null,
+    childName: typeof cloned.childName === 'string' ? cloned.childName : '',
+  };
+};
 
 const cloneDocument = (value) =>
   value && typeof value.toObject === 'function'
@@ -188,10 +288,30 @@ const attachFreshSignedUrlsToPages = async (pages = [], options = {}) => {
         ? await Promise.all(clonedPage.candidateAssets.map((asset) => attachFreshSignedUrl(asset)))
         : [];
 
+      const coverSource =
+        (bookPageCandidate && bookPageCandidate.cover) || clonedPage.cover || null;
+      let resolvedCover = null;
+      if (coverSource) {
+        const coverClone = clonePlainObject(coverSource) || {};
+        coverClone.headline = normalizeString(coverClone.headline) || '';
+        coverClone.footer = normalizeString(coverClone.footer) || '';
+        coverClone.bodyOverride = normalizeString(coverClone.bodyOverride) || '';
+        coverClone.uppercaseName =
+          typeof coverClone.uppercaseName === 'undefined'
+            ? true
+            : normalizeBoolean(coverClone.uppercaseName);
+        if (coverClone.qrCodeImage) {
+          coverClone.qrCodeImage = await attachFreshSignedUrl(coverClone.qrCodeImage);
+        }
+        resolvedCover = coverClone;
+      }
+
       clonedPage.background = resolvedBackground;
       clonedPage.character = resolvedCharacter;
       clonedPage.characterOriginal = resolvedCharacterOriginal;
       clonedPage.candidateAssets = resolvedCandidateAssets.filter(Boolean);
+      clonedPage.cover = resolvedCover;
+      clonedPage.pageType = clonedPage.pageType || bookPageCandidate?.pageType || 'story';
       return clonedPage;
     })
   );
@@ -212,8 +332,24 @@ const hydrateBookDocument = async (book) => {
   const hydratedPages = await Promise.all(
     (clonedBook.pages || []).map(async (page) => {
       const clonedPage = cloneDocument(page) || {};
+      let cover = null;
+      if (clonedPage.cover) {
+        cover = clonePlainObject(clonedPage.cover) || {};
+        cover.headline = normalizeString(cover.headline) || '';
+        cover.footer = normalizeString(cover.footer) || '';
+        cover.bodyOverride = normalizeString(cover.bodyOverride) || '';
+        cover.uppercaseName =
+          typeof cover.uppercaseName === 'undefined'
+            ? true
+            : normalizeBoolean(cover.uppercaseName);
+        if (cover.qrCodeImage) {
+          cover.qrCodeImage = await attachFreshSignedUrl(cover.qrCodeImage);
+        }
+      }
       return {
         ...clonedPage,
+        pageType: clonedPage.pageType || 'story',
+        cover,
         backgroundImage: await attachFreshSignedUrl(clonedPage.backgroundImage),
         characterImage: await attachFreshSignedUrl(clonedPage.characterImage),
         characterImageOriginal: await attachFreshSignedUrl(clonedPage.characterImageOriginal),
@@ -475,13 +611,23 @@ exports.createBook = async (req, res) => {
     const pagesPayload = pagesRaw.map((page, index) => {
       const promptValue =
         normalizeString(page?.prompt) || normalizeString(page?.characterPrompt);
-
-      return {
+      const pageType = page?.pageType === 'cover' ? 'cover' : 'story';
+      const base = {
         order: Number(page.order) || index + 1,
         text: typeof page.text === 'string' ? page.text : '',
         characterPrompt: promptValue,
         hasNewImage: normalizeBoolean(page.hasNewImage),
+        removeImage: normalizeBoolean(page.removeImage),
+        pageType,
       };
+
+      if (pageType === 'cover') {
+        base.cover = mergeCoverConfig(null, page.cover || {});
+        base.hasNewQrImage = normalizeBoolean(page.hasNewQrImage);
+        base.removeQrImage = normalizeBoolean(page.removeQrImage);
+      }
+
+      return base;
     });
 
     if (!pagesPayload.length) {
@@ -494,6 +640,7 @@ exports.createBook = async (req, res) => {
     const slug = `${slugify(name)}-${Date.now()}`;
     const coverFile = req.files?.coverImage?.[0];
     const pageImageFiles = req.files?.pageImages || [];
+    const pageQrFiles = req.files?.pageQrImages || [];
 
     let coverImage = null;
     if (coverFile) {
@@ -506,6 +653,7 @@ exports.createBook = async (req, res) => {
     }
 
     let pageImageCursor = 0;
+    let pageQrImageCursor = 0;
     const pages = [];
 
     for (let index = 0; index < pagesPayload.length; index += 1) {
@@ -514,7 +662,12 @@ exports.createBook = async (req, res) => {
         order: pageDefinition.order,
         text: pageDefinition.text,
         characterPrompt: normalizeString(pageDefinition.characterPrompt),
+        pageType: pageDefinition.pageType || 'story',
       };
+      let coverConfig = null;
+      if (pageData.pageType === 'cover') {
+        coverConfig = mergeCoverConfig(null, pageDefinition.cover || {});
+      }
 
       if (pageDefinition.hasNewImage) {
         const file = pageImageFiles[pageImageCursor];
@@ -530,6 +683,31 @@ exports.createBook = async (req, res) => {
         pageData.backgroundImage = buildImageResponse(file, key, url);
       }
 
+      if (coverConfig) {
+        let qrCodeImage = coverConfig.qrCodeImage || null;
+
+        if (pageDefinition.hasNewQrImage) {
+          const file = pageQrFiles[pageQrImageCursor];
+          if (!file) {
+            throw new Error(`Missing QR code image for page at position ${index + 1}`);
+          }
+          pageQrImageCursor += 1;
+          const key = generateBookQrCodeKey(slug, pageData.order, file.originalname);
+          const { url } = await uploadBufferToS3(file.buffer, key, file.mimetype, {
+            acl: 'public-read',
+          });
+          uploadedKeys.push(key);
+          qrCodeImage = buildImageResponse(file, key, url);
+        } else if (pageDefinition.removeQrImage) {
+          qrCodeImage = null;
+        }
+
+        coverConfig.qrCodeImage = qrCodeImage;
+        pageData.cover = coverConfig;
+      } else {
+        pageData.cover = null;
+      }
+
       pages.push(pageData);
     }
 
@@ -538,6 +716,18 @@ exports.createBook = async (req, res) => {
         `Received ${pageImageFiles.length} page images but only ${
           pageImageCursor
         } were mapped. Ensure files align with pages.`
+      );
+    }
+
+    if (pageQrImageCursor !== pageQrFiles.length) {
+      throw new Error(
+        `Received ${pageQrFiles.length} page QR images but only ${pageQrImageCursor} were mapped. Ensure files align with pages.`
+      );
+    }
+
+    if (pageQrImageCursor !== pageQrFiles.length) {
+      throw new Error(
+        `Received ${pageQrFiles.length} page QR images but only ${pageQrImageCursor} were mapped. Ensure files align with pages.`
       );
     }
 
@@ -599,6 +789,7 @@ exports.updateBook = async (req, res) => {
     const slug = book.slug || `${slugify(book.name)}-${Date.now()}`;
     const coverFile = req.files?.coverImage?.[0];
     const pageImageFiles = req.files?.pageImages || [];
+    const pageQrFiles = req.files?.pageQrImages || [];
 
     if (coverAction === 'replace' && !coverFile) {
       return res.status(400).json({
@@ -639,6 +830,7 @@ exports.updateBook = async (req, res) => {
     const providedPageIds = new Set();
     const pages = [];
     let pageImageCursor = 0;
+    let pageQrImageCursor = 0;
 
     for (let index = 0; index < pagesRaw.length; index += 1) {
       const incoming = pagesRaw[index];
@@ -657,10 +849,13 @@ exports.updateBook = async (req, res) => {
         providedPageIds.add(pageId);
       }
 
+      const requestedPageType = incoming.pageType === 'cover' ? 'cover' : incoming.pageType === 'story' ? 'story' : null;
+      const pageType = requestedPageType || (existing?.pageType === 'cover' ? 'cover' : 'story');
       const pageData = {
         order,
         text,
         characterPrompt: incomingPrompt,
+        pageType,
       };
 
       if (pageId && existing) {
@@ -668,6 +863,13 @@ exports.updateBook = async (req, res) => {
       }
 
       let backgroundImage = existing?.backgroundImage || existing?.characterImage || null;
+      const hasNewQrImage = normalizeBoolean(incoming.hasNewQrImage);
+      const removeQrImage = normalizeBoolean(incoming.removeQrImage);
+      const existingCover = existing?.cover || null;
+      const coverConfig =
+        pageType === 'cover'
+          ? mergeCoverConfig(existingCover, incoming.cover || {})
+          : null;
 
       if (hasNewImage) {
         const file = pageImageFiles[pageImageCursor];
@@ -701,6 +903,42 @@ exports.updateBook = async (req, res) => {
         pageData.backgroundImage = null;
       }
 
+      if (pageType === 'cover' && coverConfig) {
+        let qrCodeImage = coverConfig.qrCodeImage || existingCover?.qrCodeImage || null;
+
+        if (hasNewQrImage) {
+          const file = pageQrFiles[pageQrImageCursor];
+          if (!file) {
+            throw new Error(`Missing QR code image for page at position ${index + 1}`);
+          }
+          pageQrImageCursor += 1;
+
+          if (qrCodeImage?.key) {
+            keysToDelete.push(qrCodeImage.key);
+          }
+
+          const key = generateBookQrCodeKey(slug, order, file.originalname);
+          const { url } = await uploadBufferToS3(file.buffer, key, file.mimetype, {
+            acl: 'public-read',
+          });
+          uploadedKeys.push(key);
+          qrCodeImage = buildImageResponse(file, key, url);
+        } else if (removeQrImage) {
+          if (qrCodeImage?.key) {
+            keysToDelete.push(qrCodeImage.key);
+          }
+          qrCodeImage = null;
+        }
+
+        coverConfig.qrCodeImage = qrCodeImage;
+        pageData.cover = coverConfig;
+      } else {
+        if (existingCover?.qrCodeImage?.key) {
+          keysToDelete.push(existingCover.qrCodeImage.key);
+        }
+        pageData.cover = null;
+      }
+
       pages.push(pageData);
     }
 
@@ -715,13 +953,16 @@ exports.updateBook = async (req, res) => {
     for (const existingPage of book.pages) {
       const idString = existingPage._id.toString();
       if (!providedPageIds.has(idString)) {
-        if (existingPage.backgroundImage?.key) {
-          keysToDelete.push(existingPage.backgroundImage.key);
-        } else if (existingPage.characterImage?.key) {
-          keysToDelete.push(existingPage.characterImage.key);
-        }
+      if (existingPage.backgroundImage?.key) {
+        keysToDelete.push(existingPage.backgroundImage.key);
+      } else if (existingPage.characterImage?.key) {
+        keysToDelete.push(existingPage.characterImage.key);
+      }
+      if (existingPage.cover?.qrCodeImage?.key) {
+        keysToDelete.push(existingPage.cover.qrCodeImage.key);
       }
     }
+  }
 
     if (typeof name !== 'undefined') {
       book.name = name;
@@ -783,6 +1024,9 @@ exports.deleteBook = async (req, res) => {
         keysToDelete.push(page.backgroundImage.key);
       } else if (page.characterImage?.key) {
         keysToDelete.push(page.characterImage.key);
+      }
+      if (page.cover?.qrCodeImage?.key) {
+        keysToDelete.push(page.cover.qrCodeImage.key);
       }
     });
     book.pdfAssets.forEach((asset) => {

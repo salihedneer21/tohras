@@ -63,7 +63,14 @@ const slugify = (value) =>
 const replaceReaderPlaceholders = (value, readerName) => {
   if (!value || typeof value !== 'string') return value || '';
   if (!readerName) return value;
-  return value.replace(/\{name\}/gi, readerName);
+  const upperName = readerName.toUpperCase();
+  return value.replace(/\{name\}/gi, (matched) => {
+    const inner = matched.slice(1, -1);
+    if (inner === inner.toUpperCase()) {
+      return upperName;
+    }
+    return readerName;
+  });
 };
 
 const createEvent = (type, message, metadata = null) => ({
@@ -77,6 +84,52 @@ const computeAveragePageProgress = (pages = []) => {
   if (!pages.length) return 0;
   const total = pages.reduce((sum, page) => sum + (page?.progress || 0), 0);
   return clamp(total / pages.length, 0, 100);
+};
+
+const clonePlainObject = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  return JSON.parse(JSON.stringify(value));
+};
+
+const sanitizeCoverForSnapshot = (cover) => {
+  if (!cover || typeof cover !== 'object') return null;
+  const cloned = clonePlainObject(cover) || {};
+
+  const extractFromSegments = () => {
+    if (!Array.isArray(cloned.textSegments)) {
+      return { headline: '', body: '', footer: '' };
+    }
+    const textSegments = cloned.textSegments.filter((segment) => segment?.type === 'text');
+    if (!textSegments.length) {
+      return { headline: '', body: '', footer: '' };
+    }
+    const headlineSegment = textSegments[0]?.text || '';
+    const footerSegment = textSegments.length > 1 ? textSegments[textSegments.length - 1].text || '' : '';
+    const middleSegments = textSegments.slice(1, Math.max(textSegments.length - 1, 1));
+    const body = middleSegments
+      .map((segment) => (typeof segment?.text === 'string' ? segment.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    return { headline: headlineSegment, body, footer: footerSegment };
+  };
+
+  const legacy = extractFromSegments();
+
+  return {
+    headline: typeof cloned.headline === 'string' && cloned.headline.trim()
+      ? cloned.headline
+      : legacy.headline || '',
+    footer: typeof cloned.footer === 'string' && cloned.footer.trim()
+      ? cloned.footer
+      : legacy.footer || '',
+    bodyOverride: typeof cloned.bodyOverride === 'string' && cloned.bodyOverride.trim()
+      ? cloned.bodyOverride
+      : legacy.body || '',
+    uppercaseName:
+      typeof cloned.uppercaseName === 'boolean' ? cloned.uppercaseName : true,
+    qrCodeImage: cloned.qrCodeImage ? sanitizeAssetForSnapshot(cloned.qrCodeImage) : null,
+    childName: typeof cloned.childName === 'string' ? cloned.childName : '',
+  };
 };
 
 const computeJobProgress = (job) => {
@@ -436,10 +489,47 @@ const updateBookCharacterImage = async ({ bookId, page, newAsset, originalAsset 
 };
 
 const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
-  const pageText = replaceReaderPlaceholders(bookPage.text || '', readerName);
+  const pageType = bookPage.pageType === 'cover' ? 'cover' : 'story';
+  let cover = null;
+
+  const resolveCoverPlaceholder = (input, uppercaseName) => {
+    if (!input || typeof input !== 'string') return input || '';
+    if (!readerName) return input;
+    const replacement = uppercaseName ? (readerName || '').toUpperCase() : readerName;
+    return input.replace(/\{name\}/gi, replacement);
+  };
+
+  let resolvedText = bookPage.text || '';
+
+  if (pageType === 'cover' && bookPage.cover) {
+    const coverSource = clonePlainObject(bookPage.cover) || {};
+    const uppercaseName =
+      typeof coverSource.uppercaseName === 'boolean' ? coverSource.uppercaseName : true;
+
+    const bodySource = coverSource.bodyOverride || resolvedText;
+    const headline = resolveCoverPlaceholder(coverSource.headline || '', uppercaseName);
+    const footer = resolveCoverPlaceholder(coverSource.footer || '', uppercaseName);
+    const body = resolveCoverPlaceholder(bodySource, uppercaseName);
+
+    cover = {
+      headline,
+      footer,
+      bodyOverride: coverSource.bodyOverride ? body : '',
+      uppercaseName,
+      qrCodeImage: coverSource.qrCodeImage
+        ? sanitizeAssetForSnapshot(coverSource.qrCodeImage)
+        : null,
+      childName: readerName || '',
+    };
+
+    resolvedText = body;
+  } else {
+    resolvedText = replaceReaderPlaceholders(resolvedText, readerName);
+  }
+
   return {
     order: bookPage.order,
-    text: pageText,
+    text: resolvedText,
     background: bookPage.backgroundImage || null,
     character: jobPage.characterAsset || bookPage.characterImage || null,
     characterOriginal:
@@ -453,6 +543,8 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
       : null,
     rankingSummary: jobPage.rankingSummary || '',
     rankingNotes: Array.isArray(jobPage.rankingNotes) ? jobPage.rankingNotes : [],
+    pageType,
+    cover,
   };
 };
 
@@ -516,6 +608,8 @@ const buildPdfAsset = async ({ book, job, pages }) => {
         : null,
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      pageType: page.pageType || 'story',
+      cover: sanitizeCoverForSnapshot(page.cover),
       updatedAt: new Date(),
     })),
   };

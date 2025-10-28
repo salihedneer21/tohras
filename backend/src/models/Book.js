@@ -25,6 +25,35 @@ const rankingNoteSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const coverConfigSchema = new mongoose.Schema(
+  {
+    headline: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    footer: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    bodyOverride: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    qrCodeImage: {
+      type: imageAssetSchema,
+      default: null,
+    },
+    uppercaseName: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { _id: false }
+);
+
 const pageSchema = new mongoose.Schema(
   {
     order: {
@@ -52,6 +81,15 @@ const pageSchema = new mongoose.Schema(
     },
     characterImageOriginal: {
       type: imageAssetSchema,
+      default: null,
+    },
+    pageType: {
+      type: String,
+      enum: ['story', 'cover'],
+      default: 'story',
+    },
+    cover: {
+      type: coverConfigSchema,
       default: null,
     },
   },
