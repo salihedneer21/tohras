@@ -11,8 +11,10 @@ const {
   generateBookQrCodeKey,
   generateBookPdfKey,
   getSignedUrlForKey,
+  downloadFromS3,
 } = require('../config/s3');
 const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
+const { splitStorybookPdf } = require('../utils/pdfSplitter');
 const {
   regenerateStorybookPage: regenerateStorybookPageService,
   applyStorybookCandidateSelection,
@@ -1338,6 +1340,9 @@ exports.generateStorybook = async (req, res) => {
       readerName: readerName || '',
       userId: readerId || null,
       pages: pagesSnapshot,
+      variant: 'standard',
+      derivedFromAssetId: null,
+      confirmedAt: null,
     };
 
     book.pdfAssets.push(pdfAsset);
@@ -1632,6 +1637,177 @@ exports.regenerateStorybookPdf = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to regenerate storybook PDF',
+      error: error.message,
+    });
+  }
+};
+
+exports.confirmStorybookPdf = async (req, res) => {
+  try {
+    const { id: bookId, assetId } = req.params;
+    const book = await Book.findById(bookId);
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    const pdfAssetDoc =
+      book.pdfAssets.id(assetId) ||
+      book.pdfAssets.find((asset) => asset.key === assetId);
+
+    if (!pdfAssetDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook asset not found',
+      });
+    }
+
+    const sourceAssetDoc =
+      pdfAssetDoc.variant === 'split' && pdfAssetDoc.derivedFromAssetId
+        ? book.pdfAssets.id(pdfAssetDoc.derivedFromAssetId) ||
+          book.pdfAssets.find(
+            (asset) =>
+              asset._id &&
+              asset._id.toString() === pdfAssetDoc.derivedFromAssetId.toString()
+          )
+        : pdfAssetDoc;
+
+    if (!sourceAssetDoc) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to resolve the original storybook asset for confirmation',
+      });
+    }
+
+    if (!sourceAssetDoc.key) {
+      return res.status(400).json({
+        success: false,
+        message: 'Original storybook asset is missing an S3 key',
+      });
+    }
+
+    const sourceBuffer = await downloadFromS3(sourceAssetDoc.key);
+    if (!sourceBuffer || !sourceBuffer.length) {
+      throw new Error('Failed to download original PDF for splitting');
+    }
+
+    const { buffer: splitBuffer, pageCount } = await splitStorybookPdf(sourceBuffer, {
+      skipFirstPage: true,
+    });
+
+    if (!splitBuffer || !splitBuffer.length) {
+      throw new Error('Failed to generate split PDF buffer');
+    }
+
+    const now = new Date();
+    const baseTitle = sourceAssetDoc.title || `${book.name || 'Storybook'} Confirmed`;
+    const splitTitle = /confirmed/i.test(baseTitle)
+      ? baseTitle
+      : `${baseTitle} (Confirmed)`;
+    const bookSlug = slugify(book.slug || book.name || String(book._id || bookId));
+    const sourceAssetId =
+      sourceAssetDoc._id || sourceAssetDoc.id || sourceAssetDoc.key || assetId;
+
+    let existingSplitAsset =
+      book.pdfAssets.find((asset) => {
+        if (!asset) return false;
+        const variant = asset.variant || 'standard';
+        if (variant !== 'split') return false;
+        if (!asset.derivedFromAssetId) return false;
+        return (
+          asset.derivedFromAssetId.toString() === sourceAssetId.toString()
+        );
+      }) || null;
+
+    const pagesSnapshot = Array.isArray(sourceAssetDoc.pages)
+      ? sourceAssetDoc.pages.map((page) => cloneDocument(page) || {})
+      : [];
+
+    let wasCreated = false;
+
+    if (!existingSplitAsset) {
+      const pdfKey = generateBookPdfKey(bookSlug, splitTitle);
+      const { url } = await uploadBufferToS3(splitBuffer, pdfKey, 'application/pdf', {
+        acl: 'public-read',
+      });
+
+      const newAsset = {
+        key: pdfKey,
+        url,
+        size: splitBuffer.length,
+        contentType: 'application/pdf',
+        title: splitTitle,
+        pageCount,
+        createdAt: now,
+        updatedAt: now,
+        trainingId: sourceAssetDoc.trainingId || null,
+        storybookJobId: sourceAssetDoc.storybookJobId || null,
+        readerId: sourceAssetDoc.readerId || null,
+        readerName: sourceAssetDoc.readerName || '',
+        userId: sourceAssetDoc.userId || null,
+        pages: pagesSnapshot,
+        variant: 'split',
+        derivedFromAssetId: sourceAssetId,
+        confirmedAt: now,
+      };
+
+      book.pdfAssets.push(newAsset);
+      existingSplitAsset = book.pdfAssets[book.pdfAssets.length - 1];
+      wasCreated = true;
+    } else {
+      const { url } = await uploadBufferToS3(
+        splitBuffer,
+        existingSplitAsset.key,
+        'application/pdf',
+        { acl: 'public-read' }
+      );
+      existingSplitAsset.url = url;
+      existingSplitAsset.size = splitBuffer.length;
+      existingSplitAsset.pageCount = pageCount;
+      existingSplitAsset.updatedAt = now;
+      existingSplitAsset.title = splitTitle;
+      existingSplitAsset.confirmedAt = now;
+      if (!Array.isArray(existingSplitAsset.pages) || !existingSplitAsset.pages.length) {
+        existingSplitAsset.pages = pagesSnapshot;
+      }
+    }
+
+    book.markModified('pdfAssets');
+    if (!book.slug && bookSlug) {
+      book.slug = bookSlug;
+      book.markModified('slug');
+    }
+    await book.save();
+
+    const hydratedPages = await attachFreshSignedUrlsToPages(
+      existingSplitAsset.pages || [],
+      { bookPages: book.pages || [] }
+    );
+
+    const responseAsset = {
+      ...cloneDocument(existingSplitAsset),
+      pages: hydratedPages,
+    };
+
+    res.status(wasCreated ? 201 : 200).json({
+      success: true,
+      message: wasCreated
+        ? 'Storybook confirmed and split PDF generated successfully'
+        : 'Storybook split PDF regenerated successfully',
+      data: responseAsset,
+      meta: {
+        wasCreated,
+        sourceAssetId: sourceAssetId.toString(),
+      },
+    });
+  } catch (error) {
+    console.error('Error confirming storybook PDF:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to confirm storybook PDF',
       error: error.message,
     });
   }
