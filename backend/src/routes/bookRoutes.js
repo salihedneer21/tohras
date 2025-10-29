@@ -51,6 +51,7 @@ router.post(
   bookController.regenerateStorybookPage
 );
 router.post('/:id/storybooks/:assetId/regenerate', bookController.regenerateStorybookPdf);
+router.post('/:id/storybooks/:assetId/confirm', bookController.confirmStorybookPdf);
 router.post(
   '/:id/storybooks/:assetId/pages/:pageOrder/select',
   bookController.selectStorybookPageCandidate

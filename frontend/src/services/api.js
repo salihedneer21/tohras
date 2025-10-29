@@ -61,6 +61,8 @@ export const bookAPI = {
     api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/regenerate`, data),
   regenerateStorybookPdf: (bookId, assetId, data = {}) =>
     api.post(`/books/${bookId}/storybooks/${assetId}/regenerate`, data),
+  confirmStorybookPdf: (bookId, assetId, data = {}) =>
+    api.post(`/books/${bookId}/storybooks/${assetId}/confirm`, data),
   selectStorybookPageCandidate: (bookId, assetId, pageOrder, data = {}) =>
     api.post(`/books/${bookId}/storybooks/${assetId}/pages/${pageOrder}/select`, data),
   getStorybookJobs: (id, params) => api.get(`/books/${id}/storybooks/jobs`, { params }),

@@ -130,6 +130,19 @@ const pdfAssetSchema = new mongoose.Schema(
     readerName: { type: String, default: '' },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     pages: { type: [pageSnapshotSchema], default: [] },
+    variant: {
+      type: String,
+      enum: ['standard', 'split'],
+      default: 'standard',
+    },
+    derivedFromAssetId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    confirmedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: true }
 );

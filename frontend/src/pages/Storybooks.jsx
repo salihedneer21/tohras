@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   Loader2,
   Eye,
+  RefreshCw,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   X,
@@ -1190,6 +1192,28 @@ const normaliseAssetPages = (pages) => {
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 };
 
+const normaliseIdentifier = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    if (typeof value.$oid === 'string') {
+      return value.$oid;
+    }
+    if (typeof value.toString === 'function') {
+      return value.toString();
+    }
+  }
+  return `${value}`;
+};
+
+const resolveAssetId = (asset) => {
+  if (!asset) return '';
+  return normaliseIdentifier(asset._id || asset.id || asset.key);
+};
+
+const resolveAssetVariant = (asset) => (asset?.variant ? asset.variant : 'standard');
+
 // Page Thumbnail Component - matches main preview exactly
 const PageThumbnail = React.memo(
   ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier, readerName }) => {
@@ -1265,6 +1289,7 @@ function Storybooks() {
   const [regeneratingOrder, setRegeneratingOrder] = useState(null);
   const [isRegeneratingPdf, setIsRegeneratingPdf] = useState(false);
   const [applyingCandidateKey, setApplyingCandidateKey] = useState('');
+  const [confirmingAssetId, setConfirmingAssetId] = useState('');
   const preloadRefs = useRef([]);
 
   const selectedReader = useMemo(
@@ -1302,6 +1327,7 @@ function Storybooks() {
         const normalisedPdfAssets = Array.isArray(book.pdfAssets)
           ? book.pdfAssets.map((asset) => ({
               ...asset,
+              variant: resolveAssetVariant(asset),
               pages: normaliseAssetPages(asset.pages),
             }))
           : [];
@@ -1374,6 +1400,7 @@ function Storybooks() {
             ? [
                 {
                   ...job.pdfAsset,
+                  variant: resolveAssetVariant(job.pdfAsset),
                   pages: normaliseAssetPages(job.pdfAsset.pages),
                 },
                 ...existingAssets,
@@ -1596,8 +1623,43 @@ function Storybooks() {
     }
   }, [activeAsset, selectedBook?.pdfAssets]);
 
+  const standardAssets = useMemo(() => {
+    if (!Array.isArray(selectedBook?.pdfAssets)) return [];
+    return selectedBook.pdfAssets
+      .filter((asset) => resolveAssetVariant(asset) === 'standard')
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }, [selectedBook?.pdfAssets]);
+
+  const splitAssets = useMemo(() => {
+    if (!Array.isArray(selectedBook?.pdfAssets)) return [];
+    return selectedBook.pdfAssets
+      .filter((asset) => resolveAssetVariant(asset) === 'split')
+      .slice()
+      .sort((a, b) => {
+        const aDate = new Date(a.confirmedAt || a.updatedAt || a.createdAt || 0);
+        const bDate = new Date(b.confirmedAt || b.updatedAt || b.createdAt || 0);
+        return bDate - aDate;
+      });
+  }, [selectedBook?.pdfAssets]);
+
+  const splitLookup = useMemo(() => {
+    const map = new Map();
+    splitAssets.forEach((asset) => {
+      const key = normaliseIdentifier(asset.derivedFromAssetId);
+      if (key) {
+        map.set(key, asset);
+      }
+    });
+    return map;
+  }, [splitAssets]);
+
   const totalPages = useMemo(() => pages.length, [pages.length]);
-  const totalStorybooks = useMemo(() => selectedBook?.pdfAssets?.length || 0, [selectedBook?.pdfAssets?.length]);
+  const totalStorybooks = useMemo(() => standardAssets.length, [standardAssets.length]);
+  const totalConfirmedStorybooks = useMemo(
+    () => splitAssets.length,
+    [splitAssets.length]
+  );
   const activeJob = useMemo(
     () =>
       storybookJobs.find((job) =>
@@ -1770,6 +1832,7 @@ function Storybooks() {
         if (!prev) return prev;
         const newAsset = {
           ...response.data,
+          variant: resolveAssetVariant(response.data),
           pages: normaliseAssetPages(response.data?.pages),
         };
         const updatedAssets = [...(prev.pdfAssets || []), newAsset];
@@ -1828,6 +1891,64 @@ function Storybooks() {
       }
     } catch (error) {
       console.warn('Failed to fetch storybook pages', error);
+    }
+  };
+
+  const handleConfirmStorybook = async (asset) => {
+    if (!asset || !selectedBookId) return;
+    const assetIdentifier = resolveAssetId(asset);
+    if (!assetIdentifier) {
+      toast.error('Missing storybook identifier for confirmation');
+      return;
+    }
+
+    setConfirmingAssetId(assetIdentifier);
+    try {
+      const response = await bookAPI.confirmStorybookPdf(selectedBookId, assetIdentifier);
+      const payload = response.data || {};
+      const incomingVariant = resolveAssetVariant(payload);
+      const splitAsset = {
+        ...payload,
+        variant: incomingVariant === 'standard' ? 'split' : incomingVariant,
+        pages: normaliseAssetPages(payload.pages || []),
+      };
+      const sourceId = normaliseIdentifier(response.meta?.sourceAssetId || assetIdentifier);
+
+      toast.success(response.message || 'Split PDF prepared successfully');
+
+      setSelectedBook((prev) => {
+        if (!prev) return prev;
+        const nextAssets = Array.isArray(prev.pdfAssets) ? [...prev.pdfAssets] : [];
+        const existingIndex = nextAssets.findIndex((existing) => {
+          if (resolveAssetVariant(existing) !== 'split') return false;
+          const derivedId = normaliseIdentifier(existing?.derivedFromAssetId);
+          return derivedId === sourceId;
+        });
+        if (existingIndex === -1) {
+          nextAssets.push(splitAsset);
+        } else {
+          nextAssets[existingIndex] = { ...splitAsset };
+        }
+        return { ...prev, pdfAssets: nextAssets };
+      });
+
+      const splitAssetId = resolveAssetId(splitAsset);
+
+      setActiveAsset((prev) => {
+        if (!prev) return prev;
+        return resolveAssetId(prev) === splitAssetId ? { ...splitAsset } : prev;
+      });
+
+      setActiveAssetPages((prev) => {
+        if (!activeAsset) return prev;
+        return resolveAssetId(activeAsset) === splitAssetId
+          ? normaliseAssetPages(splitAsset.pages)
+          : prev;
+      });
+    } catch (error) {
+      toast.error(`Failed to confirm storybook: ${error.message}`);
+    } finally {
+      setConfirmingAssetId('');
     }
   };
 
@@ -3185,17 +3306,26 @@ function Storybooks() {
                 <div>
                   <CardTitle>Generated storybooks</CardTitle>
                   <CardDescription>
-                    Download finished PDFs or re-run the generator after updating imagery.
+                    Download finished PDFs or confirm them once you are happy with the layout.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">{totalStorybooks} ready</Badge>
               </CardHeader>
               <CardContent className="space-y-3">
-                {selectedBook?.pdfAssets?.length ? (
-                  selectedBook.pdfAssets
-                    .slice()
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                    .map((asset) => (
+                {standardAssets.length ? (
+                  standardAssets.map((asset) => {
+                    const assetIdentifier = resolveAssetId(asset);
+                    const matchingSplit = splitLookup.get(assetIdentifier);
+                    const isConfirming = confirmingAssetId === assetIdentifier;
+                    const confirmedDate = matchingSplit
+                      ? new Date(
+                          matchingSplit.confirmedAt ||
+                            matchingSplit.updatedAt ||
+                            matchingSplit.createdAt ||
+                            Date.now()
+                        )
+                      : null;
+                    return (
                       <div
                         key={asset._id || asset.key}
                         className="rounded-xl border border-border/70 bg-card/70 p-4"
@@ -3207,13 +3337,53 @@ function Storybooks() {
                             </p>
                             <p className="text-xs text-foreground/50">
                               {asset.pageCount || pages.length} pages ·{' '}
-                              {asset.size ? `${(asset.size / 1024 / 1024).toFixed(2)} MB` : 'Size unknown'}
+                              {asset.size
+                                ? `${(asset.size / 1024 / 1024).toFixed(2)} MB`
+                                : 'Size unknown'}
                             </p>
                             <p className="text-xs text-foreground/45">
-                              Generated {asset.createdAt ? new Date(asset.createdAt).toLocaleString() : 'recently'}
+                              Generated{' '}
+                              {asset.createdAt
+                                ? new Date(asset.createdAt).toLocaleString()
+                                : 'recently'}
                             </p>
+                            {matchingSplit ? (
+                              <p className="text-xs text-emerald-500">
+                                Confirmed{' '}
+                                {confirmedDate ? confirmedDate.toLocaleString() : 'recently'}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-foreground/50">
+                                Awaiting confirmation
+                              </p>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="gap-1"
+                              disabled={isConfirming}
+                              onClick={() => handleConfirmStorybook(asset)}
+                            >
+                              {isConfirming ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  {matchingSplit ? 'Regenerating...' : 'Confirming...'}
+                                </>
+                              ) : matchingSplit ? (
+                                <>
+                                  <RefreshCw className="h-4 w-4" />
+                                  Regenerate split
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-4 w-4" />
+                                  Confirm
+                                </>
+                              )}
+                            </Button>
                             <Button
                               type="button"
                               size="sm"
@@ -3236,10 +3406,81 @@ function Storybooks() {
                           </div>
                         </div>
                       </div>
-                    ))
+                    );
+                  })
                 ) : (
                   <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center text-sm text-foreground/55">
                     No storybooks yet. Configure your pages above and generate a PDF to see it here.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Confirmed storybooks</CardTitle>
+                  <CardDescription>
+                    Split PDFs are stored and ready whenever you need them.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">{totalConfirmedStorybooks} confirmed</Badge>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {splitAssets.length ? (
+                  splitAssets.map((asset) => (
+                    <div
+                      key={asset._id || asset.key}
+                      className="rounded-xl border border-border/70 bg-card/70 p-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-semibold text-foreground/85">
+                            {asset.title || 'Confirmed storybook'}
+                          </p>
+                          <p className="text-xs text-foreground/50">
+                            {asset.pageCount || pages.length} pages ·{' '}
+                            {asset.size
+                              ? `${(asset.size / 1024 / 1024).toFixed(2)} MB`
+                              : 'Size unknown'}
+                          </p>
+                          <div className="mt-1 flex items-center gap-1 text-xs text-emerald-500">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span>
+                              Confirmed{' '}
+                              {asset.confirmedAt
+                                ? new Date(asset.confirmedAt).toLocaleString()
+                                : new Date(asset.updatedAt || asset.createdAt || Date.now()).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1"
+                            onClick={() => handleOpenAssetViewer(asset)}
+                          >
+                            <Eye className="h-4 w-4" />
+                            View pages
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => window.open(asset.url, '_blank')}
+                          >
+                            <Download className="h-4 w-4" />
+                            Download PDF
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center text-sm text-foreground/55">
+                    Confirm a storybook to generate a split PDF and keep it ready here.
                   </div>
                 )}
               </CardContent>
