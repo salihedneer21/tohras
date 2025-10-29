@@ -17,15 +17,6 @@ const uploadFields = upload.fields([
   { name: 'coverImage', maxCount: 1 },
   { name: 'pageImages', maxCount: 100 },
   { name: 'pageQrImages', maxCount: 100 },
-  { name: 'coverPageBackgroundImage', maxCount: 1 },
-  { name: 'coverPageCharacterImage', maxCount: 1 },
-  { name: 'coverPageQrCode', maxCount: 1 },
-]);
-
-const coverPreviewFields = upload.fields([
-  { name: 'backgroundImage', maxCount: 1 },
-  { name: 'characterImage', maxCount: 1 },
-  { name: 'qrCode', maxCount: 1 },
 ]);
 
 const storybookUpload = multer({
@@ -38,7 +29,6 @@ const storybookUpload = multer({
 const storybookFields = storybookUpload.fields([{ name: 'characterImages', maxCount: 100 }]);
 
 router.get('/', bookController.getAllBooks);
-router.post('/cover-preview', coverPreviewFields, bookController.generateCoverPreview);
 router.get('/storybooks/stream/live', storybookAutomationController.streamJobs);
 router.get('/:id/storybooks', bookController.getBookStorybooks);
 router.get('/:id/storybooks/jobs', storybookAutomationController.listJobs);

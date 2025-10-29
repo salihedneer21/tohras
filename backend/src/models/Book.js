@@ -134,33 +134,6 @@ const pdfAssetSchema = new mongoose.Schema(
   { _id: true }
 );
 
-const coverPageSchema = new mongoose.Schema(
-  {
-    backgroundImage: {
-      type: imageAssetSchema,
-      default: null,
-    },
-    characterImage: {
-      type: imageAssetSchema,
-      default: null,
-    },
-    leftSide: {
-      title: { type: String, default: '', trim: true },
-      content: { type: String, default: '', trim: true },
-      bottomText: { type: String, default: '', trim: true },
-    },
-    qrCode: {
-      type: imageAssetSchema,
-      default: null,
-    },
-    rightSide: {
-      mainTitle: { type: String, default: '', trim: true },
-      subtitle: { type: String, default: '', trim: true },
-    },
-  },
-  { _id: false }
-);
-
 const bookSchema = new mongoose.Schema(
   {
     name: {
@@ -201,10 +174,6 @@ const bookSchema = new mongoose.Schema(
     pdfAssets: {
       type: [pdfAssetSchema],
       default: [],
-    },
-    coverPage: {
-      type: coverPageSchema,
-      default: null,
     },
   },
   {
