@@ -1991,11 +1991,32 @@ exports.regenerateStorybookPdf = async (req, res) => {
     const readerName = pdfAssetDoc.readerName || '';
 
     const frontMatterPages = [];
-    const coverFrontMatter = buildCoverPageContent({ book, readerName, storyPages });
+
+    // Find cover and dedication page data from the existing PDF to preserve candidates
+    const coverPdfPage = (pdfAssetDoc.pages || []).find((page) => page.order === 0);
+    const coverJobPage = coverPdfPage ? {
+      generationId: coverPdfPage.generationId || null,
+      candidateAssets: coverPdfPage.candidateAssets || [],
+      selectedCandidateIndex: coverPdfPage.selectedCandidateIndex,
+      rankingSummary: coverPdfPage.rankingSummary || '',
+      rankingNotes: coverPdfPage.rankingNotes || [],
+    } : null;
+
+    const coverFrontMatter = buildCoverPageContent({ book, readerName, storyPages, jobPage: coverJobPage });
     if (coverFrontMatter) {
       frontMatterPages.push(coverFrontMatter);
     }
-    const dedicationFrontMatter = buildDedicationPageContent({ book, readerName, storyPages });
+
+    const dedicationPdfPage = (pdfAssetDoc.pages || []).find((page) => page.order === 0.5);
+    const dedicationJobPage = dedicationPdfPage ? {
+      generationId: dedicationPdfPage.generationId || null,
+      candidateAssets: dedicationPdfPage.candidateAssets || [],
+      selectedCandidateIndex: dedicationPdfPage.selectedCandidateIndex,
+      rankingSummary: dedicationPdfPage.rankingSummary || '',
+      rankingNotes: dedicationPdfPage.rankingNotes || [],
+    } : null;
+
+    const dedicationFrontMatter = buildDedicationPageContent({ book, readerName, storyPages, jobPage: dedicationJobPage });
     if (dedicationFrontMatter) {
       frontMatterPages.push(dedicationFrontMatter);
     }
