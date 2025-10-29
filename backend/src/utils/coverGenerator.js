@@ -486,6 +486,7 @@ async function generateCoverPage(options) {
 
   // Draw right side title
   if (rightSide.mainTitle) {
+    const mainTitleText = (rightSide.mainTitle || '').toUpperCase();
     const textXRight = width * 0.75 - 40; // Shifted 40px left
     const bottomMargin = 250;
     const topY = height - bottomMargin - 280;
@@ -506,9 +507,9 @@ async function generateCoverPage(options) {
     ctx.font = 'bold 280px Arial';
     ctx.strokeStyle = '#1565C0';
     ctx.lineWidth = 35;
-    ctx.strokeText(rightSide.mainTitle, textXRight, topY);
+    ctx.strokeText(mainTitleText, textXRight, topY);
     ctx.fillStyle = topGradient;
-    ctx.fillText(rightSide.mainTitle, textXRight, topY);
+    ctx.fillText(mainTitleText, textXRight, topY);
 
     // Draw subtitle if provided
     if (rightSide.subtitle) {

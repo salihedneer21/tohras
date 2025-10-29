@@ -18,15 +18,12 @@ const uploadFields = upload.fields([
   { name: 'pageImages', maxCount: 100 },
   { name: 'pageQrImages', maxCount: 100 },
   { name: 'coverPageBackgroundImage', maxCount: 1 },
-  { name: 'coverPageCharacterImage', maxCount: 1 },
   { name: 'coverPageQrCode', maxCount: 1 },
   { name: 'dedicationPageBackgroundImage', maxCount: 1 },
-  { name: 'dedicationPageKidImage', maxCount: 1 },
 ]);
 
 const coverPreviewFields = upload.fields([
   { name: 'backgroundImage', maxCount: 1 },
-  { name: 'characterImage', maxCount: 1 },
   { name: 'qrCode', maxCount: 1 },
 ]);
 
@@ -39,7 +36,6 @@ const dedicationUpload = multer({
 
 const dedicationPreviewFields = dedicationUpload.fields([
   { name: 'backgroundImage', maxCount: 1 },
-  { name: 'kidImage', maxCount: 1 },
 ]);
 
 const storybookUpload = multer({
@@ -66,6 +62,7 @@ router.post(
   bookController.regenerateStorybookPage
 );
 router.post('/:id/storybooks/:assetId/regenerate', bookController.regenerateStorybookPdf);
+router.post('/:id/storybooks/:assetId/confirm', bookController.confirmStorybookPdf);
 router.post(
   '/:id/storybooks/:assetId/pages/:pageOrder/select',
   bookController.selectStorybookPageCandidate

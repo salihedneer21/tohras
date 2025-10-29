@@ -9,6 +9,7 @@ import {
   GraduationCap,
   Wand2,
   BarChart3,
+  Settings as SettingsIcon,
   Menu,
   ChevronDown,
   ChevronRight,
@@ -41,6 +42,11 @@ const NAVIGATION = [
         path: '/storybooks',
         label: 'Storybooks',
         icon: GraduationCap
+      },
+      {
+        path: '/settings',
+        label: 'Settings',
+        icon: SettingsIcon
       },
     ]
   },

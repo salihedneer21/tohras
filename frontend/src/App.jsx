@@ -10,6 +10,7 @@ import Generate from './pages/Generate';
 import Evaluate from './pages/Evaluate';
 import Storybooks from './pages/Storybooks';
 import Automate from './pages/Automate';
+import Settings from './pages/Settings';
 import Dashboard from './pages/Dashboard';
 
 function App() {
@@ -77,6 +78,7 @@ function App() {
                 <Route path="/evaluate" element={<Evaluate />} />
                 <Route path="/storybooks" element={<Storybooks />} />
                 <Route path="/automate" element={<Automate />} />
+                <Route path="/settings" element={<Settings />} />
               </Routes>
             </div>
           </main>

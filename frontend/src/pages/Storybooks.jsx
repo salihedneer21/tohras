@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   Loader2,
   Eye,
+  RefreshCw,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   X,
@@ -661,6 +663,18 @@ const CoverPagePreview = React.memo(({ model, className = '' }) => {
   const canvasRef = useRef(null);
   const [error, setError] = useState(null);
 
+  if (model.renderedImageSrc) {
+    return (
+      <div className={['h-full w-full overflow-hidden', className].filter(Boolean).join(' ')}>
+        <img
+          src={model.renderedImageSrc}
+          alt="Cover page preview"
+          className="h-full w-full object-cover"
+        />
+      </div>
+    );
+  }
+
   useEffect(() => {
     let cancelled = false;
     const signal = { cancelled: false };
@@ -707,6 +721,69 @@ const CoverPagePreview = React.memo(({ model, className = '' }) => {
       ref={canvasRef}
       className={['h-full w-full object-contain', className].filter(Boolean).join(' ')}
     />
+  );
+});
+
+const DedicationPagePreview = React.memo(({ model, className = '' }) => {
+  if (!model) return null;
+  const dedication = model.dedicationPage || {};
+
+  if (model.renderedImageSrc) {
+    return (
+      <div className={['h-full w-full overflow-hidden', className].filter(Boolean).join(' ')}>
+        <img
+          src={model.renderedImageSrc}
+          alt="Dedication page preview"
+          className="h-full w-full object-cover"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={[
+        'relative h-full w-full overflow-hidden',
+        className,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={{ aspectRatio: '5375 / 2975' }}
+    >
+      {dedication.backgroundSrc ? (
+        <img
+          src={dedication.backgroundSrc}
+          alt="Dedication background"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-muted" />
+      )}
+      <div className="absolute inset-0 bg-gradient-to-r from-black/25 via-black/15 to-black/35" />
+      <div className="relative grid h-full w-full grid-cols-2">
+        <div className="relative flex items-end justify-center p-[6%]">
+          {dedication.kidSrc ? (
+            <img
+              src={dedication.kidSrc}
+              alt="Featured child"
+              className="max-h-[95%] w-auto object-contain drop-shadow-[0_25px_55px_rgba(0,0,0,0.45)]"
+            />
+          ) : null}
+        </div>
+        <div className="relative flex flex-col items-center justify-center px-[8%] text-center text-white">
+          {dedication.title ? (
+            <p className="text-5xl font-extrabold tracking-tight drop-shadow-[0_12px_25px_rgba(0,0,0,0.45)]">
+              {dedication.title}
+            </p>
+          ) : null}
+          {dedication.secondTitle ? (
+            <p className="mt-6 text-2xl font-medium leading-snug drop-shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+              {dedication.secondTitle}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 });
 
@@ -781,6 +858,14 @@ const resolveAssetUrl = (asset) => {
   return '';
 };
 
+const getDisplayPageNumber = (pageType, pageOrder, fallbackIndex) => {
+  if (pageType === 'cover') return 1;
+  if (pageType === 'dedication') return 2;
+  const baseOrder =
+    Number.isFinite(pageOrder) && pageOrder > 0 ? pageOrder : fallbackIndex + 1;
+  return baseOrder + 2;
+};
+
 const buildPagePreviewModel = ({
   page,
   index = 0,
@@ -791,24 +876,59 @@ const buildPagePreviewModel = ({
   if (!page) return null;
 
   const safeIndex = Number.isInteger(index) ? index : 0;
-  const pageLabel = page.order || safeIndex + 1;
-  const pageType = page.pageType === 'cover' ? 'cover' : 'story';
-  const isCharacterOnRight = safeIndex % 2 === 0;
-
-  const backgroundUrl = resolveAssetUrl(page.background);
-  const characterUrl = resolveAssetUrl(page.character);
-  const coverQrUrl = page.cover ? resolveAssetUrl(page.cover.qrCodeImage) : '';
-
+  const rawType = page.pageType;
+  const pageType = rawType === 'cover' ? 'cover' : rawType === 'dedication' ? 'dedication' : 'story';
+  const pageLabel = getDisplayPageNumber(pageType, page.order, safeIndex);
   const cacheToken = page.updatedAt || assetUpdatedAt || `${assetIdentifier}-${pageLabel}`;
-  const backgroundSrc = withCacheBust(backgroundUrl, `${cacheToken}-background-${pageLabel}`);
-  const characterSrc = withCacheBust(characterUrl, `${cacheToken}-character-${pageLabel}`);
+
+  const renderedImageSrc = page.renderedImage
+    ? withCacheBust(
+        resolveAssetUrl(page.renderedImage),
+        `${cacheToken}-rendered-${pageLabel}`
+      )
+    : '';
 
   if (pageType === 'cover') {
-    const qrSrc = coverQrUrl
-      ? withCacheBust(coverQrUrl, `${cacheToken}-qr-${pageLabel}`)
+    const coverPage = page.coverPage || {};
+    const backgroundAsset = coverPage.backgroundImage || page.background || null;
+    const characterAsset = coverPage.characterImage || page.character || null;
+    const qrAsset = coverPage.qrCode || page.cover?.qrCodeImage || null;
+
+    const backgroundSrc = withCacheBust(
+      resolveAssetUrl(backgroundAsset),
+      `${cacheToken}-background-${pageLabel}`
+    );
+    const characterSrc = withCacheBust(
+      resolveAssetUrl(characterAsset),
+      `${cacheToken}-character-${pageLabel}`
+    );
+    const qrSrc = qrAsset
+      ? withCacheBust(resolveAssetUrl(qrAsset), `${cacheToken}-qr-${pageLabel}`)
       : '';
-    const { headline, footer, bodyText, uppercaseName, childName } = resolveCoverText({
-      cover: page.cover || {},
+
+    const leftSide = {
+      title: replaceNamePlaceholders(coverPage.leftSide?.title, readerName),
+      content: replaceNamePlaceholders(coverPage.leftSide?.content, readerName),
+      bottomText: replaceNamePlaceholders(coverPage.leftSide?.bottomText, readerName),
+    };
+    const rightSide = {
+      mainTitle: (replaceNamePlaceholders(coverPage.rightSide?.mainTitle, readerName) || '').toUpperCase(),
+      subtitle: replaceNamePlaceholders(coverPage.rightSide?.subtitle, readerName),
+    };
+
+    const syntheticCover =
+      page.cover ||
+      {
+        headline: coverPage.leftSide?.title || '',
+        footer: coverPage.leftSide?.bottomText || '',
+        bodyOverride: coverPage.leftSide?.content || '',
+        uppercaseName: true,
+        childName: page.childName || readerName || '',
+        qrCodeImage: qrAsset || null,
+      };
+
+    const resolvedCover = resolveCoverText({
+      cover: syntheticCover,
       bodyFallback: page.text || '',
       readerName,
     });
@@ -817,19 +937,64 @@ const buildPagePreviewModel = ({
       pageType: 'cover',
       cacheToken,
       pageLabel,
+      renderedImageSrc,
       backgroundSrc,
       characterSrc,
       qrSrc,
       cover: {
-        headline,
-        footer,
-        bodyOverride: page.cover?.bodyOverride ? bodyText : '',
-        uppercaseName,
-        childName,
+        headline: resolvedCover.headline,
+        footer: resolvedCover.footer,
+        bodyOverride: syntheticCover.bodyOverride ? resolvedCover.bodyText : '',
+        uppercaseName: resolvedCover.uppercaseName,
+        childName: resolvedCover.childName,
       },
-      bodyText,
+      bodyText: resolvedCover.bodyText,
+      coverPage: {
+        backgroundSrc,
+        characterSrc,
+        qrSrc,
+        leftSide,
+        rightSide,
+      },
     };
   }
+
+  if (pageType === 'dedication') {
+    const dedicationPage = page.dedicationPage || {};
+    const backgroundAsset = dedicationPage.backgroundImage || page.background || null;
+    const kidAsset = dedicationPage.generatedImage || dedicationPage.kidImage || null;
+
+    const backgroundSrc = withCacheBust(
+      resolveAssetUrl(backgroundAsset),
+      `${cacheToken}-background-${pageLabel}`
+    );
+    const kidSrc = kidAsset
+      ? withCacheBust(resolveAssetUrl(kidAsset), `${cacheToken}-kid-${pageLabel}`)
+      : '';
+
+    return {
+      pageType: 'dedication',
+      cacheToken,
+      pageLabel,
+      renderedImageSrc,
+      dedicationPage: {
+        backgroundSrc,
+        kidSrc,
+        title: replaceNamePlaceholders(dedicationPage.title, readerName),
+        secondTitle: replaceNamePlaceholders(dedicationPage.secondTitle, readerName),
+      },
+    };
+  }
+
+  const isCharacterOnRight = safeIndex % 2 === 0;
+  const backgroundSrc = withCacheBust(
+    resolveAssetUrl(page.background),
+    `${cacheToken}-background-${pageLabel}`
+  );
+  const characterSrc = withCacheBust(
+    resolveAssetUrl(page.character),
+    `${cacheToken}-character-${pageLabel}`
+  );
 
   const hasCharacter = Boolean(characterSrc);
   const characterMaxWidth = hasCharacter ? PDF_PAGE_WIDTH * PDF_CHARACTER_MAX_WIDTH_RATIO : 0;
@@ -866,11 +1031,10 @@ const buildPagePreviewModel = ({
   const bgY = clamp(rawBgY, 0, PDF_PAGE_HEIGHT - 1);
   const xOffset = bgX - rawBgX;
   const yOffset = bgY - rawBgY;
-  const availableWidth = Math.max(1, PDF_PAGE_WIDTH - bgX);
-  const availableHeight = Math.max(1, PDF_PAGE_HEIGHT - bgY);
-  const bgWidth = Math.min(Math.max(1, rawBgWidth - xOffset), availableWidth);
-  const bgHeight = Math.min(Math.max(1, rawBgHeight - yOffset), availableHeight);
-  const bgSvgY = PDF_PAGE_HEIGHT - (bgY + bgHeight);
+  const availableWidth = Math.max(1, Math.round(PDF_PAGE_WIDTH - bgX));
+  const availableHeight = Math.max(1, Math.round(PDF_PAGE_HEIGHT - bgY));
+  const bgWidth = Math.min(Math.max(1, Math.round(rawBgWidth - xOffset)), availableWidth);
+  const bgHeight = Math.min(Math.max(1, Math.round(rawBgHeight - yOffset)), availableHeight);
 
   const hebrewQuote = (page.hebrewQuote || page.quote || '').trim();
   const availableHebrewWidth = clamp(
@@ -878,26 +1042,19 @@ const buildPagePreviewModel = ({
     80,
     PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
   );
-  const hebrewLines = hebrewQuote
-    ? wrapTextToLines(hebrewQuote, availableHebrewWidth, HEBREW_BASE_FONT_SIZE)
-    : [];
   const hebrewBaseX = characterMaxWidth
     ? characterX + characterMaxWidth * 0.1
     : isCharacterOnRight
     ? PDF_TEXT_MARGIN
     : PDF_PAGE_WIDTH - availableHebrewWidth - PDF_TEXT_MARGIN;
   const hebrewMinX = PDF_TEXT_MARGIN;
-  const hebrewMaxX = Math.max(
-    hebrewMinX,
-    PDF_PAGE_WIDTH - availableHebrewWidth - PDF_TEXT_MARGIN
-  );
+  const hebrewMaxX = Math.max(hebrewMinX, PDF_PAGE_WIDTH - availableHebrewWidth - PDF_TEXT_MARGIN);
   const hebrewX = clamp(hebrewBaseX, hebrewMinX, hebrewMaxX);
   const hebrewBaseY = characterMaxHeight + 20;
-  const hebrewY = clamp(
-    hebrewBaseY,
-    PDF_TEXT_MARGIN,
-    PDF_PAGE_HEIGHT - HEBREW_BASE_FONT_SIZE
-  );
+  const hebrewY = clamp(hebrewBaseY, PDF_TEXT_MARGIN, PDF_PAGE_HEIGHT - HEBREW_BASE_FONT_SIZE);
+  const hebrewLines = hebrewQuote
+    ? wrapTextToLines(hebrewQuote, availableHebrewWidth, HEBREW_BASE_FONT_SIZE)
+    : [];
 
   return {
     pageType: 'story',
@@ -914,7 +1071,7 @@ const buildPagePreviewModel = ({
       blockWidth: textBlockWidth,
       overlay: {
         x: bgX,
-        y: bgSvgY,
+        y: PDF_PAGE_HEIGHT - (bgY + bgHeight),
         width: bgWidth,
         height: bgHeight,
       },
@@ -934,6 +1091,9 @@ const StorybookPageSvg = React.memo(
 
     if (model.pageType === 'cover') {
       return <CoverPagePreview model={model} className={className} />;
+    }
+    if (model.pageType === 'dedication') {
+      return <DedicationPagePreview model={model} className={className} />;
     }
 
     const { backgroundSrc, characterSrc, characterFrame, pageLabel, text, hebrew } = model;
@@ -1122,8 +1282,8 @@ const StorybookPageSvg = React.memo(
       prev.model.pageLabel === next.model.pageLabel &&
       prev.model.backgroundSrc === next.model.backgroundSrc &&
       prev.model.characterSrc === next.model.characterSrc &&
-      prev.model.text.lines.join('\n') === next.model.text.lines.join('\n') &&
-      prev.model.hebrew.lines.join('\n') === next.model.hebrew.lines.join('\n')
+      (prev.model.text?.lines || []).join('\n') === (next.model.text?.lines || []).join('\n') &&
+      (prev.model.hebrew?.lines || []).join('\n') === (next.model.hebrew?.lines || []).join('\n')
     );
   }
 );
@@ -1165,29 +1325,147 @@ const cloneCoverConfig = (cover) => {
   };
 };
 
+const cloneCoverPageConfig = (coverPage) => {
+  if (!coverPage || typeof coverPage !== 'object') return null;
+  return {
+    backgroundImage: coverPage.backgroundImage ? { ...coverPage.backgroundImage } : null,
+    characterImage: coverPage.characterImage ? { ...coverPage.characterImage } : null,
+    qrCode: coverPage.qrCode ? { ...coverPage.qrCode } : null,
+    characterPrompt:
+      typeof coverPage.characterPrompt === 'string' ? coverPage.characterPrompt : '',
+    leftSide: {
+      title: typeof coverPage.leftSide?.title === 'string' ? coverPage.leftSide.title : '',
+      content: typeof coverPage.leftSide?.content === 'string' ? coverPage.leftSide.content : '',
+      bottomText:
+        typeof coverPage.leftSide?.bottomText === 'string' ? coverPage.leftSide.bottomText : '',
+    },
+    rightSide: {
+      mainTitle:
+        typeof coverPage.rightSide?.mainTitle === 'string' ? coverPage.rightSide.mainTitle : '',
+      subtitle:
+        typeof coverPage.rightSide?.subtitle === 'string' ? coverPage.rightSide.subtitle : '',
+    },
+  };
+};
+
+const cloneDedicationPageConfig = (dedicationPage) => {
+  if (!dedicationPage || typeof dedicationPage !== 'object') return null;
+  return {
+    backgroundImage: dedicationPage.backgroundImage ? { ...dedicationPage.backgroundImage } : null,
+    kidImage: dedicationPage.kidImage ? { ...dedicationPage.kidImage } : null,
+    generatedImage: dedicationPage.generatedImage ? { ...dedicationPage.generatedImage } : null,
+    characterPrompt:
+      typeof dedicationPage.characterPrompt === 'string' ? dedicationPage.characterPrompt : '',
+    title: typeof dedicationPage.title === 'string' ? dedicationPage.title : '',
+    secondTitle:
+      typeof dedicationPage.secondTitle === 'string' ? dedicationPage.secondTitle : '',
+  };
+};
+
 const normaliseAssetPages = (pages) => {
   if (!Array.isArray(pages)) return [];
+  const pageTypePriority = {
+    cover: -2,
+    dedication: -1,
+    story: 0,
+  };
   return pages
     .map((entry) => {
-      const pageType = entry?.pageType === 'cover' ? 'cover' : 'story';
+      const rawType = entry?.pageType;
+      const pageType =
+        rawType === 'cover' ? 'cover' : rawType === 'dedication' ? 'dedication' : 'story';
       const cover = pageType === 'cover' ? cloneCoverConfig(entry.cover) : null;
+      const coverPage = pageType === 'cover' ? cloneCoverPageConfig(entry.coverPage) : null;
+      const dedicationPage =
+        pageType === 'dedication' ? cloneDedicationPageConfig(entry.dedicationPage) : null;
+
+      const candidateAssetsSource = Array.isArray(entry?.candidateAssets)
+        ? entry.candidateAssets
+        : pageType === 'cover' && Array.isArray(entry?.coverPage?.candidateAssets)
+        ? entry.coverPage.candidateAssets
+        : pageType === 'dedication' && Array.isArray(entry?.dedicationPage?.candidateAssets)
+        ? entry.dedicationPage.candidateAssets
+        : [];
+
+      const selectedCandidateIndexSource = Number.isFinite(entry?.selectedCandidateIndex)
+        ? entry.selectedCandidateIndex
+        : pageType === 'cover' && Number.isFinite(entry?.coverPage?.selectedCandidateIndex)
+        ? entry.coverPage.selectedCandidateIndex
+        : pageType === 'dedication' && Number.isFinite(entry?.dedicationPage?.selectedCandidateIndex)
+        ? entry.dedicationPage.selectedCandidateIndex
+        : null;
+
+      const rankingSummarySource =
+        typeof entry?.rankingSummary === 'string'
+          ? entry.rankingSummary
+          : pageType === 'cover' && typeof entry?.coverPage?.rankingSummary === 'string'
+          ? entry.coverPage.rankingSummary
+          : pageType === 'dedication' && typeof entry?.dedicationPage?.rankingSummary === 'string'
+          ? entry.dedicationPage.rankingSummary
+          : '';
+
+      const rankingNotesSource = Array.isArray(entry?.rankingNotes)
+        ? entry.rankingNotes
+        : pageType === 'cover' && Array.isArray(entry?.coverPage?.rankingNotes)
+        ? entry.coverPage.rankingNotes
+        : pageType === 'dedication' && Array.isArray(entry?.dedicationPage?.rankingNotes)
+        ? entry.dedicationPage.rankingNotes
+        : [];
+
+      const pagePrompt =
+        typeof entry?.prompt === 'string'
+          ? entry.prompt
+          : pageType === 'cover' && typeof entry?.coverPage?.prompt === 'string'
+          ? entry.coverPage.prompt
+          : pageType === 'dedication' && typeof entry?.dedicationPage?.prompt === 'string'
+          ? entry.dedicationPage.prompt
+          : entry?.text || '';
       return {
         ...entry,
         pageType,
         cover,
+        coverPage,
+        dedicationPage,
         background: entry?.background ? { ...entry.background } : null,
         character: entry?.character ? { ...entry.character } : null,
         characterOriginal: entry?.characterOriginal ? { ...entry.characterOriginal } : null,
-        candidateAssets: Array.isArray(entry?.candidateAssets)
-          ? entry.candidateAssets.map((asset) => ({ ...asset }))
-          : [],
-        selectedCandidateIndex: Number.isFinite(entry?.selectedCandidateIndex)
-          ? entry.selectedCandidateIndex
-          : null,
+        candidateAssets: candidateAssetsSource.map((asset) => ({ ...asset })),
+        selectedCandidateIndex: selectedCandidateIndexSource,
         generationId: entry?.generationId || null,
+        renderedImage: entry?.renderedImage ? { ...entry.renderedImage } : null,
+        childName: typeof entry?.childName === 'string' ? entry.childName : '',
+        rankingSummary: rankingSummarySource,
+        rankingNotes: rankingNotesSource.map((note) => ({ ...note })),
+        prompt: pagePrompt,
       };
     })
-    .sort((a, b) => (a.order || 0) - (b.order || 0));
+    .sort((a, b) => {
+      const priorityDiff =
+        (pageTypePriority[a.pageType] || 0) - (pageTypePriority[b.pageType] || 0);
+      if (priorityDiff !== 0) return priorityDiff;
+      return (a.order || 0) - (b.order || 0);
+    });
+};
+
+const normaliseIdentifier = (value) => {
+  if (!value && value !== 0) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    if (typeof value.$oid === 'string') return value.$oid;
+    if (typeof value.toString === 'function') return value.toString();
+  }
+  return `${value}`;
+};
+
+const resolveAssetId = (asset) => {
+  if (!asset) return '';
+  return normaliseIdentifier(asset._id || asset.id || asset.key);
+};
+
+const resolveAssetVariant = (asset) => {
+  const value = typeof asset?.variant === 'string' ? asset.variant.toLowerCase() : '';
+  return value === 'split' ? 'split' : 'standard';
 };
 
 // Page Thumbnail Component - matches main preview exactly
@@ -1219,9 +1497,7 @@ const PageThumbnail = React.memo(
           {previewModel ? (
             <StorybookPageSvg model={previewModel} className="absolute inset-0" />
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center bg-white text-[10px] font-semibold text-foreground/60">
-              No preview
-            </div>
+            <div className="absolute inset-0 bg-muted/20" />
           )}
         </div>
       </button>
@@ -1265,6 +1541,7 @@ function Storybooks() {
   const [regeneratingOrder, setRegeneratingOrder] = useState(null);
   const [isRegeneratingPdf, setIsRegeneratingPdf] = useState(false);
   const [applyingCandidateKey, setApplyingCandidateKey] = useState('');
+  const [confirmingAssetId, setConfirmingAssetId] = useState('');
   const preloadRefs = useRef([]);
 
   const selectedReader = useMemo(
@@ -1280,8 +1557,14 @@ function Storybooks() {
           bookAPI.getAll(),
           userAPI.getAll(),
         ]);
-        setBooks(booksResponse.data);
-        setUsers(usersResponse.data);
+        if (booksResponse?.success === false) {
+          throw new Error(booksResponse?.message || 'Failed to load books');
+        }
+        if (usersResponse?.success === false) {
+          throw new Error(usersResponse?.message || 'Failed to load users');
+        }
+        setBooks(Array.isArray(booksResponse?.data) ? booksResponse.data : []);
+        setUsers(Array.isArray(usersResponse?.data) ? usersResponse.data : []);
       } catch (error) {
         toast.error(`Failed to load storybook data: ${error.message}`);
       } finally {
@@ -1298,10 +1581,18 @@ function Storybooks() {
       try {
         setLoadingBook(true);
         const response = await bookAPI.getById(bookId);
+        if (!response?.success || !response.data) {
+          throw new Error(response?.message || 'Book not found');
+        }
         const book = response.data;
         const normalisedPdfAssets = Array.isArray(book.pdfAssets)
           ? book.pdfAssets.map((asset) => ({
               ...asset,
+              variant: resolveAssetVariant(asset),
+              derivedFromAssetId: asset?.derivedFromAssetId || null,
+              derivedFromAssetKey: asset?.derivedFromAssetKey || null,
+              confirmedAt: asset?.confirmedAt || null,
+              metadata: asset?.metadata || null,
               pages: normaliseAssetPages(asset.pages),
             }))
           : [];
@@ -1369,15 +1660,20 @@ function Storybooks() {
         if (!prev) return prev;
         const existingAssets = Array.isArray(prev.pdfAssets) ? prev.pdfAssets : [];
         const alreadyPresent = existingAssets.some((asset) => asset.key === job.pdfAsset?.key);
+        const enrichedPdfAsset = job.pdfAsset
+          ? {
+              ...job.pdfAsset,
+              variant: resolveAssetVariant(job.pdfAsset),
+              derivedFromAssetId: job.pdfAsset?.derivedFromAssetId || null,
+              derivedFromAssetKey: job.pdfAsset?.derivedFromAssetKey || null,
+              confirmedAt: job.pdfAsset?.confirmedAt || null,
+              metadata: job.pdfAsset?.metadata || null,
+              pages: normaliseAssetPages(job.pdfAsset.pages),
+            }
+          : null;
         const nextAssets =
-          job.pdfAsset && !alreadyPresent
-            ? [
-                {
-                  ...job.pdfAsset,
-                  pages: normaliseAssetPages(job.pdfAsset.pages),
-                },
-                ...existingAssets,
-              ]
+          enrichedPdfAsset && !alreadyPresent
+            ? [enrichedPdfAsset, ...existingAssets]
             : existingAssets;
         return {
           ...prev,
@@ -1414,7 +1710,10 @@ function Storybooks() {
       }
       try {
         const response = await bookAPI.getStorybookJobs(bookId, { limit: JOB_HISTORY_LIMIT });
-        const jobs = Array.isArray(response.data) ? response.data : [];
+        if (response?.success === false) {
+          throw new Error(response?.message || 'Failed to load storybook runs');
+        }
+        const jobs = Array.isArray(response?.data) ? response.data : [];
         setStorybookJobs(jobs.sort(sortByCreatedAtDesc));
         handledJobCompletionsRef.current = new Set(
           jobs.filter((job) => job.status === 'succeeded').map((job) => job._id)
@@ -1493,7 +1792,10 @@ function Storybooks() {
           status: 'succeeded',
         });
         if (cancelled) return;
-        const items = Array.isArray(response.data)
+        if (response?.success === false) {
+          throw new Error(response?.message || 'Failed to load trainings');
+        }
+        const items = Array.isArray(response?.data)
           ? response.data.filter((training) => training.status === 'succeeded')
           : [];
         setTrainings(items);
@@ -1596,8 +1898,47 @@ function Storybooks() {
     }
   }, [activeAsset, selectedBook?.pdfAssets]);
 
+  const standardAssets = useMemo(() => {
+    if (!Array.isArray(selectedBook?.pdfAssets)) return [];
+    return selectedBook.pdfAssets
+      .filter((asset) => resolveAssetVariant(asset) === 'standard')
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }, [selectedBook?.pdfAssets]);
+
+  const splitAssets = useMemo(() => {
+    if (!Array.isArray(selectedBook?.pdfAssets)) return [];
+    return selectedBook.pdfAssets
+      .filter((asset) => resolveAssetVariant(asset) === 'split')
+      .slice()
+      .sort((a, b) => {
+        const aDate = new Date(a.confirmedAt || a.updatedAt || a.createdAt || 0);
+        const bDate = new Date(b.confirmedAt || b.updatedAt || b.createdAt || 0);
+        return bDate - aDate;
+      });
+  }, [selectedBook?.pdfAssets]);
+
+  const splitLookup = useMemo(() => {
+    const map = new Map();
+    splitAssets.forEach((asset) => {
+      const derivedId = asset?.derivedFromAssetId ? normaliseIdentifier(asset.derivedFromAssetId) : null;
+      const derivedKey = asset?.derivedFromAssetKey || null;
+      if (derivedId) {
+        map.set(derivedId, asset);
+      }
+      if (derivedKey) {
+        map.set(derivedKey, asset);
+      }
+    });
+    return map;
+  }, [splitAssets]);
+
   const totalPages = useMemo(() => pages.length, [pages.length]);
-  const totalStorybooks = useMemo(() => selectedBook?.pdfAssets?.length || 0, [selectedBook?.pdfAssets?.length]);
+  const totalStorybooks = useMemo(() => standardAssets.length, [standardAssets.length]);
+  const totalConfirmedStorybooks = useMemo(
+    () => splitAssets.length,
+    [splitAssets.length]
+  );
   const activeJob = useMemo(
     () =>
       storybookJobs.find((job) =>
@@ -1691,10 +2032,14 @@ function Storybooks() {
         readerName: selectedReader?.name || '',
         title: storyTitle || `${selectedBook?.name || 'Storybook'}`,
       });
-      if (response.data?._id) {
-        setStorybookJobs((previous) => upsertJobList(previous, response.data));
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Failed to start automation');
       }
-      toast.success('Automated storybook generation started');
+      const jobPayload = response?.data;
+      if (jobPayload?._id) {
+        setStorybookJobs((previous) => upsertJobList(previous, jobPayload));
+      }
+      toast.success(response?.message || 'Automated storybook generation started');
     } catch (error) {
       toast.error(`Failed to start automation: ${error.message}`);
     } finally {
@@ -1764,12 +2109,20 @@ function Storybooks() {
       });
 
       const response = await bookAPI.generateStorybook(selectedBookId, formData);
-      toast.success('Storybook generated!');
+      if (response?.success === false || !response?.data) {
+        throw new Error(response?.message || 'Storybook generation failed');
+      }
+      toast.success(response?.message || 'Storybook generated!');
 
       setSelectedBook((prev) => {
         if (!prev) return prev;
         const newAsset = {
           ...response.data,
+          variant: resolveAssetVariant(response.data),
+          derivedFromAssetId: response.data?.derivedFromAssetId || null,
+          derivedFromAssetKey: response.data?.derivedFromAssetKey || null,
+          confirmedAt: response.data?.confirmedAt || null,
+          metadata: response.data?.metadata || null,
           pages: normaliseAssetPages(response.data?.pages),
         };
         const updatedAssets = [...(prev.pdfAssets || []), newAsset];
@@ -1785,6 +2138,7 @@ function Storybooks() {
   const handleOpenAssetViewer = async (asset) => {
     if (!asset) return;
     const assetSnapshot = JSON.parse(JSON.stringify(asset));
+    assetSnapshot.variant = resolveAssetVariant(assetSnapshot);
     const orderedPages = normaliseAssetPages(assetSnapshot.pages);
 
     setActiveAsset(assetSnapshot);
@@ -1798,7 +2152,10 @@ function Storybooks() {
 
     try {
       const response = await bookAPI.getStorybookAssetPages(selectedBookId, assetIdentifier);
-      const remotePages = normaliseAssetPages(response.data?.pages || []);
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Failed to load storybook pages');
+      }
+      const remotePages = normaliseAssetPages(response?.data?.pages || []);
       if (remotePages.length) {
         setActiveAssetPages(remotePages);
         setActivePageIndex((prev) =>
@@ -1828,6 +2185,78 @@ function Storybooks() {
       }
     } catch (error) {
       console.warn('Failed to fetch storybook pages', error);
+    }
+  };
+
+  const handleConfirmStorybook = async (asset) => {
+    if (!asset || !selectedBookId) return;
+    const assetIdentifier = resolveAssetId(asset);
+    if (!assetIdentifier) {
+      toast.error('Missing storybook identifier for confirmation');
+      return;
+    }
+
+    setConfirmingAssetId(assetIdentifier);
+    try {
+      const response = await bookAPI.confirmStorybookPdf(selectedBookId, assetIdentifier);
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Failed to confirm storybook');
+      }
+      const payload = response?.data || {};
+      const meta = response?.meta || {};
+      const sourceAssetId = meta?.sourceAssetId ? normaliseIdentifier(meta.sourceAssetId) : assetIdentifier;
+      const enrichedAsset = {
+        ...payload,
+        variant: 'split',
+        derivedFromAssetId: payload?.derivedFromAssetId || null,
+        derivedFromAssetKey: payload?.derivedFromAssetKey || null,
+        confirmedAt: payload?.confirmedAt || null,
+        metadata: payload?.metadata || null,
+        pages: normaliseAssetPages(payload.pages),
+      };
+      const newDerivedId = enrichedAsset.derivedFromAssetId
+        ? normaliseIdentifier(enrichedAsset.derivedFromAssetId)
+        : null;
+      const newDerivedKey = enrichedAsset.derivedFromAssetKey || null;
+
+      setSelectedBook((prev) => {
+        if (!prev) return prev;
+        const existingAssets = Array.isArray(prev.pdfAssets) ? [...prev.pdfAssets] : [];
+        const filtered = existingAssets.filter((existing) => {
+          if (resolveAssetVariant(existing) !== 'split') return true;
+          if (newDerivedId && existing.derivedFromAssetId) {
+            return normaliseIdentifier(existing.derivedFromAssetId) !== newDerivedId;
+          }
+          if (newDerivedKey && existing.derivedFromAssetKey) {
+            return existing.derivedFromAssetKey !== newDerivedKey;
+          }
+          if (sourceAssetId && existing.derivedFromAssetId) {
+            return normaliseIdentifier(existing.derivedFromAssetId) !== sourceAssetId;
+          }
+          return true;
+        });
+        filtered.push(enrichedAsset);
+        return {
+          ...prev,
+          pdfAssets: filtered,
+        };
+      });
+
+      setActiveAsset((prev) => {
+        if (!prev) return prev;
+        const prevId = resolveAssetId(prev);
+        const newId = resolveAssetId(enrichedAsset);
+        if (prevId && newId && prevId === newId) {
+          return enrichedAsset;
+        }
+        return prev;
+      });
+
+      toast.success(response?.message || 'Split PDF generated successfully');
+    } catch (error) {
+      toast.error(`Failed to confirm storybook: ${error.message}`);
+    } finally {
+      setConfirmingAssetId('');
     }
   };
 
@@ -1895,7 +2324,7 @@ function Storybooks() {
   }, [activeAsset, activeAssetPages, activePageIndex]);
 
   const handleRegeneratePage = async (order) => {
-    if (!activeAsset || !selectedBookId || !order) return;
+    if (!activeAsset || !selectedBookId || order === undefined || order === null) return;
     const assetIdentifier = activeAsset._id || activeAsset.key;
     if (!assetIdentifier) {
       toast.error('Missing storybook identifier for regeneration');
@@ -1913,7 +2342,10 @@ function Storybooks() {
         assetIdentifier,
         order
       );
-      const payload = response.data || {};
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Regeneration failed');
+      }
+      const payload = response?.data || {};
       const { page: updatedBookPage, pdfAssetPage } = payload;
 
       if (pdfAssetPage) {
@@ -1941,6 +2373,7 @@ function Storybooks() {
             ...prev,
             pages: nextPages,
             updatedAt: new Date().toISOString(),
+            variant: prev.variant || resolveAssetVariant(prev),
           };
         });
       }
@@ -1994,14 +2427,36 @@ function Storybooks() {
                 }
                 updatedAsset.pages = normaliseAssetPages(assetPages);
               }
+              updatedAsset.variant = resolveAssetVariant(updatedAsset);
+              if (!updatedAsset.derivedFromAssetId && asset.derivedFromAssetId) {
+                updatedAsset.derivedFromAssetId = asset.derivedFromAssetId;
+              }
+              if (!updatedAsset.derivedFromAssetKey && asset.derivedFromAssetKey) {
+                updatedAsset.derivedFromAssetKey = asset.derivedFromAssetKey;
+              }
+              if (!updatedAsset.confirmedAt && asset.confirmedAt) {
+                updatedAsset.confirmedAt = asset.confirmedAt;
+              }
+              if (!updatedAsset.metadata && asset.metadata) {
+                updatedAsset.metadata = asset.metadata;
+              }
               return updatedAsset;
             })
           : prev.pdfAssets;
+
+        const nextCoverPage = payload.coverPage
+          ? { ...(prev.coverPage || {}), ...payload.coverPage }
+          : prev.coverPage;
+        const nextDedicationPage = payload.dedicationPage
+          ? { ...(prev.dedicationPage || {}), ...payload.dedicationPage }
+          : prev.dedicationPage;
 
         return {
           ...prev,
           pages: nextPages,
           pdfAssets: nextAssets,
+          coverPage: nextCoverPage,
+          dedicationPage: nextDedicationPage,
         };
       });
 
@@ -2011,13 +2466,23 @@ function Storybooks() {
           selectedBookId,
           assetIdentifier
         );
-        const refreshedPages = normaliseAssetPages(refreshedPagesResponse.data?.pages || []);
+        const refreshedPages = normaliseAssetPages(
+          refreshedPagesResponse?.data?.pages || []
+        );
         if (refreshedPages.length) {
           setActiveAssetPages(refreshedPages);
           setActivePageIndex((prev) =>
             prev >= refreshedPages.length ? refreshedPages.length - 1 : prev
           );
-          setActiveAsset((prev) => (prev ? { ...prev, pages: refreshedPages } : prev));
+          setActiveAsset((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pages: refreshedPages,
+                  variant: prev.variant || resolveAssetVariant(prev),
+                }
+              : prev
+          );
         }
       } catch (fetchError) {
         console.warn('Failed to refresh storybook pages after regeneration', fetchError);
@@ -2047,7 +2512,10 @@ function Storybooks() {
       const response = await bookAPI.regenerateStorybookPdf(selectedBookId, assetIdentifier, {
         title: activeAsset.title,
       });
-      const payload = response.data || {};
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Failed to regenerate PDF');
+      }
+      const payload = response?.data || {};
       const normalisedPages = normaliseAssetPages(payload.pages || []);
 
       setActiveAsset((prev) => {
@@ -2055,6 +2523,13 @@ function Storybooks() {
         return {
           ...prev,
           ...payload,
+          variant: prev.variant || resolveAssetVariant(prev),
+          derivedFromAssetId:
+            payload?.derivedFromAssetId ?? prev.derivedFromAssetId ?? null,
+          derivedFromAssetKey:
+            payload?.derivedFromAssetKey ?? prev.derivedFromAssetKey ?? null,
+          confirmedAt: payload?.confirmedAt ?? prev.confirmedAt ?? null,
+          metadata: payload?.metadata ?? prev.metadata ?? null,
           pages: normalisedPages,
           updatedAt: payload.updatedAt || new Date().toISOString(),
         };
@@ -2069,9 +2544,17 @@ function Storybooks() {
                 (activeAsset?._id && asset._id === activeAsset._id) ||
                 asset.key === activeAsset?.key;
               if (!matches) return asset;
+              const variant = resolveAssetVariant({ ...asset, ...payload });
               return {
                 ...asset,
                 ...payload,
+                 variant,
+                 derivedFromAssetId:
+                   payload?.derivedFromAssetId ?? asset.derivedFromAssetId ?? null,
+                 derivedFromAssetKey:
+                   payload?.derivedFromAssetKey ?? asset.derivedFromAssetKey ?? null,
+                 confirmedAt: payload?.confirmedAt ?? asset.confirmedAt ?? null,
+                 metadata: payload?.metadata ?? asset.metadata ?? null,
                 pages: normalisedPages,
               };
             })
@@ -2091,7 +2574,7 @@ function Storybooks() {
   };
 
   const handleApplyCandidate = async (order, candidateIndex) => {
-    if (!activeAsset || !selectedBookId || !order) return;
+    if (!activeAsset || !selectedBookId || order === undefined || order === null) return;
     const assetIdentifier = activeAsset._id || activeAsset.key;
     if (!assetIdentifier) {
       toast.error('Missing storybook identifier for candidate selection');
@@ -2108,7 +2591,10 @@ function Storybooks() {
         order,
         { candidateIndex }
       );
-      const payload = response.data || {};
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Candidate selection failed');
+      }
+      const payload = response?.data || {};
       if (payload.pdfAssetPage) {
         const [normalisedPage] = normaliseAssetPages([payload.pdfAssetPage]);
 
@@ -2172,10 +2658,18 @@ function Storybooks() {
                 };
               })
             : prev.pdfAssets;
+          const updatedCoverPage = payload.coverPage
+            ? { ...(prev.coverPage || {}), ...payload.coverPage }
+            : prev.coverPage;
+          const updatedDedicationPage = payload.dedicationPage
+            ? { ...(prev.dedicationPage || {}), ...payload.dedicationPage }
+            : prev.dedicationPage;
           return {
             ...prev,
             pdfAssets: updatedAssets,
             pages: updatedBookPages,
+            coverPage: updatedCoverPage,
+            dedicationPage: updatedDedicationPage,
           };
         });
 
@@ -2193,6 +2687,10 @@ function Storybooks() {
                 : page
             )
           );
+        }
+
+        if ((payload.coverPage || payload.dedicationPage) && selectedBookId) {
+          await fetchBookDetails(selectedBookId, { preserveTitle: true });
         }
 
         toast.success('Applied the selected candidate image');
@@ -2228,13 +2726,21 @@ function Storybooks() {
     const canNavigateNext = hasPages && safeIndex < activeAssetPages.length - 1;
     const isCurrentPageRegenerating =
       currentPage?.order !== undefined && regeneratingOrder === currentPage.order;
-    const pageLabel = previewModel?.pageLabel || currentPage?.order || safeIndex + 1;
+    const pageLabel =
+      previewModel?.pageLabel ??
+      getDisplayPageNumber(currentPage?.pageType, currentPage?.order, safeIndex);
     const cacheToken = previewModel?.cacheToken || assetIdentifier;
+    const pageRole = currentPage?.pageType || 'story';
+    const isRegenerablePage = ['story', 'cover', 'dedication'].includes(pageRole);
+    const readablePageRole =
+      pageRole === 'cover' ? 'Cover' : pageRole === 'dedication' ? 'Dedication' : null;
+    const isStoryPage = pageRole === 'story';
     const hasCandidateAssets =
       Array.isArray(currentPage?.candidateAssets) && currentPage.candidateAssets.length > 0;
     const hasRankingNotes = Array.isArray(currentPage?.rankingNotes) && currentPage.rankingNotes.length > 0;
     const shouldShowCandidateSection =
-      hasCandidateAssets || hasRankingNotes || Boolean(activeAsset?.trainingId);
+      isRegenerablePage &&
+      (hasCandidateAssets || hasRankingNotes || Boolean(activeAsset?.trainingId));
     const rankingSummary = (currentPage?.rankingSummary || '').trim();
 
     return (
@@ -2245,7 +2751,11 @@ function Storybooks() {
               <p className="text-xs uppercase tracking-wide text-foreground/45">Storybook preview</p>
               <h3 className="text-base sm:text-lg font-semibold text-foreground truncate">
                 {activeAsset.title || selectedBook?.name || 'Storybook'}
-                {hasPages ? ` · Page ${pageLabel}` : ' · No page snapshots yet'}
+                {hasPages
+                  ? ` · Page ${pageLabel}${
+                      readablePageRole ? ` (${readablePageRole})` : ''
+                    }`
+                  : ' · No page snapshots yet'}
               </h3>
             </div>
             <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
@@ -2278,7 +2788,7 @@ function Storybooks() {
                 <span className="hidden sm:inline">Next</span>
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              {hasPages ? (
+              {hasPages && isRegenerablePage ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -2365,22 +2875,13 @@ function Storybooks() {
                       }}
                     >
                       {previewModel ? (
-                        <>
-                          <StorybookPageSvg
-                            key={`${previewModel.cacheToken}-preview`}
-                            model={previewModel}
-                            className="absolute inset-0"
-                          />
-                          {!previewModel.backgroundSrc ? (
-                            <div className="absolute inset-0 flex items-center justify-center text-sm font-medium text-foreground/60">
-                              No background stored for this page.
-                            </div>
-                          ) : null}
-                        </>
+                        <StorybookPageSvg
+                          key={`${previewModel.cacheToken}-preview`}
+                          model={previewModel}
+                          className="absolute inset-0"
+                        />
                       ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-sm text-foreground/50">
-                          No preview available.
-                        </div>
+                        <div className="absolute inset-0 bg-muted/10" />
                       )}
                     </div>
 
@@ -2442,7 +2943,7 @@ function Storybooks() {
                     </div>
 
                     {/* Art Director Notes */}
-                    {rankingSummary ? (
+                    {isStoryPage && rankingSummary ? (
                       <div className="rounded-lg border border-border/60 bg-background p-4 text-sm text-foreground/80">
                         <p className="text-xs font-semibold uppercase tracking-wide text-foreground/55 mb-2">
                           Art Director Notes
@@ -2466,7 +2967,14 @@ function Storybooks() {
                           const optionNumber = candidateIdx + 1;
                           const candidateUrl = resolveAssetUrl(candidate);
                           const cacheKey = `${cacheToken}-candidate-${optionNumber}`;
-                          const candidateKey = `${currentPage?.order || pageLabel}-${optionNumber}`;
+                          const orderToken =
+                            currentPage?.order ??
+                            (currentPage?.pageType === 'cover'
+                              ? 'cover'
+                              : currentPage?.pageType === 'dedication'
+                              ? 'dedication'
+                              : pageLabel);
+                          const candidateKey = `${orderToken}-${optionNumber}`;
                           const isSelected =
                             currentPage.selectedCandidateIndex === optionNumber;
                           const isApplying = applyingCandidateKey === candidateKey;
@@ -2526,7 +3034,7 @@ function Storybooks() {
                                 variant={isSelected ? 'outline' : 'default'}
                                 className="gap-1 h-8 text-xs"
                                 onClick={() =>
-                                  handleApplyCandidate(currentPage.order || pageLabel, optionNumber)
+                                  handleApplyCandidate(orderToken, optionNumber)
                                 }
                                 disabled={isSelected || isApplying}
                               >
@@ -2874,8 +3382,19 @@ function Storybooks() {
                           <h4 className="text-sm font-semibold text-foreground">Pages</h4>
                           <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-2">
                             {Array.isArray(job.pages) && job.pages.length ? (
-                              job.pages.map((page) => {
+                              job.pages.map((page, pageIndex) => {
                                 const meta = getPageStatusMeta(page.status);
+                                const displayNumber = getDisplayPageNumber(
+                                  page.pageType,
+                                  page.order,
+                                  pageIndex
+                                );
+                                const labelSuffix =
+                                  page.pageType === 'cover'
+                                    ? ' (Cover)'
+                                    : page.pageType === 'dedication'
+                                    ? ' (Dedication)'
+                                    : '';
                                 return (
                                   <div
                                     key={`${job._id}-${page.pageId || page.order}`}
@@ -2883,7 +3402,8 @@ function Storybooks() {
                                   >
                                     <div>
                                       <p className="text-sm font-medium text-foreground">
-                                        Page {page.order}
+                                        Page {displayNumber}
+                                        {labelSuffix}
                                       </p>
                                       <p className="text-xs text-foreground/55">
                                         {page.prompt?.slice(0, 80) || 'No prompt'}
@@ -3185,17 +3705,27 @@ function Storybooks() {
                 <div>
                   <CardTitle>Generated storybooks</CardTitle>
                   <CardDescription>
-                    Download finished PDFs or re-run the generator after updating imagery.
+                    Download finished PDFs or confirm them once you are happy with the layout.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">{totalStorybooks} ready</Badge>
               </CardHeader>
               <CardContent className="space-y-3">
-                {selectedBook?.pdfAssets?.length ? (
-                  selectedBook.pdfAssets
-                    .slice()
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                    .map((asset) => (
+                {standardAssets.length ? (
+                  standardAssets.map((asset) => {
+                    const assetIdentifier = resolveAssetId(asset);
+                    const matchingSplit =
+                      splitLookup.get(assetIdentifier) || (asset.key ? splitLookup.get(asset.key) : null);
+                    const isConfirming = confirmingAssetId === assetIdentifier;
+                    const confirmedDate = matchingSplit
+                      ? new Date(
+                          matchingSplit.confirmedAt ||
+                            matchingSplit.updatedAt ||
+                            matchingSplit.createdAt ||
+                            Date.now()
+                        )
+                      : null;
+                    return (
                       <div
                         key={asset._id || asset.key}
                         className="rounded-xl border border-border/70 bg-card/70 p-4"
@@ -3207,13 +3737,53 @@ function Storybooks() {
                             </p>
                             <p className="text-xs text-foreground/50">
                               {asset.pageCount || pages.length} pages ·{' '}
-                              {asset.size ? `${(asset.size / 1024 / 1024).toFixed(2)} MB` : 'Size unknown'}
+                              {asset.size
+                                ? `${(asset.size / 1024 / 1024).toFixed(2)} MB`
+                                : 'Size unknown'}
                             </p>
                             <p className="text-xs text-foreground/45">
-                              Generated {asset.createdAt ? new Date(asset.createdAt).toLocaleString() : 'recently'}
+                              Generated{' '}
+                              {asset.createdAt
+                                ? new Date(asset.createdAt).toLocaleString()
+                                : 'recently'}
                             </p>
+                            {matchingSplit ? (
+                              <p className="text-xs text-emerald-500">
+                                Confirmed{' '}
+                                {confirmedDate ? confirmedDate.toLocaleString() : 'recently'}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-foreground/50">
+                                Awaiting confirmation
+                              </p>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="gap-1"
+                              disabled={isConfirming}
+                              onClick={() => handleConfirmStorybook(asset)}
+                            >
+                              {isConfirming ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  {matchingSplit ? 'Regenerating…' : 'Confirming…'}
+                                </>
+                              ) : matchingSplit ? (
+                                <>
+                                  <RefreshCw className="h-4 w-4" />
+                                  Regenerate split
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-4 w-4" />
+                                  Confirm
+                                </>
+                              )}
+                            </Button>
                             <Button
                               type="button"
                               size="sm"
@@ -3236,10 +3806,69 @@ function Storybooks() {
                           </div>
                         </div>
                       </div>
-                    ))
+                    );
+                  })
                 ) : (
                   <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center text-sm text-foreground/55">
                     No storybooks yet. Configure your pages above and generate a PDF to see it here.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Confirmed storybooks</CardTitle>
+                  <CardDescription>
+                    Split PDFs are stored and ready whenever you need them.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">{totalConfirmedStorybooks} confirmed</Badge>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {splitAssets.length ? (
+                  splitAssets.map((asset) => (
+                    <div
+                      key={asset._id || asset.key}
+                      className="rounded-xl border border-border/70 bg-card/70 p-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-semibold text-foreground/85">
+                            {asset.title || 'Confirmed storybook'}
+                          </p>
+                          <p className="text-xs text-foreground/50">
+                            {asset.pageCount || pages.length} pages ·{' '}
+                            {asset.size
+                              ? `${(asset.size / 1024 / 1024).toFixed(2)} MB`
+                              : 'Size unknown'}
+                          </p>
+                          <div className="mt-1 flex items-center gap-1 text-xs text-emerald-500">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span>
+                              Confirmed{' '}
+                              {asset.confirmedAt
+                                ? new Date(asset.confirmedAt).toLocaleString()
+                                : new Date(asset.updatedAt || asset.createdAt || Date.now()).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="gap-1"
+                          onClick={() => window.open(asset.url, '_blank')}
+                        >
+                          <Download className="h-4 w-4" />
+                          Download PDF
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center text-sm text-foreground/55">
+                    Confirm a storybook to generate a split PDF and keep it ready here.
                   </div>
                 )}
               </CardContent>

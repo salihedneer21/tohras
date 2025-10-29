@@ -100,10 +100,6 @@ const createEmptyBookForm = () => ({
     },
     characterImage: {
       existing: null,
-      file: null,
-      preview: null,
-      previewIsObject: false,
-      remove: false,
     },
     leftSide: {
       title: '',
@@ -121,6 +117,7 @@ const createEmptyBookForm = () => ({
       mainTitle: '',
       subtitle: '',
     },
+    characterPrompt: '',
   },
   dedicationPage: {
     backgroundImage: {
@@ -132,13 +129,10 @@ const createEmptyBookForm = () => ({
     },
     kidImage: {
       existing: null,
-      file: null,
-      preview: null,
-      previewIsObject: false,
-      remove: false,
     },
     title: '',
     secondTitle: '',
+    characterPrompt: '',
   },
 });
 
@@ -193,16 +187,14 @@ function Books() {
       }
     });
     // Revoke cover page image URLs
-    if (formState.coverPage) {
-      revokeIfNeeded(formState.coverPage.backgroundImage?.preview, formState.coverPage.backgroundImage?.previewIsObject);
-      revokeIfNeeded(formState.coverPage.characterImage?.preview, formState.coverPage.characterImage?.previewIsObject);
-      revokeIfNeeded(formState.coverPage.qrCode?.preview, formState.coverPage.qrCode?.previewIsObject);
-    }
-    // Revoke dedication page image URLs
-    if (formState.dedicationPage) {
-      revokeIfNeeded(formState.dedicationPage.backgroundImage?.preview, formState.dedicationPage.backgroundImage?.previewIsObject);
-      revokeIfNeeded(formState.dedicationPage.kidImage?.preview, formState.dedicationPage.kidImage?.previewIsObject);
-    }
+  if (formState.coverPage) {
+    revokeIfNeeded(formState.coverPage.backgroundImage?.preview, formState.coverPage.backgroundImage?.previewIsObject);
+    revokeIfNeeded(formState.coverPage.qrCode?.preview, formState.coverPage.qrCode?.previewIsObject);
+  }
+  // Revoke dedication page image URLs
+  if (formState.dedicationPage) {
+    revokeIfNeeded(formState.dedicationPage.backgroundImage?.preview, formState.dedicationPage.backgroundImage?.previewIsObject);
+  }
     setFormState(createEmptyBookForm());
     setEditingBook(null);
     setFormMode('create');
@@ -288,10 +280,6 @@ function Books() {
         },
         characterImage: {
           existing: book.coverPage?.characterImage || null,
-          file: null,
-          preview: book.coverPage?.characterImage?.url || null,
-          previewIsObject: false,
-          remove: false,
         },
         leftSide: {
           title: book.coverPage?.leftSide?.title || '',
@@ -309,6 +297,7 @@ function Books() {
           mainTitle: book.coverPage?.rightSide?.mainTitle || '',
           subtitle: book.coverPage?.rightSide?.subtitle || '',
         },
+        characterPrompt: book.coverPage?.characterPrompt || '',
       },
       dedicationPage: {
         backgroundImage: {
@@ -320,13 +309,10 @@ function Books() {
         },
         kidImage: {
           existing: book.dedicationPage?.kidImage || null,
-          file: null,
-          preview: book.dedicationPage?.kidImage?.url || null,
-          previewIsObject: false,
-          remove: false,
         },
         title: book.dedicationPage?.title || '',
         secondTitle: book.dedicationPage?.secondTitle || '',
+        characterPrompt: book.dedicationPage?.characterPrompt || '',
       },
     });
 
@@ -611,43 +597,6 @@ const handleRemovePageImage = (index) => {
     });
   };
 
-  const handleCoverPageCharacterChange = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setFormState((prev) => {
-      const nextCoverPage = { ...prev.coverPage };
-      revokeIfNeeded(nextCoverPage.characterImage.preview, nextCoverPage.characterImage.previewIsObject);
-
-      nextCoverPage.characterImage = {
-        ...nextCoverPage.characterImage,
-        file,
-        preview: URL.createObjectURL(file),
-        previewIsObject: true,
-        remove: false,
-      };
-
-      return { ...prev, coverPage: nextCoverPage };
-    });
-  };
-
-  const handleRemoveCoverPageCharacter = () => {
-    setFormState((prev) => {
-      const nextCoverPage = { ...prev.coverPage };
-      revokeIfNeeded(nextCoverPage.characterImage.preview, nextCoverPage.characterImage.previewIsObject);
-
-      nextCoverPage.characterImage = {
-        existing: nextCoverPage.characterImage.existing,
-        file: null,
-        preview: null,
-        previewIsObject: false,
-        remove: Boolean(nextCoverPage.characterImage.existing),
-      };
-
-      return { ...prev, coverPage: nextCoverPage };
-    });
-  };
-
   const handleCoverPageQrChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -698,12 +647,32 @@ const handleRemovePageImage = (index) => {
     }));
   };
 
+  const handleCoverPagePromptChange = (value) => {
+    setFormState((prev) => ({
+      ...prev,
+      coverPage: {
+        ...prev.coverPage,
+        characterPrompt: value,
+      },
+    }));
+  };
+
   const handleDedicationFieldChange = (field, value) => {
     setFormState((prev) => ({
       ...prev,
       dedicationPage: {
         ...prev.dedicationPage,
         [field]: value,
+      },
+    }));
+  };
+
+  const handleDedicationPromptChange = (value) => {
+    setFormState((prev) => ({
+      ...prev,
+      dedicationPage: {
+        ...prev.dedicationPage,
+        characterPrompt: value,
       },
     }));
   };
@@ -743,30 +712,14 @@ const handleRemovePageImage = (index) => {
         }));
       };
       img.src = URL.createObjectURL(file);
-    } else {
-      const preview = URL.createObjectURL(file);
-      revokeIfNeeded(
-        formState.dedicationPage[imageType].preview,
-        formState.dedicationPage[imageType].previewIsObject
-      );
-
-      setFormState((prev) => ({
-        ...prev,
-        dedicationPage: {
-          ...prev.dedicationPage,
-          [imageType]: {
-            existing: null,
-            file,
-            preview,
-            previewIsObject: true,
-            remove: false,
-          },
-        },
-      }));
     }
   };
 
   const handleRemoveDedicationImage = (imageType) => {
+    if (imageType !== 'backgroundImage') {
+      return;
+    }
+
     revokeIfNeeded(
       formState.dedicationPage[imageType].preview,
       formState.dedicationPage[imageType].previewIsObject
@@ -789,8 +742,13 @@ const handleRemovePageImage = (index) => {
 
   const handleGeneratePreview = async () => {
     // Validate required fields
-    if (!formState.coverPage.backgroundImage.preview) {
-      toast.error('Please upload a background image first');
+    const hasBackgroundImage =
+      formState.coverPage.backgroundImage.file ||
+      formState.coverPage.backgroundImage.preview ||
+      formState.coverPage.backgroundImage.existing?.url;
+
+    if (!hasBackgroundImage) {
+      toast.error('Please upload or select a background image first');
       return;
     }
 
@@ -827,10 +785,8 @@ const handleRemovePageImage = (index) => {
         formData.append('backgroundImageUrl', formState.coverPage.backgroundImage.existing.url);
       }
 
-      // Add character image
-      if (formState.coverPage.characterImage.file) {
-        formData.append('characterImage', formState.coverPage.characterImage.file);
-      } else if (formState.coverPage.characterImage.existing?.url) {
+      // Use existing character image if available (synced from storybooks)
+      if (formState.coverPage.characterImage?.existing?.url) {
         formData.append('characterImageUrl', formState.coverPage.characterImage.existing.url);
       }
 
@@ -858,13 +814,13 @@ const handleRemovePageImage = (index) => {
 
   const handleGenerateDedicationPreview = async () => {
     // Validate required fields
-    if (!formState.dedicationPage.backgroundImage.preview) {
-      toast.error('Please upload a background image first');
-      return;
-    }
+    const hasBackgroundImage =
+      formState.dedicationPage.backgroundImage.file ||
+      formState.dedicationPage.backgroundImage.preview ||
+      formState.dedicationPage.backgroundImage.existing?.url;
 
-    if (!formState.dedicationPage.kidImage.preview) {
-      toast.error('Please upload a kid image first');
+    if (!hasBackgroundImage) {
+      toast.error('Please upload or select a background image first');
       return;
     }
 
@@ -889,10 +845,8 @@ const handleRemovePageImage = (index) => {
         formData.append('backgroundImageUrl', formState.dedicationPage.backgroundImage.existing.url);
       }
 
-      // Add kid image
-      if (formState.dedicationPage.kidImage.file) {
-        formData.append('kidImage', formState.dedicationPage.kidImage.file);
-      } else if (formState.dedicationPage.kidImage.existing?.url) {
+      // Use existing kid image if available (synced from storybooks)
+      if (formState.dedicationPage.kidImage?.existing?.url) {
         formData.append('kidImageUrl', formState.dedicationPage.kidImage.existing.url);
       }
 
@@ -1033,18 +987,14 @@ const handleRemovePageImage = (index) => {
       },
       hasNewBackgroundImage: Boolean(formState.coverPage.backgroundImage.file),
       removeBackgroundImage: Boolean(formState.coverPage.backgroundImage.remove) && !formState.coverPage.backgroundImage.file,
-      hasNewCharacterImage: Boolean(formState.coverPage.characterImage.file),
-      removeCharacterImage: Boolean(formState.coverPage.characterImage.remove) && !formState.coverPage.characterImage.file,
       hasNewQrCode: Boolean(formState.coverPage.qrCode.file),
       removeQrCode: Boolean(formState.coverPage.qrCode.remove) && !formState.coverPage.qrCode.file,
+      characterPrompt: formState.coverPage.characterPrompt || '',
     };
     formData.append('coverPage', JSON.stringify(coverPageData));
 
     if (formState.coverPage.backgroundImage.file) {
       formData.append('coverPageBackgroundImage', formState.coverPage.backgroundImage.file);
-    }
-    if (formState.coverPage.characterImage.file) {
-      formData.append('coverPageCharacterImage', formState.coverPage.characterImage.file);
     }
     if (formState.coverPage.qrCode.file) {
       formData.append('coverPageQrCode', formState.coverPage.qrCode.file);
@@ -1056,16 +1006,12 @@ const handleRemovePageImage = (index) => {
       secondTitle: formState.dedicationPage.secondTitle || '',
       hasNewBackgroundImage: Boolean(formState.dedicationPage.backgroundImage.file),
       removeBackgroundImage: Boolean(formState.dedicationPage.backgroundImage.remove) && !formState.dedicationPage.backgroundImage.file,
-      hasNewKidImage: Boolean(formState.dedicationPage.kidImage.file),
-      removeKidImage: Boolean(formState.dedicationPage.kidImage.remove) && !formState.dedicationPage.kidImage.file,
+      characterPrompt: formState.dedicationPage.characterPrompt || '',
     };
     formData.append('dedicationPage', JSON.stringify(dedicationPageData));
 
     if (formState.dedicationPage.backgroundImage.file) {
       formData.append('dedicationPageBackgroundImage', formState.dedicationPage.backgroundImage.file);
-    }
-    if (formState.dedicationPage.kidImage.file) {
-      formData.append('dedicationPageKidImage', formState.dedicationPage.kidImage.file);
     }
 
     setIsSaving(true);
@@ -1558,56 +1504,18 @@ const handleRemovePageImage = (index) => {
                         )}
                       </div>
 
-                      {/* Character Image */}
-                      <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <Label>Character Image</Label>
-                            <p className="text-xs text-foreground/50">
-                              Upload the character image to be displayed on the cover.
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => document.getElementById('coverPageCharacterInput')?.click()}
-                            >
-                              <ImageIcon className="mr-2 h-4 w-4" />
-                              {formState.coverPage.characterImage.preview ? 'Change image' : 'Upload image'}
-                            </Button>
-                            {formState.coverPage.characterImage.preview && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="text-red-300 hover:text-red-200"
-                                onClick={handleRemoveCoverPageCharacter}
-                              >
-                                Remove
-                              </Button>
-                            )}
-                            <input
-                              id="coverPageCharacterInput"
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={handleCoverPageCharacterChange}
-                            />
-                          </div>
-                        </div>
-                        {formState.coverPage.characterImage.preview ? (
-                          <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted/40">
-                            <img
-                              src={formState.coverPage.characterImage.preview}
-                              alt="Cover page character"
-                              className="h-48 w-full object-contain"
-                            />
-                          </div>
-                        ) : (
-                          <p className="text-xs text-foreground/50">No character image selected.</p>
-                        )}
+                      <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">
+                        <Label htmlFor="coverPageCharacterPrompt">Character prompt</Label>
+                        <Textarea
+                          id="coverPageCharacterPrompt"
+                          minRows={3}
+                          placeholder="Describe the cover character you want to generate."
+                          value={formState.coverPage.characterPrompt}
+                          onChange={(event) => handleCoverPagePromptChange(event.target.value)}
+                        />
+                        <p className="text-xs text-foreground/50">
+                          This prompt guides automatic cover character generation. Use {'{name}'} to personalise.
+                        </p>
                       </div>
 
                       {/* Left Side Section */}
@@ -1727,7 +1635,7 @@ const handleRemovePageImage = (index) => {
                             }
                           />
                           <p className="text-xs text-foreground/50">
-                            Main title displayed prominently on the right. Use {'{name}'} for dynamic name insertion.
+                            Main title displayed prominently on the right in ALL CAPS. Use {'{name}'} for dynamic name insertion.
                           </p>
                         </div>
 
@@ -1779,32 +1687,17 @@ const handleRemovePageImage = (index) => {
                         )}
                       </div>
 
-                      <div className="space-y-3">
-                        <h3 className="font-semibold text-foreground">Kid Image</h3>
-                        <p className="text-xs text-muted-foreground">Upload a photo of the kid for AI-enhanced left side</p>
-                        <Input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => handleDedicationImageChange('kidImage', e)}
+                      <div className="space-y-2">
+                        <h3 className="font-semibold text-foreground">Character prompt</h3>
+                        <Textarea
+                          minRows={3}
+                          placeholder="Describe the child portrait or dedication illustration."
+                          value={formState.dedicationPage.characterPrompt}
+                          onChange={(event) => handleDedicationPromptChange(event.target.value)}
                         />
-                        {formState.dedicationPage.kidImage.preview && (
-                          <div className="relative">
-                            <img
-                              src={formState.dedicationPage.kidImage.preview}
-                              alt="Kid preview"
-                              className="w-full rounded-lg"
-                            />
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="sm"
-                              className="absolute top-2 right-2"
-                              onClick={() => handleRemoveDedicationImage('kidImage')}
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        )}
+                        <p className="text-xs text-muted-foreground">
+                          Used when generating dedication artwork. Include {'{name}'} to personalise if needed.
+                        </p>
                       </div>
 
                       <div className="space-y-3">

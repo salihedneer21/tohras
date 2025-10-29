@@ -39,12 +39,12 @@ const storybookPageSchema = new mongoose.Schema(
   {
     pageId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true,
+      default: null,
     },
     order: {
       type: Number,
       required: true,
-      min: 1,
+      min: 0,
     },
     prompt: {
       type: String,
@@ -54,6 +54,11 @@ const storybookPageSchema = new mongoose.Schema(
     text: {
       type: String,
       default: '',
+    },
+    pageType: {
+      type: String,
+      enum: ['story', 'cover', 'dedication'],
+      default: 'story',
     },
     status: {
       type: String,

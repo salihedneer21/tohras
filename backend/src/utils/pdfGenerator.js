@@ -8,6 +8,8 @@ const Replicate = require('replicate');
 const { downloadFromS3 } = require('../config/s3');
 const { createCanvas, loadImage } = require('canvas');
 const { generateCoverImage } = require('./coverRenderer');
+const { generateCoverPage } = require('./coverGenerator');
+const { generateDedicationPage } = require('./dedicationGenerator');
 
 const replicate = new Replicate();
 
@@ -206,6 +208,52 @@ const resolveReplicateOutputBuffer = async (output) => {
   }
 
   return null;
+};
+
+const resolveAssetPreferredUrl = (asset) => {
+  if (!asset || typeof asset !== 'object') return null;
+  if (typeof asset.downloadUrl === 'string' && asset.downloadUrl.trim()) {
+    return asset.downloadUrl.trim();
+  }
+  if (typeof asset.signedUrl === 'string' && asset.signedUrl.trim()) {
+    return asset.signedUrl.trim();
+  }
+  if (typeof asset.url === 'string' && asset.url.trim()) {
+    return asset.url.trim();
+  }
+  return null;
+};
+
+const resolveGeneratorSource = async (asset) => {
+  if (!asset) return null;
+  if (typeof asset === 'string' && asset.trim()) {
+    return asset.trim();
+  }
+  const preferredUrl = resolveAssetPreferredUrl(asset);
+  if (preferredUrl) return preferredUrl;
+  if (asset.buffer) return asset.buffer;
+  if (asset.key) {
+    try {
+      const buffer = await downloadFromS3(asset.key);
+      if (buffer) return buffer;
+    } catch (error) {
+      console.warn('[pdf] failed to download asset buffer for generator:', error.message);
+    }
+  }
+  return null;
+};
+
+const replaceChildPlaceholders = (value, childName) => {
+  if (!value || typeof value !== 'string') return value || '';
+  if (!childName) return value;
+  const upperName = childName.toUpperCase();
+  return value.replace(/\{name\}/gi, (matched) => {
+    const inner = matched.slice(1, -1);
+    if (inner === inner.toUpperCase()) {
+      return upperName;
+    }
+    return childName;
+  });
 };
 
 const performBackgroundRemoval = async (imageUrl) => {
@@ -584,39 +632,101 @@ async function generateStorybookPdf({ title, pages }) {
     hebrewFont = customHebrewFont;
   }
 
+  const renderedPageBuffers = [];
+
   for (let index = 0; index < pages.length; index += 1) {
-    const pageData = pages[index];
+    const pageData = pages[index] || {};
     const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    const isCoverPage = pageData.pageType === 'cover';
+    const pageType = pageData.pageType || 'story';
+    const isCoverPage = pageType === 'cover';
+    const isDedicationPage = pageType === 'dedication';
     const isCharacterOnRight = index % 2 === 0;
     let charWidth = 0;
     let charHeight = 0;
     let charX = isCharacterOnRight ? PAGE_WIDTH - PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO : 0;
     const charY = 0;
+    const childName = pageData.childName || '';
 
     if (isCoverPage) {
-      const backgroundBuffer = await getImageBuffer(pageData.background);
+      const coverPage = pageData.coverPage || null;
+
+      if (coverPage) {
+        try {
+          const coverBuffer = await generateCoverPage({
+            backgroundImage:
+              (await resolveGeneratorSource(coverPage.backgroundImage)) ||
+              (await resolveGeneratorSource(pageData.background)),
+            characterImage:
+              (await resolveGeneratorSource(coverPage.characterImage)) ||
+              (await resolveGeneratorSource(pageData.character)),
+            leftSide: {
+              title: replaceChildPlaceholders(coverPage.leftSide?.title, childName),
+              content: replaceChildPlaceholders(coverPage.leftSide?.content, childName),
+              bottomText: replaceChildPlaceholders(coverPage.leftSide?.bottomText, childName),
+            },
+            rightSide: {
+              mainTitle: (replaceChildPlaceholders(coverPage.rightSide?.mainTitle, childName) || '').toUpperCase(),
+              subtitle: replaceChildPlaceholders(coverPage.rightSide?.subtitle, childName),
+            },
+            qrCode: await resolveGeneratorSource(coverPage.qrCode),
+          });
+
+          if (coverBuffer) {
+            const coverImage = await pdfDoc.embedPng(coverBuffer);
+            page.drawImage(coverImage, {
+              x: 0,
+              y: 0,
+              width: PAGE_WIDTH,
+              height: PAGE_HEIGHT,
+            });
+            renderedPageBuffers.push({ index, type: 'cover', buffer: coverBuffer });
+            continue;
+          }
+        } catch (error) {
+          console.warn(
+            '[pdf] generateCoverPage failed, falling back to legacy renderer:',
+            error.message
+          );
+        }
+      }
+
+      const fallbackBackgroundAsset = coverPage?.backgroundImage || pageData.background || null;
+      const backgroundBuffer = await getImageBuffer(fallbackBackgroundAsset);
 
       let characterBuffer = null;
-      if (pageData.character) {
-        if (pageData.character.backgroundRemoved) {
-          characterBuffer = await getImageBuffer(pageData.character);
+      const coverCharacterAsset = coverPage?.characterImage || pageData.character || null;
+      if (coverCharacterAsset) {
+        if (coverCharacterAsset.backgroundRemoved) {
+          characterBuffer = await getImageBuffer(coverCharacterAsset);
         } else {
           try {
-            characterBuffer = await removeBackground(pageData.character);
+            characterBuffer = await removeBackground(coverCharacterAsset);
           } catch (error) {
             console.warn('[pdf] background removal failed for cover page:', error.message);
-            characterBuffer = await getImageBuffer(pageData.character);
+            characterBuffer = await getImageBuffer(coverCharacterAsset);
           }
         }
       }
 
-      const qrBuffer = pageData.cover?.qrCodeImage
-        ? await getImageBuffer(pageData.cover.qrCodeImage)
-        : null;
+      const fallbackCover =
+        pageData.cover ||
+        (coverPage
+          ? {
+              headline: replaceChildPlaceholders(coverPage.leftSide?.title, childName),
+              footer: replaceChildPlaceholders(coverPage.leftSide?.bottomText, childName),
+              bodyOverride: replaceChildPlaceholders(coverPage.leftSide?.content, childName),
+              qrCodeImage: coverPage.qrCode || null,
+              uppercaseName: true,
+              childName,
+            }
+          : null);
 
-      const bodyText = pageData.cover?.bodyOverride
-        ? pageData.cover.bodyOverride
+      const qrAsset =
+        (fallbackCover && fallbackCover.qrCodeImage) || coverPage?.qrCode || null;
+      const qrBuffer = qrAsset ? await getImageBuffer(qrAsset) : null;
+
+      const bodyText = fallbackCover?.bodyOverride
+        ? fallbackCover.bodyOverride
         : pageData.text || '';
 
       const coverBuffer = await generateCoverImage({
@@ -625,9 +735,9 @@ async function generateStorybookPdf({ title, pages }) {
         backgroundBuffer,
         characterBuffer,
         qrBuffer,
-        cover: pageData.cover || {},
+        cover: fallbackCover || {},
         bodyText,
-        childName: pageData.cover?.childName || '',
+        childName: fallbackCover?.childName || childName || '',
       });
 
       const coverImage = await pdfDoc.embedPng(coverBuffer);
@@ -637,13 +747,168 @@ async function generateStorybookPdf({ title, pages }) {
         width: PAGE_WIDTH,
         height: PAGE_HEIGHT,
       });
+      renderedPageBuffers.push({ index, type: 'cover', buffer: coverBuffer });
+      continue;
+    }
+
+    if (isDedicationPage) {
+      const dedication = pageData.dedicationPage || {};
+      const backgroundAsset = dedication.backgroundImage || pageData.background || null;
+      const heroAsset =
+        dedication.generatedImage ||
+        dedication.generatedImageOriginal ||
+        dedication.kidImage ||
+        null;
+
+      const backgroundSource = await resolveGeneratorSource(backgroundAsset);
+      const heroSource = await resolveGeneratorSource(heroAsset);
+
+      if (backgroundSource) {
+        try {
+          const dedicationBuffer = await generateDedicationPage({
+            backgroundImage: backgroundSource,
+            kidImage: heroSource,
+            title: replaceChildPlaceholders(dedication.title, childName),
+            secondTitle: replaceChildPlaceholders(dedication.secondTitle, childName),
+          });
+
+          if (dedicationBuffer) {
+            const dedicationImage = await pdfDoc.embedPng(dedicationBuffer);
+            page.drawImage(dedicationImage, {
+              x: 0,
+              y: 0,
+              width: PAGE_WIDTH,
+              height: PAGE_HEIGHT,
+            });
+            renderedPageBuffers.push({ index, type: 'dedication', buffer: dedicationBuffer });
+            continue;
+          }
+        } catch (error) {
+          console.warn(
+            '[pdf] generateDedicationPage failed, falling back to simple renderer:',
+            error.message
+          );
+        }
+      }
+
+      const backgroundBuffer =
+        Buffer.isBuffer(backgroundSource) ? backgroundSource : await getImageBuffer(backgroundAsset);
+      if (backgroundBuffer) {
+        const backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
+        if (backgroundImage) {
+          page.drawImage(backgroundImage, {
+            x: 0,
+            y: 0,
+            width: PAGE_WIDTH,
+            height: PAGE_HEIGHT,
+          });
+        }
+      } else {
+        page.drawRectangle({
+          x: 0,
+          y: 0,
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+          color: rgb(1, 1, 1),
+        });
+      }
+
+      const heroBuffer =
+        Buffer.isBuffer(heroSource) && heroSource.length
+          ? heroSource
+          : await getImageBuffer(heroAsset);
+      const halfWidth = PAGE_WIDTH / 2;
+      if (heroBuffer) {
+        const heroImage = await embedImage(pdfDoc, heroBuffer);
+        if (heroImage) {
+          const heroAspect = heroImage.width / heroImage.height;
+          let drawHeight = PAGE_HEIGHT * 1.15;
+          let drawWidth = drawHeight * heroAspect;
+          if (drawWidth > halfWidth) {
+            drawWidth = halfWidth;
+            drawHeight = drawWidth / heroAspect;
+          }
+          const drawX = (halfWidth - drawWidth) / 2;
+          const drawY = PAGE_HEIGHT - drawHeight;
+          page.drawImage(heroImage, {
+            x: drawX,
+            y: drawY,
+            width: drawWidth,
+            height: drawHeight,
+          });
+        }
+      }
+
+      page.drawRectangle({
+        x: halfWidth,
+        y: 0,
+        width: halfWidth,
+        height: PAGE_HEIGHT,
+        color: rgb(1, 1, 1),
+        opacity: 0.85,
+      });
+
+      const resolvedTitle = replaceChildPlaceholders(dedication.title, childName);
+      const resolvedSecondTitle = replaceChildPlaceholders(dedication.secondTitle, childName);
+      const centerX = halfWidth + halfWidth / 2;
+      const titleFontSize = 48;
+      const subtitleFontSize = 30;
+      const maxTextWidth = halfWidth - 120;
+      const titleLines = resolvedTitle ? wrapText(resolvedTitle, maxTextWidth, titleFontSize) : [];
+      const subtitleLines = resolvedSecondTitle
+        ? wrapText(resolvedSecondTitle, maxTextWidth, subtitleFontSize)
+        : [];
+      const titleLineHeight = titleFontSize * 1.2;
+      const subtitleLineHeight = subtitleFontSize * 1.2;
+      const spacingBetween = titleLines.length && subtitleLines.length ? 30 : 0;
+
+      let totalHeight = titleLines.length * titleLineHeight + subtitleLines.length * subtitleLineHeight;
+      if (spacingBetween) {
+        totalHeight += spacingBetween;
+      }
+
+      let cursorY = (PAGE_HEIGHT - totalHeight) / 2;
+
+      if (titleLines.length) {
+        for (const line of titleLines) {
+          const textWidth = accentFont.widthOfTextAtSize(line, titleFontSize);
+          const textX = centerX - textWidth / 2;
+          page.drawText(line, {
+            x: textX,
+            y: cursorY + titleLineHeight / 2,
+            size: titleFontSize,
+            font: accentFont,
+            color: rgb(0, 0, 0),
+          });
+          cursorY += titleLineHeight;
+        }
+        cursorY += spacingBetween;
+      }
+
+      if (subtitleLines.length) {
+        for (const line of subtitleLines) {
+          const textWidth = bodyFont.widthOfTextAtSize(line, subtitleFontSize);
+          const textX = centerX - textWidth / 2;
+          page.drawText(line, {
+            x: textX,
+            y: cursorY + subtitleLineHeight / 2,
+            size: subtitleFontSize,
+            font: bodyFont,
+            color: rgb(0.15, 0.15, 0.15),
+          });
+          cursorY += subtitleLineHeight;
+        }
+      }
 
       continue;
     }
 
     const backgroundBuffer = await getImageBuffer(pageData.background);
     if (backgroundBuffer) {
-      console.log(`[pdf] background buffer length for page ${index + 1}:`, backgroundBuffer.length);
+      console.log(
+        `[pdf] background buffer length for page ${index + 1}:`,
+        backgroundBuffer.length
+      );
       const backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
       if (backgroundImage) {
         page.drawImage(backgroundImage, {
@@ -878,8 +1143,9 @@ async function generateStorybookPdf({ title, pages }) {
 
   const pdfBytes = await pdfDoc.save();
   return {
-    buffer: Buffer.from(pdfBytes),
+    buffer: pdfBytes,
     pageCount: pages.length,
+    renderedPages: renderedPageBuffers,
   };
 }
 

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
 const Book = require('../models/Book');
 const User = require('../models/User');
+const { PDFDocument } = require('pdf-lib');
 const {
   uploadBufferToS3,
   deleteFromS3,
@@ -11,11 +12,14 @@ const {
   generateBookQrCodeKey,
   generateBookPdfKey,
   getSignedUrlForKey,
+  downloadFromS3,
 } = require('../config/s3');
 const { generateStorybookPdf, removeBackground } = require('../utils/pdfGenerator');
 const {
   regenerateStorybookPage: regenerateStorybookPageService,
   applyStorybookCandidateSelection,
+  buildCoverPageContent,
+  buildDedicationPageContent,
 } = require('../services/storybookWorkflow');
 
 const slugify = (value) =>
@@ -62,6 +66,8 @@ const clonePlainObject = (value) => {
   if (!value || typeof value !== 'object') return null;
   return JSON.parse(JSON.stringify(value));
 };
+
+const safeText = (value) => (typeof value === 'string' ? value : '');
 
 const cloneCoverConfig = (config) => clonePlainObject(config);
 
@@ -311,6 +317,56 @@ const attachFreshSignedUrlsToPages = async (pages = [], options = {}) => {
       clonedPage.characterOriginal = resolvedCharacterOriginal;
       clonedPage.candidateAssets = resolvedCandidateAssets.filter(Boolean);
       clonedPage.cover = resolvedCover;
+      let resolvedCoverPage = null;
+      if (clonedPage.coverPage) {
+        const coverPageClone = clonePlainObject(clonedPage.coverPage) || {};
+        coverPageClone.backgroundImage = await attachFreshSignedUrl(
+          coverPageClone.backgroundImage
+        );
+        coverPageClone.characterImage = await attachFreshSignedUrl(
+          coverPageClone.characterImage
+        );
+        coverPageClone.characterImageOriginal = await attachFreshSignedUrl(
+          coverPageClone.characterImageOriginal
+        );
+        coverPageClone.qrCode = await attachFreshSignedUrl(coverPageClone.qrCode);
+        coverPageClone.characterPrompt = safeText(coverPageClone.characterPrompt);
+        coverPageClone.leftSide = {
+          title: safeText(coverPageClone.leftSide?.title),
+          content: safeText(coverPageClone.leftSide?.content),
+          bottomText: safeText(coverPageClone.leftSide?.bottomText),
+        };
+        coverPageClone.rightSide = {
+          mainTitle: safeText(coverPageClone.rightSide?.mainTitle),
+          subtitle: safeText(coverPageClone.rightSide?.subtitle),
+        };
+        resolvedCoverPage = coverPageClone;
+      }
+
+      let resolvedDedicationPage = null;
+      if (clonedPage.dedicationPage) {
+        const dedicationClone = clonePlainObject(clonedPage.dedicationPage) || {};
+        dedicationClone.backgroundImage = await attachFreshSignedUrl(
+          dedicationClone.backgroundImage
+        );
+        dedicationClone.kidImage = await attachFreshSignedUrl(dedicationClone.kidImage);
+        dedicationClone.generatedImage = await attachFreshSignedUrl(
+          dedicationClone.generatedImage
+        );
+        dedicationClone.generatedImageOriginal = await attachFreshSignedUrl(
+          dedicationClone.generatedImageOriginal
+        );
+        dedicationClone.title = safeText(dedicationClone.title);
+        dedicationClone.secondTitle = safeText(dedicationClone.secondTitle);
+        dedicationClone.characterPrompt = safeText(dedicationClone.characterPrompt);
+        resolvedDedicationPage = dedicationClone;
+      }
+
+      const resolvedRenderedImage = await attachFreshSignedUrl(clonedPage.renderedImage);
+
+      clonedPage.coverPage = resolvedCoverPage;
+      clonedPage.dedicationPage = resolvedDedicationPage;
+      clonedPage.renderedImage = resolvedRenderedImage;
       clonedPage.pageType = clonedPage.pageType || bookPageCandidate?.pageType || 'story';
       return clonedPage;
     })
@@ -328,6 +384,40 @@ const hydrateBookDocument = async (book) => {
   if (!clonedBook) return null;
 
   clonedBook.coverImage = await attachFreshSignedUrl(clonedBook.coverImage);
+  if (clonedBook.coverPage) {
+    const coverPageClone = clonePlainObject(clonedBook.coverPage) || {};
+    coverPageClone.backgroundImage = await attachFreshSignedUrl(coverPageClone.backgroundImage);
+    coverPageClone.characterImage = await attachFreshSignedUrl(coverPageClone.characterImage);
+    coverPageClone.characterImageOriginal = await attachFreshSignedUrl(
+      coverPageClone.characterImageOriginal
+    );
+    coverPageClone.qrCode = await attachFreshSignedUrl(coverPageClone.qrCode);
+    coverPageClone.characterPrompt = safeText(coverPageClone.characterPrompt);
+    coverPageClone.leftSide = {
+      title: safeText(coverPageClone.leftSide?.title),
+      content: safeText(coverPageClone.leftSide?.content),
+      bottomText: safeText(coverPageClone.leftSide?.bottomText),
+    };
+    coverPageClone.rightSide = {
+      mainTitle: safeText(coverPageClone.rightSide?.mainTitle),
+      subtitle: safeText(coverPageClone.rightSide?.subtitle),
+    };
+    clonedBook.coverPage = coverPageClone;
+  }
+
+  if (clonedBook.dedicationPage) {
+    const dedicationClone = clonePlainObject(clonedBook.dedicationPage) || {};
+    dedicationClone.backgroundImage = await attachFreshSignedUrl(dedicationClone.backgroundImage);
+    dedicationClone.kidImage = await attachFreshSignedUrl(dedicationClone.kidImage);
+    dedicationClone.generatedImage = await attachFreshSignedUrl(dedicationClone.generatedImage);
+    dedicationClone.generatedImageOriginal = await attachFreshSignedUrl(
+      dedicationClone.generatedImageOriginal
+    );
+    dedicationClone.title = safeText(dedicationClone.title);
+    dedicationClone.secondTitle = safeText(dedicationClone.secondTitle);
+    dedicationClone.characterPrompt = safeText(dedicationClone.characterPrompt);
+    clonedBook.dedicationPage = dedicationClone;
+  }
 
   const hydratedPages = await Promise.all(
     (clonedBook.pages || []).map(async (page) => {
@@ -739,11 +829,9 @@ exports.createBook = async (req, res) => {
         : req.body.coverPage;
 
       const coverPageBgFile = req.files?.coverPageBackgroundImage?.[0];
-      const coverPageCharFile = req.files?.coverPageCharacterImage?.[0];
       const coverPageQrFile = req.files?.coverPageQrCode?.[0];
 
       let backgroundImage = null;
-      let characterImage = null;
       let qrCode = null;
 
       if (coverPageBgFile) {
@@ -753,15 +841,6 @@ exports.createBook = async (req, res) => {
         });
         uploadedKeys.push(bgKey);
         backgroundImage = buildImageResponse(coverPageBgFile, bgKey, url);
-      }
-
-      if (coverPageCharFile) {
-        const charKey = `books/${slug}/cover-page/character-${Date.now()}.${coverPageCharFile.originalname.split('.').pop()}`;
-        const { url } = await uploadBufferToS3(coverPageCharFile.buffer, charKey, coverPageCharFile.mimetype, {
-          acl: 'public-read',
-        });
-        uploadedKeys.push(charKey);
-        characterImage = buildImageResponse(coverPageCharFile, charKey, url);
       }
 
       if (coverPageQrFile) {
@@ -775,7 +854,8 @@ exports.createBook = async (req, res) => {
 
       coverPageData = {
         backgroundImage,
-        characterImage,
+        characterImage: null,
+        characterImageOriginal: null,
         leftSide: {
           title: normalizeString(coverPagePayload.leftSide?.title),
           content: normalizeString(coverPagePayload.leftSide?.content),
@@ -786,6 +866,7 @@ exports.createBook = async (req, res) => {
           mainTitle: normalizeString(coverPagePayload.rightSide?.mainTitle),
           subtitle: normalizeString(coverPagePayload.rightSide?.subtitle),
         },
+        characterPrompt: normalizeString(coverPagePayload.characterPrompt),
       };
     }
 
@@ -795,10 +876,8 @@ exports.createBook = async (req, res) => {
       const dedicationPagePayload = JSON.parse(req.body.dedicationPage);
 
       const dedicationBgFile = req.files?.dedicationPageBackgroundImage?.[0];
-      const dedicationKidFile = req.files?.dedicationPageKidImage?.[0];
 
       let dedicationBackgroundImage = null;
-      let kidImage = null;
 
       if (dedicationBgFile) {
         const bgKey = `books/${slug}/dedication-page/background-${Date.now()}.${dedicationBgFile.originalname.split('.').pop()}`;
@@ -809,20 +888,14 @@ exports.createBook = async (req, res) => {
         dedicationBackgroundImage = buildImageResponse(dedicationBgFile, bgKey, url);
       }
 
-      if (dedicationKidFile) {
-        const kidKey = `books/${slug}/dedication-page/kid-${Date.now()}.${dedicationKidFile.originalname.split('.').pop()}`;
-        const { url } = await uploadBufferToS3(dedicationKidFile.buffer, kidKey, dedicationKidFile.mimetype, {
-          acl: 'public-read',
-        });
-        uploadedKeys.push(kidKey);
-        kidImage = buildImageResponse(dedicationKidFile, kidKey, url);
-      }
-
       dedicationPageData = {
         backgroundImage: dedicationBackgroundImage,
-        kidImage,
+        kidImage: null,
+        generatedImage: null,
+        generatedImageOriginal: null,
         title: normalizeString(dedicationPagePayload.title),
         secondTitle: normalizeString(dedicationPagePayload.secondTitle),
+        characterPrompt: normalizeString(dedicationPagePayload.characterPrompt),
       };
     }
 
@@ -1083,11 +1156,11 @@ exports.updateBook = async (req, res) => {
         : req.body.coverPage;
 
       const coverPageBgFile = req.files?.coverPageBackgroundImage?.[0];
-      const coverPageCharFile = req.files?.coverPageCharacterImage?.[0];
       const coverPageQrFile = req.files?.coverPageQrCode?.[0];
 
       let backgroundImage = book.coverPage?.backgroundImage || null;
       let characterImage = book.coverPage?.characterImage || null;
+      let characterImageOriginal = book.coverPage?.characterImageOriginal || null;
       let qrCode = book.coverPage?.qrCode || null;
 
       // Handle background image
@@ -1108,22 +1181,13 @@ exports.updateBook = async (req, res) => {
         backgroundImage = null;
       }
 
-      // Handle character image
-      if (coverPageCharFile) {
-        if (characterImage?.key) {
-          keysToDelete.push(characterImage.key);
-        }
-        const charKey = `books/${slug}/cover-page/character-${Date.now()}.${coverPageCharFile.originalname.split('.').pop()}`;
-        const { url } = await uploadBufferToS3(coverPageCharFile.buffer, charKey, coverPageCharFile.mimetype, {
-          acl: 'public-read',
-        });
-        uploadedKeys.push(charKey);
-        characterImage = buildImageResponse(coverPageCharFile, charKey, url);
-      } else if (coverPagePayload.removeCharacterImage) {
+      // Handle character image removal
+      if (coverPagePayload.removeCharacterImage) {
         if (characterImage?.key) {
           keysToDelete.push(characterImage.key);
         }
         characterImage = null;
+        characterImageOriginal = null;
       }
 
       // Handle QR code
@@ -1147,6 +1211,7 @@ exports.updateBook = async (req, res) => {
       book.coverPage = {
         backgroundImage,
         characterImage,
+        characterImageOriginal,
         leftSide: {
           title: normalizeString(coverPagePayload.leftSide?.title),
           content: normalizeString(coverPagePayload.leftSide?.content),
@@ -1157,6 +1222,7 @@ exports.updateBook = async (req, res) => {
           mainTitle: normalizeString(coverPagePayload.rightSide?.mainTitle),
           subtitle: normalizeString(coverPagePayload.rightSide?.subtitle),
         },
+        characterPrompt: normalizeString(coverPagePayload.characterPrompt),
       };
     }
 
@@ -1167,10 +1233,11 @@ exports.updateBook = async (req, res) => {
         : req.body.dedicationPage;
 
       const dedicationBgFile = req.files?.dedicationPageBackgroundImage?.[0];
-      const dedicationKidFile = req.files?.dedicationPageKidImage?.[0];
 
       let dedicationBackgroundImage = book.dedicationPage?.backgroundImage || null;
       let kidImage = book.dedicationPage?.kidImage || null;
+      let generatedImage = book.dedicationPage?.generatedImage || null;
+      let generatedImageOriginal = book.dedicationPage?.generatedImageOriginal || null;
 
       // Handle background image
       if (dedicationBgFile) {
@@ -1190,29 +1257,27 @@ exports.updateBook = async (req, res) => {
         dedicationBackgroundImage = null;
       }
 
-      // Handle kid image
-      if (dedicationKidFile) {
-        if (kidImage?.key) {
-          keysToDelete.push(kidImage.key);
-        }
-        const kidKey = `books/${slug}/dedication-page/kid-${Date.now()}.${dedicationKidFile.originalname.split('.').pop()}`;
-        const { url } = await uploadBufferToS3(dedicationKidFile.buffer, kidKey, dedicationKidFile.mimetype, {
-          acl: 'public-read',
-        });
-        uploadedKeys.push(kidKey);
-        kidImage = buildImageResponse(dedicationKidFile, kidKey, url);
-      } else if (dedicationPagePayload.removeKidImage) {
+      // Handle kid image removal
+      if (dedicationPagePayload.removeKidImage) {
         if (kidImage?.key) {
           keysToDelete.push(kidImage.key);
         }
         kidImage = null;
+        if (generatedImage?.key) {
+          keysToDelete.push(generatedImage.key);
+        }
+        generatedImage = null;
+        generatedImageOriginal = null;
       }
 
       book.dedicationPage = {
         backgroundImage: dedicationBackgroundImage,
         kidImage,
+        generatedImage,
+        generatedImageOriginal,
         title: normalizeString(dedicationPagePayload.title),
         secondTitle: normalizeString(dedicationPagePayload.secondTitle),
+        characterPrompt: normalizeString(dedicationPagePayload.characterPrompt),
       };
     }
 
@@ -1503,6 +1568,7 @@ exports.generateStorybook = async (req, res) => {
         candidateAssets: [],
         generationId: null,
         selectedCandidateIndex: null,
+        pageType: 'story',
       };
 
       console.log('[storybook] Prepared page', {
@@ -1532,21 +1598,66 @@ exports.generateStorybook = async (req, res) => {
       );
     }
 
+    const frontMatterPages = [];
+    const coverFrontMatter = buildCoverPageContent({ book, readerName, storyPages });
+    if (coverFrontMatter) {
+      frontMatterPages.push(coverFrontMatter);
+    }
+    const dedicationFrontMatter = buildDedicationPageContent({ book, readerName, storyPages });
+    if (dedicationFrontMatter) {
+      frontMatterPages.push(dedicationFrontMatter);
+    }
+    const assembledPages = [...frontMatterPages, ...storyPages];
+
     const finalTitle = title || `${book.name} Storybook`;
 
-    const { buffer: pdfBuffer, pageCount } = await generateStorybookPdf({
+    const { buffer: pdfBuffer, pageCount, renderedPages } = await generateStorybookPdf({
       title: finalTitle,
-      pages: storyPages,
+      pages: assembledPages,
     });
 
     const pdfKey = generateBookPdfKey(bookSlug, finalTitle);
     const { url } = await uploadBufferToS3(pdfBuffer, pdfKey, 'application/pdf', { acl: 'public-read' });
 
+    const baseTimestamp = Date.now();
+    const renderedUploads = await Promise.all(
+      (renderedPages || []).map(async ({ index, type, buffer: pageBuffer }, position) => {
+        if (!pageBuffer || !Buffer.isBuffer(pageBuffer)) {
+          return null;
+        }
+        const normalizedIndex = Number.isInteger(index) ? index : position;
+        const safeIndex = Number.isInteger(normalizedIndex) ? normalizedIndex : position;
+        const typeSlug =
+          typeof type === 'string' && type.trim() ? type.trim().toLowerCase() : 'page';
+        const imageKey = `books/${bookSlug}/storybook-previews/${baseTimestamp}-${safeIndex + 1}-${typeSlug}.png`;
+        const uploadMeta = await uploadBufferToS3(pageBuffer, imageKey, 'image/png', {
+          acl: 'public-read',
+        });
+        return {
+          index: safeIndex,
+          asset: {
+            key: imageKey,
+            url: uploadMeta.url,
+            downloadUrl: uploadMeta.url,
+            size: pageBuffer.length,
+            contentType: 'image/png',
+            uploadedAt: new Date(),
+            originalName: `${typeSlug}-${safeIndex + 1}.png`,
+            backgroundRemoved: false,
+          },
+        };
+      })
+    );
+    const renderedByIndex = new Map(
+      renderedUploads.filter(Boolean).map(({ index, asset }) => [index, asset])
+    );
+
     const now = new Date();
-    const pagesSnapshot = storyPages.map((page) => ({
+    const pagesSnapshot = assembledPages.map((page, pageIndex) => ({
       order: page.order,
       text: page.text || '',
       quote: page.quote || '',
+      prompt: page.prompt || '',
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
       characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
@@ -1557,8 +1668,61 @@ exports.generateStorybook = async (req, res) => {
         : null,
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      pageType: page.pageType || 'story',
+      cover: sanitizeAssetForSnapshot(page.cover),
+      coverPage: clonePlainObject(page.coverPage),
+      dedicationPage: clonePlainObject(page.dedicationPage),
+      renderedImage: sanitizeAssetForSnapshot(renderedByIndex.get(pageIndex)),
+      childName: typeof page.childName === 'string' ? page.childName : '',
       updatedAt: now,
     }));
+
+    if (coverFrontMatter?.coverPage?.characterImage) {
+      book.coverPage = book.coverPage || {};
+      book.coverPage.characterImage = coverFrontMatter.coverPage.characterImage;
+      if (coverFrontMatter.coverPage.characterImageOriginal) {
+        book.coverPage.characterImageOriginal =
+          coverFrontMatter.coverPage.characterImageOriginal;
+      }
+      if (typeof coverFrontMatter.coverPage.characterPrompt === 'string') {
+        book.coverPage.characterPrompt =
+          normalizeString(coverFrontMatter.coverPage.characterPrompt) ||
+          book.coverPage.characterPrompt;
+      }
+      if (!book.coverPage.backgroundImage && coverFrontMatter.coverPage.backgroundImage) {
+        book.coverPage.backgroundImage = coverFrontMatter.coverPage.backgroundImage;
+      }
+      if (!book.coverPage.qrCode && coverFrontMatter.coverPage.qrCode) {
+        book.coverPage.qrCode = coverFrontMatter.coverPage.qrCode;
+      }
+      book.markModified('coverPage');
+    }
+
+    if (dedicationFrontMatter?.dedicationPage?.kidImage || dedicationFrontMatter?.dedicationPage?.generatedImage) {
+      book.dedicationPage = book.dedicationPage || {};
+      if (dedicationFrontMatter.dedicationPage.kidImage) {
+        book.dedicationPage.kidImage = dedicationFrontMatter.dedicationPage.kidImage;
+      }
+      if (dedicationFrontMatter.dedicationPage.generatedImage) {
+        book.dedicationPage.generatedImage = dedicationFrontMatter.dedicationPage.generatedImage;
+      }
+      if (dedicationFrontMatter.dedicationPage.generatedImageOriginal) {
+        book.dedicationPage.generatedImageOriginal =
+          dedicationFrontMatter.dedicationPage.generatedImageOriginal;
+      }
+      if (typeof dedicationFrontMatter.dedicationPage.characterPrompt === 'string') {
+        book.dedicationPage.characterPrompt =
+          normalizeString(dedicationFrontMatter.dedicationPage.characterPrompt) ||
+          book.dedicationPage.characterPrompt;
+      }
+      if (
+        !book.dedicationPage.backgroundImage &&
+        dedicationFrontMatter.dedicationPage.backgroundImage
+      ) {
+        book.dedicationPage.backgroundImage = dedicationFrontMatter.dedicationPage.backgroundImage;
+      }
+      book.markModified('dedicationPage');
+    }
 
     const pdfAsset = {
       key: pdfKey,
@@ -1574,6 +1738,11 @@ exports.generateStorybook = async (req, res) => {
       readerId: readerId || null,
       readerName: readerName || '',
       userId: readerId || null,
+      variant: 'standard',
+      derivedFromAssetId: null,
+      derivedFromAssetKey: null,
+      confirmedAt: null,
+      metadata: null,
       pages: pagesSnapshot,
     };
 
@@ -1706,6 +1875,10 @@ exports.regenerateStorybookPage = async (req, res) => {
         characterAsset: hydratedCharacterAsset,
         winner: result.winner,
         generation: result.generation,
+        coverPage: result.coverPage,
+        dedicationPage: result.dedicationPage,
+        pageType: result.pageType,
+        order: result.order,
       },
     });
   } catch (error) {
@@ -1794,6 +1967,7 @@ exports.regenerateStorybookPdf = async (req, res) => {
         selectedCandidateIndex: Number.isFinite(snapshot.selectedCandidateIndex)
           ? snapshot.selectedCandidateIndex
           : null,
+        pageType: 'story',
       };
 
       const removalApplied = await ensureBackgroundRemovedCharacter({
@@ -1814,19 +1988,66 @@ exports.regenerateStorybookPdf = async (req, res) => {
       });
     }
 
+    const readerName = pdfAssetDoc.readerName || '';
+
+    const frontMatterPages = [];
+    const coverFrontMatter = buildCoverPageContent({ book, readerName, storyPages });
+    if (coverFrontMatter) {
+      frontMatterPages.push(coverFrontMatter);
+    }
+    const dedicationFrontMatter = buildDedicationPageContent({ book, readerName, storyPages });
+    if (dedicationFrontMatter) {
+      frontMatterPages.push(dedicationFrontMatter);
+    }
+    const assembledPages = [...frontMatterPages, ...storyPages];
+
     const finalTitle = overrideTitle || pdfAssetDoc.title || `${book.name} Storybook`;
-    const { buffer: pdfBuffer, pageCount } = await generateStorybookPdf({
+    const { buffer: pdfBuffer, pageCount, renderedPages } = await generateStorybookPdf({
       title: finalTitle,
-      pages: storyPages,
+      pages: assembledPages,
     });
 
     await uploadBufferToS3(pdfBuffer, pdfAssetDoc.key, 'application/pdf', { acl: 'public-read' });
 
+    const baseTimestamp = Date.now();
+    const renderedUploads = await Promise.all(
+      (renderedPages || []).map(async ({ index, type, buffer: pageBuffer }, position) => {
+        if (!pageBuffer || !Buffer.isBuffer(pageBuffer)) {
+          return null;
+        }
+        const normalizedIndex = Number.isInteger(index) ? index : position;
+        const safeIndex = Number.isInteger(normalizedIndex) ? normalizedIndex : position;
+        const typeSlug =
+          typeof type === 'string' && type.trim() ? type.trim().toLowerCase() : 'page';
+        const imageKey = `books/${bookSlug}/storybook-previews/${baseTimestamp}-${safeIndex + 1}-${typeSlug}.png`;
+        const uploadMeta = await uploadBufferToS3(pageBuffer, imageKey, 'image/png', {
+          acl: 'public-read',
+        });
+        return {
+          index: safeIndex,
+          asset: {
+            key: imageKey,
+            url: uploadMeta.url,
+            downloadUrl: uploadMeta.url,
+            size: pageBuffer.length,
+            contentType: 'image/png',
+            uploadedAt: new Date(),
+            originalName: `${typeSlug}-${safeIndex + 1}.png`,
+            backgroundRemoved: false,
+          },
+        };
+      })
+    );
+    const renderedByIndex = new Map(
+      renderedUploads.filter(Boolean).map(({ index, asset }) => [index, asset])
+    );
+
     const now = new Date();
-    const pagesSnapshot = storyPages.map((page) => ({
+    const pagesSnapshot = assembledPages.map((page, pageIndex) => ({
       order: page.order,
       text: page.text || '',
       quote: page.quote || '',
+      prompt: page.prompt || '',
       background: sanitizeAssetForSnapshot(page.background),
       character: sanitizeAssetForSnapshot(page.character),
       characterOriginal: sanitizeAssetForSnapshot(page.characterOriginal),
@@ -1837,8 +2058,43 @@ exports.regenerateStorybookPdf = async (req, res) => {
         : null,
       rankingSummary: page.rankingSummary || '',
       rankingNotes: Array.isArray(page.rankingNotes) ? page.rankingNotes : [],
+      pageType: page.pageType || 'story',
+      cover: sanitizeAssetForSnapshot(page.cover),
+      coverPage: clonePlainObject(page.coverPage),
+      dedicationPage: clonePlainObject(page.dedicationPage),
+      renderedImage: sanitizeAssetForSnapshot(renderedByIndex.get(pageIndex)),
+      childName: typeof page.childName === 'string' ? page.childName : '',
       updatedAt: now,
     }));
+
+    if (coverFrontMatter?.coverPage?.characterImage) {
+      book.coverPage = book.coverPage || {};
+      book.coverPage.characterImage = coverFrontMatter.coverPage.characterImage;
+      if (!book.coverPage.backgroundImage && coverFrontMatter.coverPage.backgroundImage) {
+        book.coverPage.backgroundImage = coverFrontMatter.coverPage.backgroundImage;
+      }
+      if (!book.coverPage.qrCode && coverFrontMatter.coverPage.qrCode) {
+        book.coverPage.qrCode = coverFrontMatter.coverPage.qrCode;
+      }
+      book.markModified('coverPage');
+    }
+
+    if (dedicationFrontMatter?.dedicationPage?.kidImage || dedicationFrontMatter?.dedicationPage?.generatedImage) {
+      book.dedicationPage = book.dedicationPage || {};
+      if (dedicationFrontMatter.dedicationPage.kidImage) {
+        book.dedicationPage.kidImage = dedicationFrontMatter.dedicationPage.kidImage;
+      }
+      if (dedicationFrontMatter.dedicationPage.generatedImage) {
+        book.dedicationPage.generatedImage = dedicationFrontMatter.dedicationPage.generatedImage;
+      }
+      if (
+        !book.dedicationPage.backgroundImage &&
+        dedicationFrontMatter.dedicationPage.backgroundImage
+      ) {
+        book.dedicationPage.backgroundImage = dedicationFrontMatter.dedicationPage.backgroundImage;
+      }
+      book.markModified('dedicationPage');
+    }
 
     pdfAssetDoc.title = finalTitle;
     pdfAssetDoc.size = pdfBuffer.length;
@@ -1869,6 +2125,173 @@ exports.regenerateStorybookPdf = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to regenerate storybook PDF',
+      error: error.message,
+    });
+  }
+};
+
+exports.confirmStorybookPdf = async (req, res) => {
+  try {
+    const { id: bookId, assetId } = req.params;
+
+    const book = await Book.findById(bookId);
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: 'Book not found',
+      });
+    }
+
+    const pdfAsset =
+      book.pdfAssets.id(assetId) ||
+      book.pdfAssets.find((asset) => asset.key === assetId);
+
+    if (!pdfAsset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook asset not found',
+      });
+    }
+
+    const sourceBuffer = await downloadFromS3(pdfAsset.key);
+    if (!sourceBuffer || !sourceBuffer.length) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to download the original PDF for confirmation',
+      });
+    }
+
+    const sourcePdf = await PDFDocument.load(sourceBuffer);
+    const splitPdf = await PDFDocument.create();
+    const originalPageCount = sourcePdf.getPageCount();
+
+    for (let index = 0; index < originalPageCount; index += 1) {
+      const [sourcePageCopy] = await splitPdf.copyPages(sourcePdf, [index]);
+      const sourcePage = sourcePdf.getPage(index);
+      const pageWidth = sourcePage.getWidth();
+      const pageHeight = sourcePage.getHeight();
+      const halfWidth = pageWidth / 2;
+
+      if (index === 0) {
+        splitPdf.addPage(sourcePageCopy);
+        continue;
+      }
+
+      const [rightPage] = await splitPdf.copyPages(sourcePdf, [index]);
+      const leftPage = sourcePageCopy;
+
+      const applyBox = (page) => {
+        if (typeof page.setMediaBox === 'function') page.setMediaBox(0, 0, halfWidth, pageHeight);
+        if (typeof page.setCropBox === 'function') page.setCropBox(0, 0, halfWidth, pageHeight);
+        if (typeof page.setBleedBox === 'function') page.setBleedBox(0, 0, halfWidth, pageHeight);
+        if (typeof page.setTrimBox === 'function') page.setTrimBox(0, 0, halfWidth, pageHeight);
+        if (typeof page.setArtBox === 'function') page.setArtBox(0, 0, halfWidth, pageHeight);
+      };
+
+      applyBox(leftPage);
+      splitPdf.addPage(leftPage);
+
+      rightPage.translateContent(-halfWidth, 0);
+      applyBox(rightPage);
+      splitPdf.addPage(rightPage);
+    }
+
+    const splitPdfBytes = await splitPdf.save();
+    const buffer = Buffer.from(splitPdfBytes);
+
+    const bookSlug = book.slug || `${slugify(book.name)}-${book._id.toString().slice(-6)}`;
+    const baseTitle = pdfAsset.title || `${book.name} Storybook`;
+    const splitTitle = `${baseTitle} (Split)`;
+    const splitKey = generateBookPdfKey(bookSlug, `${baseTitle}-split`);
+    const { url } = await uploadBufferToS3(buffer, splitKey, 'application/pdf', {
+      acl: 'public-read',
+    });
+
+    const now = new Date();
+    const splitVariant = {
+      key: splitKey,
+      url,
+      size: buffer.length,
+      contentType: 'application/pdf',
+      title: splitTitle,
+      pageCount: splitPdf.getPageCount(),
+      createdAt: now,
+      updatedAt: now,
+      trainingId: pdfAsset.trainingId || null,
+      storybookJobId: pdfAsset.storybookJobId || null,
+      readerId: pdfAsset.readerId || null,
+      readerName: pdfAsset.readerName || '',
+      userId: pdfAsset.userId || null,
+      variant: 'split',
+      derivedFromAssetId: pdfAsset._id || null,
+      derivedFromAssetKey: pdfAsset.key || null,
+      confirmedAt: now,
+      metadata: {
+        splitStrategy: 'vertical-half',
+        originalPageCount,
+        generatedPageCount: splitPdf.getPageCount(),
+        preservedCoverPage: true,
+      },
+      pages: (pdfAsset.pages || []).map((page) => cloneDocument(page)),
+    };
+
+    const previousSplitAssets = (book.pdfAssets || []).filter((asset) => {
+      if (asset.variant !== 'split') return false;
+      if (pdfAsset._id && asset.derivedFromAssetId) {
+        return asset.derivedFromAssetId.toString() === pdfAsset._id.toString();
+      }
+      return asset.derivedFromAssetKey && asset.derivedFromAssetKey === pdfAsset.key;
+    });
+
+    const nextAssets = (book.pdfAssets || []).filter((asset) => {
+      if (asset.variant !== 'split') return true;
+      if (pdfAsset._id && asset.derivedFromAssetId) {
+        return asset.derivedFromAssetId.toString() !== pdfAsset._id.toString();
+      }
+      if (asset.derivedFromAssetKey) {
+        return asset.derivedFromAssetKey !== pdfAsset.key;
+      }
+      return true;
+    });
+    nextAssets.push(splitVariant);
+    book.pdfAssets = nextAssets;
+    book.markModified('pdfAssets');
+    await book.save();
+
+    const savedSplitAsset =
+      book.pdfAssets.find((asset) => asset.key === splitKey) || splitVariant;
+
+    const hydratedPages = await attachFreshSignedUrlsToPages(savedSplitAsset.pages || [], {
+      bookPages: book.pages || [],
+    });
+
+    const responseAsset = {
+      ...cloneDocument(savedSplitAsset),
+      pages: hydratedPages,
+    };
+    responseAsset.variant = 'split';
+
+    if (previousSplitAssets.length) {
+      Promise.allSettled(
+        previousSplitAssets
+          .filter((asset) => asset.key && asset.key !== splitKey)
+          .map((asset) => deleteFromS3(asset.key).catch(() => null))
+      ).catch(() => null);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Storybook confirmed and split PDF generated successfully',
+      data: responseAsset,
+      meta: {
+        sourceAssetId: pdfAsset._id ? pdfAsset._id.toString() : null,
+      },
+    });
+  } catch (error) {
+    console.error('Error confirming storybook PDF:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to confirm storybook PDF',
       error: error.message,
     });
   }
@@ -1912,6 +2335,10 @@ exports.selectStorybookPageCandidate = async (req, res) => {
         pdfAssetPage: hydratedPages[0] || null,
         characterAsset: hydratedCharacter,
         candidateIndex: result.candidateIndex,
+        coverPage: result.coverPage,
+        dedicationPage: result.dedicationPage,
+        pageType: result.pageType,
+        order: result.order,
       },
     });
   } catch (error) {
@@ -1969,7 +2396,7 @@ exports.updateBookStatus = async (req, res) => {
 
 exports.generateCoverPreview = async (req, res) => {
   try {
-    const { leftSide, rightSide, backgroundImageUrl, characterImageUrl, qrCodeUrl } = req.body;
+    const { leftSide, rightSide, backgroundImageUrl, qrCodeUrl } = req.body;
     const files = req.files || {};
 
     // Parse JSON data
@@ -1990,12 +2417,6 @@ exports.generateCoverPreview = async (req, res) => {
       });
     }
 
-    // Get character image (optional)
-    let characterImageBuffer;
-    if (files.characterImage && files.characterImage[0]) {
-      characterImageBuffer = files.characterImage[0].buffer;
-    }
-
     // Get QR code image (optional)
     let qrCodeBuffer;
     if (files.qrCode && files.qrCode[0]) {
@@ -2008,7 +2429,7 @@ exports.generateCoverPreview = async (req, res) => {
     // Generate the cover preview
     const previewBuffer = await generateCoverPage({
       backgroundImage: backgroundImageBuffer || backgroundImageUrl,
-      characterImage: characterImageBuffer || characterImageUrl,
+      characterImage: null,
       leftSide: leftSideData,
       rightSide: rightSideData,
       qrCode: qrCodeBuffer || qrCodeUrl,
@@ -2040,10 +2461,8 @@ exports.generateCoverPreview = async (req, res) => {
 };
 
 exports.generateDedicationPreview = async (req, res) => {
-  const uploadedKeys = [];
-
   try {
-    const { title, secondTitle, backgroundImageUrl, kidImageUrl } = req.body;
+    const { title, secondTitle, backgroundImageUrl } = req.body;
     const files = req.files || {};
 
     // Get background image (either from file upload or URL)
@@ -2059,36 +2478,13 @@ exports.generateDedicationPreview = async (req, res) => {
       });
     }
 
-    // Get kid image and upload to S3 if it's a buffer (for background removal API)
-    let kidImageSource;
-    if (files.kidImage && files.kidImage[0]) {
-      // Upload kid image to S3 temporarily so Replicate API can access it
-      const kidImageBuffer = files.kidImage[0].buffer;
-      const kidImageKey = `temp/dedication-kids/${Date.now()}-${Math.random().toString(36).substring(7)}.${files.kidImage[0].originalname.split('.').pop()}`;
-
-      await uploadBufferToS3(kidImageBuffer, kidImageKey, files.kidImage[0].mimetype, {
-        acl: 'public-read',
-      });
-      uploadedKeys.push(kidImageKey);
-
-      // Get public URL for the kid image
-      kidImageSource = await getSignedUrlForKey(kidImageKey, 3600);
-    } else if (kidImageUrl) {
-      kidImageSource = kidImageUrl;
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Kid image is required',
-      });
-    }
-
     // Import the dedication generator
     const { generateDedicationPage } = require('../utils/dedicationGenerator');
 
     // Generate the dedication preview
     const previewBuffer = await generateDedicationPage({
       backgroundImage: backgroundImageSource,
-      kidImage: kidImageSource, // Now always a URL for background removal
+      kidImage: null,
       title: title || '',
       secondTitle: secondTitle || '',
     });
@@ -2110,10 +2506,6 @@ exports.generateDedicationPreview = async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating dedication preview:', error);
-    // Clean up uploaded temporary files on error
-    if (uploadedKeys.length > 0) {
-      await cleanupKeys(uploadedKeys).catch(console.error);
-    }
     res.status(500).json({
       success: false,
       message: 'Failed to generate dedication preview',
