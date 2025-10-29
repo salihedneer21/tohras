@@ -278,34 +278,31 @@ async function generateCoverPage(options) {
     }
   }
 
-  // Draw character image if loaded - positioned behind right side text
+  // Draw character image if loaded - positioned in bottom center of right half
   if (charImage) {
-    // Size to fit most of the canvas height, positioned on the right side
-    const charTargetWidth = width * 0.5;
-    const charTargetHeight = height * 1.04;
-    const charX = width * 0.5;
-    const charY = -height * 0.02;
+    // Character size optimized for better visibility
+    const charTargetWidth = width * 0.42; // 42% of canvas width
+    const charTargetHeight = height * 1.25; // 125% of canvas height
 
     const charAspectRatio = charImage.width / charImage.height;
     const targetAspectRatio = charTargetWidth / charTargetHeight;
 
     let drawWidth;
     let drawHeight;
-    let drawX;
-    let drawY;
 
-    // Calculate dimensions to fit the target area
+    // Calculate dimensions to fit the target area while maintaining aspect ratio
     if (charAspectRatio > targetAspectRatio) {
       drawWidth = charTargetWidth;
       drawHeight = drawWidth / charAspectRatio;
-      drawX = charX;
-      drawY = charY + (charTargetHeight - drawHeight);
     } else {
       drawHeight = charTargetHeight;
       drawWidth = drawHeight * charAspectRatio;
-      drawX = charX + (charTargetWidth - drawWidth) / 2;
-      drawY = charY;
     }
+
+    // Position: horizontally centered in right half (shifted 40px left), vertically aligned to bottom
+    const rightHalfCenterX = width * 0.75 - 40; // Center of right half (50% + 25%) - 40px
+    const drawX = rightHalfCenterX - drawWidth / 2; // Center the character
+    const drawY = height - drawHeight; // Align to bottom
 
     ctx.drawImage(charImage, drawX, drawY, drawWidth, drawHeight);
   }
@@ -489,7 +486,7 @@ async function generateCoverPage(options) {
 
   // Draw right side title
   if (rightSide.mainTitle) {
-    const textXRight = width * 0.75;
+    const textXRight = width * 0.75 - 40; // Shifted 40px left
     const bottomMargin = 250;
     const topY = height - bottomMargin - 280;
     const bottomY = topY + 280;

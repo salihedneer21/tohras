@@ -161,6 +161,34 @@ const coverPageSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const dedicationPageSchema = new mongoose.Schema(
+  {
+    backgroundImage: {
+      type: imageAssetSchema,
+      default: null,
+    },
+    kidImage: {
+      type: imageAssetSchema,
+      default: null,
+    },
+    generatedImage: {
+      type: imageAssetSchema,
+      default: null,
+    },
+    title: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    secondTitle: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+  },
+  { _id: false }
+);
+
 const bookSchema = new mongoose.Schema(
   {
     name: {
@@ -204,6 +232,10 @@ const bookSchema = new mongoose.Schema(
     },
     coverPage: {
       type: coverPageSchema,
+      default: null,
+    },
+    dedicationPage: {
+      type: dedicationPageSchema,
       default: null,
     },
   },

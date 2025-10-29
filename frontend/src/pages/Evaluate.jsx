@@ -27,13 +27,33 @@ function Evaluate() {
     reader.onload = () => {
       const resultString = reader.result;
       const base64 = resultString.split(',')[1];
-      setImage({
-        name: file.name,
-        size: file.size,
-        mimeType: file.type,
-        preview: resultString,
-        base64,
-      });
+
+      // Check image dimensions
+      const img = new Image();
+      img.onload = () => {
+        const width = img.width;
+        const height = img.height;
+
+        // Warn if image is smaller than 1024x1024
+        if (width < 1024 || height < 1024) {
+          toast.error(`Image too small for preprocessing. Minimum size: 1024x1024. Current: ${width}x${height}`, {
+            duration: 5000,
+          });
+          return;
+        }
+
+        // Store image data with dimensions
+        setImage({
+          name: file.name,
+          size: file.size,
+          mimeType: file.type,
+          preview: resultString,
+          base64,
+          width,
+          height,
+        });
+      };
+      img.src = resultString;
     };
     reader.onerror = () => {
       console.error(reader.error);

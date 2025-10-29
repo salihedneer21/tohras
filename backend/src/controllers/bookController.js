@@ -789,6 +789,43 @@ exports.createBook = async (req, res) => {
       };
     }
 
+    // Handle dedication page
+    let dedicationPageData = null;
+    if (req.body.dedicationPage) {
+      const dedicationPagePayload = JSON.parse(req.body.dedicationPage);
+
+      const dedicationBgFile = req.files?.dedicationPageBackgroundImage?.[0];
+      const dedicationKidFile = req.files?.dedicationPageKidImage?.[0];
+
+      let dedicationBackgroundImage = null;
+      let kidImage = null;
+
+      if (dedicationBgFile) {
+        const bgKey = `books/${slug}/dedication-page/background-${Date.now()}.${dedicationBgFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(dedicationBgFile.buffer, bgKey, dedicationBgFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(bgKey);
+        dedicationBackgroundImage = buildImageResponse(dedicationBgFile, bgKey, url);
+      }
+
+      if (dedicationKidFile) {
+        const kidKey = `books/${slug}/dedication-page/kid-${Date.now()}.${dedicationKidFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(dedicationKidFile.buffer, kidKey, dedicationKidFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(kidKey);
+        kidImage = buildImageResponse(dedicationKidFile, kidKey, url);
+      }
+
+      dedicationPageData = {
+        backgroundImage: dedicationBackgroundImage,
+        kidImage,
+        title: normalizeString(dedicationPagePayload.title),
+        secondTitle: normalizeString(dedicationPagePayload.secondTitle),
+      };
+    }
+
     const book = await Book.create({
       name,
       description,
@@ -798,6 +835,7 @@ exports.createBook = async (req, res) => {
       coverImage,
       pages,
       coverPage: coverPageData,
+      dedicationPage: dedicationPageData,
     });
 
     res.status(201).json({
@@ -1119,6 +1157,62 @@ exports.updateBook = async (req, res) => {
           mainTitle: normalizeString(coverPagePayload.rightSide?.mainTitle),
           subtitle: normalizeString(coverPagePayload.rightSide?.subtitle),
         },
+      };
+    }
+
+    // Handle dedication page data
+    if (req.body.dedicationPage) {
+      const dedicationPagePayload = typeof req.body.dedicationPage === 'string'
+        ? JSON.parse(req.body.dedicationPage)
+        : req.body.dedicationPage;
+
+      const dedicationBgFile = req.files?.dedicationPageBackgroundImage?.[0];
+      const dedicationKidFile = req.files?.dedicationPageKidImage?.[0];
+
+      let dedicationBackgroundImage = book.dedicationPage?.backgroundImage || null;
+      let kidImage = book.dedicationPage?.kidImage || null;
+
+      // Handle background image
+      if (dedicationBgFile) {
+        if (dedicationBackgroundImage?.key) {
+          keysToDelete.push(dedicationBackgroundImage.key);
+        }
+        const bgKey = `books/${slug}/dedication-page/background-${Date.now()}.${dedicationBgFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(dedicationBgFile.buffer, bgKey, dedicationBgFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(bgKey);
+        dedicationBackgroundImage = buildImageResponse(dedicationBgFile, bgKey, url);
+      } else if (dedicationPagePayload.removeBackgroundImage) {
+        if (dedicationBackgroundImage?.key) {
+          keysToDelete.push(dedicationBackgroundImage.key);
+        }
+        dedicationBackgroundImage = null;
+      }
+
+      // Handle kid image
+      if (dedicationKidFile) {
+        if (kidImage?.key) {
+          keysToDelete.push(kidImage.key);
+        }
+        const kidKey = `books/${slug}/dedication-page/kid-${Date.now()}.${dedicationKidFile.originalname.split('.').pop()}`;
+        const { url } = await uploadBufferToS3(dedicationKidFile.buffer, kidKey, dedicationKidFile.mimetype, {
+          acl: 'public-read',
+        });
+        uploadedKeys.push(kidKey);
+        kidImage = buildImageResponse(dedicationKidFile, kidKey, url);
+      } else if (dedicationPagePayload.removeKidImage) {
+        if (kidImage?.key) {
+          keysToDelete.push(kidImage.key);
+        }
+        kidImage = null;
+      }
+
+      book.dedicationPage = {
+        backgroundImage: dedicationBackgroundImage,
+        kidImage,
+        title: normalizeString(dedicationPagePayload.title),
+        secondTitle: normalizeString(dedicationPagePayload.secondTitle),
       };
     }
 
@@ -1940,6 +2034,89 @@ exports.generateCoverPreview = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to generate cover preview',
+      error: error.message,
+    });
+  }
+};
+
+exports.generateDedicationPreview = async (req, res) => {
+  const uploadedKeys = [];
+
+  try {
+    const { title, secondTitle, backgroundImageUrl, kidImageUrl } = req.body;
+    const files = req.files || {};
+
+    // Get background image (either from file upload or URL)
+    let backgroundImageSource;
+    if (files.backgroundImage && files.backgroundImage[0]) {
+      backgroundImageSource = files.backgroundImage[0].buffer;
+    } else if (backgroundImageUrl) {
+      backgroundImageSource = backgroundImageUrl;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Background image is required',
+      });
+    }
+
+    // Get kid image and upload to S3 if it's a buffer (for background removal API)
+    let kidImageSource;
+    if (files.kidImage && files.kidImage[0]) {
+      // Upload kid image to S3 temporarily so Replicate API can access it
+      const kidImageBuffer = files.kidImage[0].buffer;
+      const kidImageKey = `temp/dedication-kids/${Date.now()}-${Math.random().toString(36).substring(7)}.${files.kidImage[0].originalname.split('.').pop()}`;
+
+      await uploadBufferToS3(kidImageBuffer, kidImageKey, files.kidImage[0].mimetype, {
+        acl: 'public-read',
+      });
+      uploadedKeys.push(kidImageKey);
+
+      // Get public URL for the kid image
+      kidImageSource = await getSignedUrlForKey(kidImageKey, 3600);
+    } else if (kidImageUrl) {
+      kidImageSource = kidImageUrl;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Kid image is required',
+      });
+    }
+
+    // Import the dedication generator
+    const { generateDedicationPage } = require('../utils/dedicationGenerator');
+
+    // Generate the dedication preview
+    const previewBuffer = await generateDedicationPage({
+      backgroundImage: backgroundImageSource,
+      kidImage: kidImageSource, // Now always a URL for background removal
+      title: title || '',
+      secondTitle: secondTitle || '',
+    });
+
+    // Upload to S3 temporarily with a preview key
+    const previewKey = `temp/dedication-previews/${Date.now()}-${Math.random().toString(36).substring(7)}.png`;
+    await uploadBufferToS3(previewBuffer, previewKey, 'image/png');
+
+    // Get a signed URL for the preview (expires in 1 hour)
+    const previewUrl = await getSignedUrlForKey(previewKey, 3600);
+
+    res.status(200).json({
+      success: true,
+      message: 'Dedication preview generated successfully',
+      data: {
+        previewUrl,
+        previewKey,
+      },
+    });
+  } catch (error) {
+    console.error('Error generating dedication preview:', error);
+    // Clean up uploaded temporary files on error
+    if (uploadedKeys.length > 0) {
+      await cleanupKeys(uploadedKeys).catch(console.error);
+    }
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate dedication preview',
       error: error.message,
     });
   }

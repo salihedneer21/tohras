@@ -9,7 +9,7 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 15 * 1024 * 1024, // 15MB per image
+    fileSize: 50 * 1024 * 1024, // 50MB per image (increased for high-res dedication page images)
   },
 });
 
@@ -20,12 +20,26 @@ const uploadFields = upload.fields([
   { name: 'coverPageBackgroundImage', maxCount: 1 },
   { name: 'coverPageCharacterImage', maxCount: 1 },
   { name: 'coverPageQrCode', maxCount: 1 },
+  { name: 'dedicationPageBackgroundImage', maxCount: 1 },
+  { name: 'dedicationPageKidImage', maxCount: 1 },
 ]);
 
 const coverPreviewFields = upload.fields([
   { name: 'backgroundImage', maxCount: 1 },
   { name: 'characterImage', maxCount: 1 },
   { name: 'qrCode', maxCount: 1 },
+]);
+
+const dedicationUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB per image for high-res dedication page images (5375x2975px)
+  },
+});
+
+const dedicationPreviewFields = dedicationUpload.fields([
+  { name: 'backgroundImage', maxCount: 1 },
+  { name: 'kidImage', maxCount: 1 },
 ]);
 
 const storybookUpload = multer({
@@ -39,6 +53,7 @@ const storybookFields = storybookUpload.fields([{ name: 'characterImages', maxCo
 
 router.get('/', bookController.getAllBooks);
 router.post('/cover-preview', coverPreviewFields, bookController.generateCoverPreview);
+router.post('/dedication-preview', dedicationPreviewFields, bookController.generateDedicationPreview);
 router.get('/storybooks/stream/live', storybookAutomationController.streamJobs);
 router.get('/:id/storybooks', bookController.getBookStorybooks);
 router.get('/:id/storybooks/jobs', storybookAutomationController.listJobs);

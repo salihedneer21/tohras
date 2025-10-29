@@ -69,6 +69,10 @@ export const bookAPI = {
     api.post('/books/cover-preview', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  generateDedicationPreview: (formData) =>
+    api.post('/books/dedication-preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
 };
 
 // User API

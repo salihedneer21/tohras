@@ -122,6 +122,24 @@ const createEmptyBookForm = () => ({
       subtitle: '',
     },
   },
+  dedicationPage: {
+    backgroundImage: {
+      existing: null,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      remove: false,
+    },
+    kidImage: {
+      existing: null,
+      file: null,
+      preview: null,
+      previewIsObject: false,
+      remove: false,
+    },
+    title: '',
+    secondTitle: '',
+  },
 });
 
 const revokeIfNeeded = (preview, isObjectUrl) => {
@@ -142,6 +160,8 @@ function Books() {
   const [activeTab, setActiveTab] = useState('story-pages');
   const [coverPreview, setCoverPreview] = useState(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const [dedicationPreview, setDedicationPreview] = useState(null);
+  const [isGeneratingDedicationPreview, setIsGeneratingDedicationPreview] = useState(false);
 
   useEffect(() => {
     fetchBooks();
@@ -178,13 +198,18 @@ function Books() {
       revokeIfNeeded(formState.coverPage.characterImage?.preview, formState.coverPage.characterImage?.previewIsObject);
       revokeIfNeeded(formState.coverPage.qrCode?.preview, formState.coverPage.qrCode?.previewIsObject);
     }
+    // Revoke dedication page image URLs
+    if (formState.dedicationPage) {
+      revokeIfNeeded(formState.dedicationPage.backgroundImage?.preview, formState.dedicationPage.backgroundImage?.previewIsObject);
+      revokeIfNeeded(formState.dedicationPage.kidImage?.preview, formState.dedicationPage.kidImage?.previewIsObject);
+    }
     setFormState(createEmptyBookForm());
     setEditingBook(null);
     setFormMode('create');
     setShowForm(false);
     setIsSaving(false);
     setActiveTab('story-pages');
-  }, [formState.cover, formState.pages, formState.coverPage]);
+  }, [formState.cover, formState.pages, formState.coverPage, formState.dedicationPage]);
 
   const openCreateForm = () => {
     resetForm();
@@ -284,6 +309,24 @@ function Books() {
           mainTitle: book.coverPage?.rightSide?.mainTitle || '',
           subtitle: book.coverPage?.rightSide?.subtitle || '',
         },
+      },
+      dedicationPage: {
+        backgroundImage: {
+          existing: book.dedicationPage?.backgroundImage || null,
+          file: null,
+          preview: book.dedicationPage?.backgroundImage?.url || null,
+          previewIsObject: false,
+          remove: false,
+        },
+        kidImage: {
+          existing: book.dedicationPage?.kidImage || null,
+          file: null,
+          preview: book.dedicationPage?.kidImage?.url || null,
+          previewIsObject: false,
+          remove: false,
+        },
+        title: book.dedicationPage?.title || '',
+        secondTitle: book.dedicationPage?.secondTitle || '',
       },
     });
 
@@ -655,6 +698,95 @@ const handleRemovePageImage = (index) => {
     }));
   };
 
+  const handleDedicationFieldChange = (field, value) => {
+    setFormState((prev) => ({
+      ...prev,
+      dedicationPage: {
+        ...prev.dedicationPage,
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleDedicationImageChange = (imageType, event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Check dimensions for background image
+    if (imageType === 'backgroundImage') {
+      const img = new Image();
+      img.onload = () => {
+        if (img.width !== 5375 || img.height !== 2975) {
+          toast.error(`Background image must be exactly 5375 x 2975 px. Current: ${img.width} x ${img.height}`);
+          event.target.value = '';
+          return;
+        }
+
+        const preview = URL.createObjectURL(file);
+        revokeIfNeeded(
+          formState.dedicationPage[imageType].preview,
+          formState.dedicationPage[imageType].previewIsObject
+        );
+
+        setFormState((prev) => ({
+          ...prev,
+          dedicationPage: {
+            ...prev.dedicationPage,
+            [imageType]: {
+              existing: null,
+              file,
+              preview,
+              previewIsObject: true,
+              remove: false,
+            },
+          },
+        }));
+      };
+      img.src = URL.createObjectURL(file);
+    } else {
+      const preview = URL.createObjectURL(file);
+      revokeIfNeeded(
+        formState.dedicationPage[imageType].preview,
+        formState.dedicationPage[imageType].previewIsObject
+      );
+
+      setFormState((prev) => ({
+        ...prev,
+        dedicationPage: {
+          ...prev.dedicationPage,
+          [imageType]: {
+            existing: null,
+            file,
+            preview,
+            previewIsObject: true,
+            remove: false,
+          },
+        },
+      }));
+    }
+  };
+
+  const handleRemoveDedicationImage = (imageType) => {
+    revokeIfNeeded(
+      formState.dedicationPage[imageType].preview,
+      formState.dedicationPage[imageType].previewIsObject
+    );
+
+    setFormState((prev) => ({
+      ...prev,
+      dedicationPage: {
+        ...prev.dedicationPage,
+        [imageType]: {
+          existing: prev.dedicationPage[imageType].existing,
+          file: null,
+          preview: null,
+          previewIsObject: false,
+          remove: true,
+        },
+      },
+    }));
+  };
+
   const handleGeneratePreview = async () => {
     // Validate required fields
     if (!formState.coverPage.backgroundImage.preview) {
@@ -721,6 +853,61 @@ const handleRemovePageImage = (index) => {
       console.error('Preview generation error:', error);
     } finally {
       setIsGeneratingPreview(false);
+    }
+  };
+
+  const handleGenerateDedicationPreview = async () => {
+    // Validate required fields
+    if (!formState.dedicationPage.backgroundImage.preview) {
+      toast.error('Please upload a background image first');
+      return;
+    }
+
+    if (!formState.dedicationPage.kidImage.preview) {
+      toast.error('Please upload a kid image first');
+      return;
+    }
+
+    if (!formState.dedicationPage.title && !formState.dedicationPage.secondTitle) {
+      toast.error('Please fill in at least one title field');
+      return;
+    }
+
+    setIsGeneratingDedicationPreview(true);
+
+    try {
+      const formData = new FormData();
+
+      // Add dedication page data
+      formData.append('title', formState.dedicationPage.title || '');
+      formData.append('secondTitle', formState.dedicationPage.secondTitle || '');
+
+      // Add background image
+      if (formState.dedicationPage.backgroundImage.file) {
+        formData.append('backgroundImage', formState.dedicationPage.backgroundImage.file);
+      } else if (formState.dedicationPage.backgroundImage.existing?.url) {
+        formData.append('backgroundImageUrl', formState.dedicationPage.backgroundImage.existing.url);
+      }
+
+      // Add kid image
+      if (formState.dedicationPage.kidImage.file) {
+        formData.append('kidImage', formState.dedicationPage.kidImage.file);
+      } else if (formState.dedicationPage.kidImage.existing?.url) {
+        formData.append('kidImageUrl', formState.dedicationPage.kidImage.existing.url);
+      }
+
+      // Call API to generate preview
+      const response = await bookAPI.generateDedicationPreview(formData);
+
+      if (response.data?.previewUrl) {
+        setDedicationPreview(response.data.previewUrl);
+        toast.success('Dedication preview generated successfully!');
+      }
+    } catch (error) {
+      toast.error(`Failed to generate dedication preview: ${error.message}`);
+      console.error('Dedication preview generation error:', error);
+    } finally {
+      setIsGeneratingDedicationPreview(false);
     }
   };
 
@@ -861,6 +1048,24 @@ const handleRemovePageImage = (index) => {
     }
     if (formState.coverPage.qrCode.file) {
       formData.append('coverPageQrCode', formState.coverPage.qrCode.file);
+    }
+
+    // Add dedication page data
+    const dedicationPageData = {
+      title: formState.dedicationPage.title || '',
+      secondTitle: formState.dedicationPage.secondTitle || '',
+      hasNewBackgroundImage: Boolean(formState.dedicationPage.backgroundImage.file),
+      removeBackgroundImage: Boolean(formState.dedicationPage.backgroundImage.remove) && !formState.dedicationPage.backgroundImage.file,
+      hasNewKidImage: Boolean(formState.dedicationPage.kidImage.file),
+      removeKidImage: Boolean(formState.dedicationPage.kidImage.remove) && !formState.dedicationPage.kidImage.file,
+    };
+    formData.append('dedicationPage', JSON.stringify(dedicationPageData));
+
+    if (formState.dedicationPage.backgroundImage.file) {
+      formData.append('dedicationPageBackgroundImage', formState.dedicationPage.backgroundImage.file);
+    }
+    if (formState.dedicationPage.kidImage.file) {
+      formData.append('dedicationPageKidImage', formState.dedicationPage.kidImage.file);
     }
 
     setIsSaving(true);
@@ -1135,9 +1340,10 @@ const handleRemovePageImage = (index) => {
 
               <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
-                  <TabsList className="grid w-full grid-cols-2">
+                  <TabsList className="grid w-full grid-cols-3">
                     <TabsTrigger value="story-pages">Story Pages</TabsTrigger>
                     <TabsTrigger value="cover-page">Cover Page</TabsTrigger>
+                    <TabsTrigger value="dedication-page">Dedication Page</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="story-pages" className="space-y-4">
@@ -1542,6 +1748,112 @@ const handleRemovePageImage = (index) => {
                       </div>
                     </div>
                   </TabsContent>
+
+                  <TabsContent value="dedication-page" className="space-y-4">
+                    <div className="space-y-4 rounded-xl border border-border/60 bg-card p-6">
+                      <div className="space-y-3">
+                        <h3 className="font-semibold text-foreground">Background Image (5375 x 2975 px)</h3>
+                        <p className="text-xs text-muted-foreground">Upload the background image for the dedication page</p>
+                        <Input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleDedicationImageChange('backgroundImage', e)}
+                        />
+                        {formState.dedicationPage.backgroundImage.preview && (
+                          <div className="relative">
+                            <img
+                              src={formState.dedicationPage.backgroundImage.preview}
+                              alt="Background preview"
+                              className="w-full rounded-lg"
+                            />
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              className="absolute top-2 right-2"
+                              onClick={() => handleRemoveDedicationImage('backgroundImage')}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <h3 className="font-semibold text-foreground">Kid Image</h3>
+                        <p className="text-xs text-muted-foreground">Upload a photo of the kid for AI-enhanced left side</p>
+                        <Input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleDedicationImageChange('kidImage', e)}
+                        />
+                        {formState.dedicationPage.kidImage.preview && (
+                          <div className="relative">
+                            <img
+                              src={formState.dedicationPage.kidImage.preview}
+                              alt="Kid preview"
+                              className="w-full rounded-lg"
+                            />
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              className="absolute top-2 right-2"
+                              onClick={() => handleRemoveDedicationImage('kidImage')}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <h3 className="font-semibold text-foreground">Right Side Content</h3>
+                        <div className="space-y-2">
+                          <Label htmlFor="dedicationTitle">Title (Name)</Label>
+                          <Input
+                            id="dedicationTitle"
+                            placeholder="Enter name or title"
+                            value={formState.dedicationPage.title}
+                            onChange={(e) => handleDedicationFieldChange('title', e.target.value)}
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Main title displayed on the right. Use {'{name}'} for dynamic name insertion.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="dedicationSecondTitle">Second Title</Label>
+                          <Input
+                            id="dedicationSecondTitle"
+                            placeholder="Enter second title"
+                            value={formState.dedicationPage.secondTitle}
+                            onChange={(e) => handleDedicationFieldChange('secondTitle', e.target.value)}
+                          />
+                          <p className="text-xs text-foreground/50">
+                            Secondary title displayed below the main title.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Generate Preview Button */}
+                      <Button
+                        type="button"
+                        onClick={handleGenerateDedicationPreview}
+                        disabled={isGeneratingDedicationPreview}
+                        className="w-full"
+                      >
+                        {isGeneratingDedicationPreview ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Generating Preview...
+                          </>
+                        ) : (
+                          'Generate Preview'
+                        )}
+                      </Button>
+                    </div>
+                  </TabsContent>
                 </Tabs>
               </div>
 
@@ -1568,6 +1880,36 @@ const handleRemovePageImage = (index) => {
                         openImageViewer(
                           { url: coverPreview },
                           'Cover page preview'
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Dedication Preview Section */}
+              {activeTab === 'dedication-page' && dedicationPreview && (
+                <div className="space-y-3 rounded-xl border border-border/60 bg-muted p-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-base">Dedication Preview</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDedicationPreview(null)}
+                    >
+                      Close Preview
+                    </Button>
+                  </div>
+                  <div className="relative overflow-hidden rounded-lg border border-border/60 bg-card">
+                    <img
+                      src={dedicationPreview}
+                      alt="Dedication page preview"
+                      className="w-full object-contain"
+                      onClick={() =>
+                        openImageViewer(
+                          { url: dedicationPreview },
+                          'Dedication page preview'
                         )
                       }
                     />
