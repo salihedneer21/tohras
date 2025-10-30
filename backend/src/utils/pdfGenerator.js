@@ -547,8 +547,10 @@ const createBlurredBackground = async (
     const centerY = safeHeight / 2;
     const radiusX = safeWidth / 2.2 * 1.12;
     const radiusY = safeHeight / 2 * 1.12;
-    const featherSize = Math.max(20, Math.min(safeWidth, safeHeight) * 0.12);
-    const maxRadius = Math.min(radiusX, radiusY);
+
+    // Match frontend radial gradient: solid from 0% to 82%, fade from 82% to 100%
+    const solidThreshold = 0.82; // Start fading at 82% of radius
+    const fadeRegion = 1.0 - solidThreshold; // Fade from 82% to 100% (18% region)
 
     for (let py = 0; py < safeHeight; py += 1) {
       for (let px = 0; px < safeWidth; px += 1) {
@@ -558,11 +560,14 @@ const createBlurredBackground = async (
 
         let alpha = 1;
         if (distance > 1) {
+          // Outside ellipse - fully transparent
           alpha = 0;
-        } else if (distance > 1 - featherSize / maxRadius) {
-          const featherDistance = (1 - distance) / (featherSize / maxRadius);
-          alpha = Math.max(0, Math.pow(featherDistance, 1.5));
+        } else if (distance > solidThreshold) {
+          // Fade region (82% to 100%)
+          const fadeProgress = (1 - distance) / fadeRegion;
+          alpha = Math.max(0, Math.min(1, fadeProgress));
         }
+        // else: inside solid region (0% to 82%) - alpha stays 1
 
         const idx = (py * safeWidth + px) * 4 + 3;
         pixels[idx] = Math.min(255, pixels[idx] * alpha);
@@ -584,48 +589,11 @@ const createBlurredBackground = async (
 const wrapText = (text, maxWidth, fontSize) => {
   if (!text) return [];
 
-  // First split by newlines to preserve original line breaks
-  const inputLines = text.split(/\r?\n/);
-  const lines = [];
-  const avgCharWidth = fontSize * 0.45;
-  const maxCharsPerLine = Math.max(1, Math.floor(maxWidth / Math.max(avgCharWidth, 1)));
-
-  // Process each input line separately
-  inputLines.forEach((inputLine) => {
-    const trimmedLine = inputLine.trim();
-    if (!trimmedLine) {
-      // Preserve empty lines
-      lines.push('');
-      return;
-    }
-
-    // Wrap this line if it's too long
-    const words = trimmedLine.split(/\s+/);
-    let currentLine = '';
-
-    words.forEach((word) => {
-      const tentative = currentLine ? `${currentLine} ${word}` : word;
-      const estimatedWidth = tentative.length * avgCharWidth;
-
-      if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
-        currentLine = tentative;
-      } else {
-        if (currentLine) {
-          lines.push(currentLine);
-        }
-        if (word.length * avgCharWidth > maxWidth) {
-          lines.push(word);
-          currentLine = '';
-        } else {
-          currentLine = word;
-        }
-      }
-    });
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-  });
+  // Split by newlines to preserve admin's exact line breaks
+  // No auto-wrapping - respect only the line breaks provided by admin
+  // This matches the frontend wrapTextToLines function exactly
+  // Note: maxWidth and fontSize are kept for API compatibility but not used
+  const lines = text.split(/\r?\n/).map(line => line.trim());
 
   return lines;
 };
@@ -1133,7 +1101,7 @@ async function generateStorybookPdf({ title, pages }) {
           bgY,
           bgWidth,
           bgHeight,
-          7
+          15
         );
       }
 
