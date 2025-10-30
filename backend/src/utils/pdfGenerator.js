@@ -22,6 +22,7 @@ const TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const TEXT_MARGIN = 40;
 const FONT_SIZE = 16;
 const LINE_HEIGHT = FONT_SIZE * 1.4;
+const TEXT_BASELINE_OFFSET = 18;
 const TEXT_BG_LEFT_PADDING = 90;
 const TEXT_BG_RIGHT_PADDING = 60;
 const TEXT_BG_VERTICAL_PADDING = 40;
@@ -69,30 +70,45 @@ const fetchBufferFromUrl = async (url) => {
   const isS3Private =
     normalizedUrl.includes('amazonaws.com') && !normalizedUrl.includes('replicate.delivery');
 
-  const response = await fetch(normalizedUrl, {
-    timeout: 30000,
-    agent: normalizedUrl.startsWith('https') ? HTTP_AGENT : undefined,
-    headers: isS3Private
-      ? { 'User-Agent': 'aws-sdk-nodejs/3.x' }
-      : {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36',
-        },
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch asset: ${response.status} ${response.statusText}`);
+  try {
+    const response = await fetch(normalizedUrl, {
+      timeout: 30000,
+      agent: normalizedUrl.startsWith('https') ? HTTP_AGENT : undefined,
+      headers: isS3Private
+        ? { 'User-Agent': 'aws-sdk-nodejs/3.x' }
+        : {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36',
+          },
+    });
+    if (!response.ok) {
+      console.warn(`[fetchBufferFromUrl] Failed to fetch ${normalizedUrl}: ${response.status} ${response.statusText}`);
+      return null;
+    }
+    const buffer = await response.buffer();
+    console.log('[fetchBufferFromUrl] fetched', normalizedUrl, 'size', buffer.length);
+    return buffer;
+  } catch (error) {
+    console.warn(`[fetchBufferFromUrl] Error fetching ${normalizedUrl}:`, error.message);
+    return null;
   }
-  const buffer = await response.buffer();
-  console.log('[fetchBufferFromUrl] fetched', normalizedUrl, 'size', buffer.length);
-  return buffer;
 };
 
 const getImageBuffer = async (source) => {
   if (!source) return null;
   if (source.buffer) return source.buffer;
   if (source.key) {
-    const buffer = await downloadFromS3(source.key);
-    if (buffer) return buffer;
+    try {
+      const buffer = await downloadFromS3(source.key);
+      if (buffer) return buffer;
+    } catch (error) {
+      if (error.Code === 'NoSuchKey' || error.name === 'NoSuchKey') {
+        console.warn('[pdf] S3 file not found, trying alternate sources. Key:', source.key);
+        // Fall through to try other sources
+      } else {
+        console.warn('[pdf] Error downloading from S3:', error.message);
+      }
+    }
   }
   if (source.downloadUrl && typeof source.downloadUrl === 'string') {
     return fetchBufferFromUrl(source.downloadUrl);
@@ -527,10 +543,10 @@ const createBlurredBackground = async (
     const maskData = maskedCtx.getImageData(0, 0, safeWidth, safeHeight);
     const pixels = maskData.data;
 
-    const centerX = safeWidth / 2;
+    const centerX = safeWidth / 2 - 20;
     const centerY = safeHeight / 2;
-    const radiusX = safeWidth / 2.2;
-    const radiusY = safeHeight / 2;
+    const radiusX = safeWidth / 2.2 * 1.12;
+    const radiusY = safeHeight / 2 * 1.12;
     const featherSize = Math.max(20, Math.min(safeWidth, safeHeight) * 0.12);
     const maxRadius = Math.min(radiusX, radiusY);
 
@@ -568,34 +584,48 @@ const createBlurredBackground = async (
 const wrapText = (text, maxWidth, fontSize) => {
   if (!text) return [];
 
-  const words = text.split(/\s+/);
+  // First split by newlines to preserve original line breaks
+  const inputLines = text.split(/\r?\n/);
   const lines = [];
-  let currentLine = '';
   const avgCharWidth = fontSize * 0.45;
   const maxCharsPerLine = Math.max(1, Math.floor(maxWidth / Math.max(avgCharWidth, 1)));
 
-  words.forEach((word) => {
-    const tentative = currentLine ? `${currentLine} ${word}` : word;
-    const estimatedWidth = tentative.length * avgCharWidth;
+  // Process each input line separately
+  inputLines.forEach((inputLine) => {
+    const trimmedLine = inputLine.trim();
+    if (!trimmedLine) {
+      // Preserve empty lines
+      lines.push('');
+      return;
+    }
 
-    if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
-      currentLine = tentative;
-    } else {
-      if (currentLine) {
-        lines.push(currentLine);
-      }
-      if (word.length * avgCharWidth > maxWidth) {
-        lines.push(word);
-        currentLine = '';
+    // Wrap this line if it's too long
+    const words = trimmedLine.split(/\s+/);
+    let currentLine = '';
+
+    words.forEach((word) => {
+      const tentative = currentLine ? `${currentLine} ${word}` : word;
+      const estimatedWidth = tentative.length * avgCharWidth;
+
+      if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
+        currentLine = tentative;
       } else {
-        currentLine = word;
+        if (currentLine) {
+          lines.push(currentLine);
+        }
+        if (word.length * avgCharWidth > maxWidth) {
+          lines.push(word);
+          currentLine = '';
+        } else {
+          currentLine = word;
+        }
       }
+    });
+
+    if (currentLine) {
+      lines.push(currentLine);
     }
   });
-
-  if (currentLine) {
-    lines.push(currentLine);
-  }
 
   return lines;
 };
@@ -839,15 +869,6 @@ async function generateStorybookPdf({ title, pages }) {
         }
       }
 
-      page.drawRectangle({
-        x: halfWidth,
-        y: 0,
-        width: halfWidth,
-        height: PAGE_HEIGHT,
-        color: rgb(1, 1, 1),
-        opacity: 0.85,
-      });
-
       const resolvedTitle = replaceChildPlaceholders(dedication.title, childName);
       const resolvedSecondTitle = replaceChildPlaceholders(dedication.secondTitle, childName);
       const centerX = halfWidth + halfWidth / 2;
@@ -904,6 +925,7 @@ async function generateStorybookPdf({ title, pages }) {
     }
 
     const backgroundBuffer = await getImageBuffer(pageData.background);
+    let hasBackground = false;
     if (backgroundBuffer) {
       console.log(
         `[pdf] background buffer length for page ${index + 1}:`,
@@ -917,8 +939,12 @@ async function generateStorybookPdf({ title, pages }) {
           width: PAGE_WIDTH,
           height: PAGE_HEIGHT,
         });
+        hasBackground = true;
       }
-    } else {
+    }
+
+    if (!hasBackground) {
+      console.warn(`[pdf] No background available for page ${index + 1}, using white background`);
       page.drawRectangle({
         x: 0,
         y: 0,
@@ -960,41 +986,43 @@ async function generateStorybookPdf({ title, pages }) {
       }
 
       if (!characterBuffer || !characterBuffer.length) {
-        throw new Error(
-          `Failed to obtain character image buffer for page ${index + 1}`
+        console.warn(
+          `[pdf] Failed to obtain character image buffer for page ${index + 1}, skipping character`
         );
-      }
-
-      const characterImage = await embedImage(pdfDoc, characterBuffer);
-      console.log(
-        '[pdf] embedded character image',
-        characterImage ? { width: characterImage.width, height: characterImage.height } : null
-      );
-
-      if (!characterImage) {
-        throw new Error(`Failed to embed character image for page ${index + 1}`);
-      }
-
-      const aspectRatio = characterImage.width / characterImage.height;
-      const maxCharWidth = PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO;
-      const maxCharHeight = PAGE_HEIGHT * CHARACTER_MAX_HEIGHT_RATIO;
-
-      if (aspectRatio > maxCharWidth / maxCharHeight) {
-        charWidth = maxCharWidth;
-        charHeight = charWidth / aspectRatio;
+        // Continue without character instead of throwing
       } else {
-        charHeight = maxCharHeight;
-        charWidth = charHeight * aspectRatio;
+
+        const characterImage = await embedImage(pdfDoc, characterBuffer);
+        console.log(
+          '[pdf] embedded character image',
+          characterImage ? { width: characterImage.width, height: characterImage.height } : null
+        );
+
+        if (!characterImage) {
+          console.warn(`[pdf] Failed to embed character image for page ${index + 1}, skipping character`);
+        } else {
+          const aspectRatio = characterImage.width / characterImage.height;
+          const maxCharWidth = PAGE_WIDTH * CHARACTER_MAX_WIDTH_RATIO;
+          const maxCharHeight = PAGE_HEIGHT * CHARACTER_MAX_HEIGHT_RATIO;
+
+          if (aspectRatio > maxCharWidth / maxCharHeight) {
+            charWidth = maxCharWidth;
+            charHeight = charWidth / aspectRatio;
+          } else {
+            charHeight = maxCharHeight;
+            charWidth = charHeight * aspectRatio;
+          }
+
+          charX = isCharacterOnRight ? PAGE_WIDTH - charWidth : 0;
+
+          page.drawImage(characterImage, {
+            x: charX,
+            y: charY,
+            width: charWidth,
+            height: charHeight,
+          });
+        }
       }
-
-      charX = isCharacterOnRight ? PAGE_WIDTH - charWidth : 0;
-
-      page.drawImage(characterImage, {
-        x: charX,
-        y: charY,
-        width: charWidth,
-        height: charHeight,
-      });
     }
 
     const hebrewQuote = (pageData.hebrewQuote || pageData.quote || '').trim();
@@ -1105,7 +1133,7 @@ async function generateStorybookPdf({ title, pages }) {
           bgY,
           bgWidth,
           bgHeight,
-          15
+          7
         );
       }
 
@@ -1129,7 +1157,7 @@ async function generateStorybookPdf({ title, pages }) {
       }
 
       textLines.forEach((line, lineIndex) => {
-        const y = textY - lineIndex * LINE_HEIGHT - 18;
+        const y = textY - lineIndex * LINE_HEIGHT - TEXT_BASELINE_OFFSET;
         page.drawText(line, {
           x: textX,
           y,

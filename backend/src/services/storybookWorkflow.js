@@ -60,17 +60,41 @@ const slugify = (value) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
-const replaceReaderPlaceholders = (value, readerName) => {
+const getGenderPronouns = (gender) => {
+  if (!gender) return { subject: '', possessive: '', object: '' };
+  const lowerGender = gender.toLowerCase();
+  if (lowerGender === 'male') {
+    return { subject: 'He', possessive: 'His', object: 'Him' };
+  }
+  if (lowerGender === 'female') {
+    return { subject: 'She', possessive: 'Hers', object: 'Her' };
+  }
+  return { subject: 'They', possessive: 'Their', object: 'Them' };
+};
+
+const replaceReaderPlaceholders = (value, readerName, readerGender) => {
   if (!value || typeof value !== 'string') return value || '';
-  if (!readerName) return value;
-  const upperName = readerName.toUpperCase();
-  return value.replace(/\{name\}/gi, (matched) => {
-    const inner = matched.slice(1, -1);
-    if (inner === inner.toUpperCase()) {
-      return upperName;
-    }
-    return readerName;
-  });
+  let result = value;
+
+  if (readerName) {
+    const upperName = readerName.toUpperCase();
+    result = result.replace(/\{name\}/gi, (matched) => {
+      const inner = matched.slice(1, -1);
+      if (inner === inner.toUpperCase()) {
+        return upperName;
+      }
+      return readerName;
+    });
+  }
+
+  if (readerGender) {
+    const pronouns = getGenderPronouns(readerGender);
+    result = result.replace(/\{gender\}/gi, pronouns.subject);
+    result = result.replace(/\{genderpos\}/gi, pronouns.possessive);
+    result = result.replace(/\{genderper\}/gi, pronouns.object);
+  }
+
+  return result;
 };
 
 const createEvent = (type, message, metadata = null) => ({
@@ -415,9 +439,20 @@ const copyAssetToBookCharacterSlot = async ({ book, page, asset }) => {
     asset.originalName || `character-${page.order}.png`
   );
 
-  const originalBuffer = await downloadFromS3(asset.key);
+  let originalBuffer;
+  try {
+    originalBuffer = await downloadFromS3(asset.key);
+  } catch (error) {
+    if (error.Code === 'NoSuchKey' || error.name === 'NoSuchKey') {
+      console.warn(`[copyAssetToBookCharacterSlot] S3 file not found for page ${page.order}, key: ${asset.key}. Skipping this page.`);
+      return null;
+    }
+    throw error;
+  }
+
   if (!originalBuffer || !originalBuffer.length) {
-    throw new Error(`Failed to download asset buffer for page ${page.order}`);
+    console.warn(`[copyAssetToBookCharacterSlot] Empty buffer for page ${page.order}. Skipping this page.`);
+    return null;
   }
 
   // Step 1: Upload original buffer to the book's character slot
@@ -660,7 +695,7 @@ const buildDedicationPageContent = ({ book, readerName, storyPages = [], jobPage
   };
 };
 
-const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
+const preparePageStoryContent = ({ bookPage, jobPage, readerName, readerGender }) => {
   const pageType = bookPage.pageType === 'cover' ? 'cover' : 'story';
   let cover = null;
 
@@ -668,7 +703,14 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
     if (!input || typeof input !== 'string') return input || '';
     if (!readerName) return input;
     const replacement = uppercaseName ? (readerName || '').toUpperCase() : readerName;
-    return input.replace(/\{name\}/gi, replacement);
+    let result = input.replace(/\{name\}/gi, replacement);
+    if (readerGender) {
+      const pronouns = getGenderPronouns(readerGender);
+      result = result.replace(/\{gender\}/gi, pronouns.subject);
+      result = result.replace(/\{genderpos\}/gi, pronouns.possessive);
+      result = result.replace(/\{genderper\}/gi, pronouns.object);
+    }
+    return result;
   };
 
   let resolvedText = bookPage.text || '';
@@ -696,7 +738,7 @@ const preparePageStoryContent = ({ bookPage, jobPage, readerName }) => {
 
     resolvedText = body;
   } else {
-    resolvedText = replaceReaderPlaceholders(resolvedText, readerName);
+    resolvedText = replaceReaderPlaceholders(resolvedText, readerName, readerGender);
   }
 
   return {
@@ -914,9 +956,43 @@ const deriveWinnerAsset = (generation) => {
   };
 };
 
-const processJobPage = async ({ job, page, book, training, readerName }) => {
+const processJobPage = async ({ job, page, book, training, readerName, readerGender }) => {
   const pageFilter = resolveArrayFilterForPage(page);
-  const generationPrompt = replaceReaderPlaceholders(page.prompt || page.text || '', readerName);
+  const rawPrompt = page.prompt || page.text || '';
+
+  // If page has no prompt/text, check if it has a background image
+  if (!rawPrompt || !rawPrompt.trim()) {
+    if (!page.backgroundImage) {
+      throw new Error(`Page ${page.order} has no prompt, text, or background image. Please add content to this page.`);
+    }
+    // Page only has background image, skip character generation
+    console.log(`[storybook] Page ${page.order} has no prompt/text, skipping character generation (background-only page)`);
+    await updateJobAndEmit({
+      jobId: job._id,
+      update: {
+        $set: {
+          'pages.$[page].status': 'completed',
+          'pages.$[page].startedAt': new Date(),
+          'pages.$[page].completedAt': new Date(),
+          'pages.$[page].progress': 100,
+        },
+        $push: {
+          'pages.$[page].events': createEvent(
+            'page-completed',
+            `Page ${page.order} completed (background-only, no character generation needed)`
+          ),
+        },
+      },
+      arrayFilters: [pageFilter],
+    });
+    return null;
+  }
+
+  const generationPrompt = replaceReaderPlaceholders(rawPrompt, readerName, readerGender);
+
+  if (!generationPrompt || !generationPrompt.trim()) {
+    throw new Error(`Page ${page.order} has an empty prompt after placeholder replacement. Raw prompt: "${rawPrompt}"`);
+  }
 
   await updateJobAndEmit({
     jobId: job._id,
@@ -1091,6 +1167,28 @@ const processJobPage = async ({ job, page, book, training, readerName }) => {
     asset: winner.asset,
   });
 
+  if (!bookCharacterAsset) {
+    console.warn(`[processJobPage] Skipping page ${page.order} - asset not available`);
+    await updateJobAndEmit({
+      jobId: job._id,
+      update: {
+        $set: {
+          'pages.$[page].status': 'skipped',
+          'pages.$[page].error': 'Asset file not found in S3',
+          'pages.$[page].completedAt': new Date(),
+        },
+        $push: {
+          'pages.$[page].events': createEvent(
+            'page-skipped',
+            'Page skipped due to missing S3 asset'
+          ),
+        },
+      },
+      arrayFilters: [pageFilter],
+    });
+    return;
+  }
+
   const sanitizedOriginalAsset = sanitizeAssetForSnapshot(winner.asset);
 
   await updateBookCharacterImage({
@@ -1148,8 +1246,9 @@ const processStorybookJob = async (jobId) => {
     throw new Error('Training must be successful with a model version');
   }
 
-  const reader = job.readerId ? await User.findById(job.readerId) : null;
+  const reader = job.readerId ? await User.findById(job.readerId).select('name gender') : null;
   const readerName = job.readerName || reader?.name || '';
+  const readerGender = reader?.gender || '';
 
   await updateJobAndEmit({
     jobId: job._id,
@@ -1178,6 +1277,7 @@ const processStorybookJob = async (jobId) => {
           book,
           training,
           readerName,
+          readerGender,
         });
       } catch (error) {
         errors.push({ page, error });
@@ -1234,12 +1334,26 @@ const processStorybookJob = async (jobId) => {
           (entry.pageId && entry.pageId.toString() === bookPage._id.toString()) ||
           entry.order === bookPage.order
       );
-      return preparePageStoryContent({
+      return {
         bookPage,
         jobPage: jobPage || {},
+        isSkipped: jobPage?.status === 'skipped',
+      };
+    })
+    .filter(({ isSkipped }) => {
+      if (isSkipped) {
+        console.log('[storybook] Skipping page in PDF assembly due to skipped status');
+      }
+      return !isSkipped;
+    })
+    .map(({ bookPage, jobPage }) =>
+      preparePageStoryContent({
+        bookPage,
+        jobPage,
         readerName,
-      });
-    });
+        readerGender,
+      })
+    );
 
   const frontMatterPages = [];
 
@@ -1268,6 +1382,11 @@ const processStorybookJob = async (jobId) => {
   }
 
   const pdfPages = [...frontMatterPages, ...storyPages];
+
+  if (pdfPages.length === 0) {
+    throw new Error('No valid pages to generate PDF - all pages were skipped or failed');
+  }
+
   const storybookImageUpdates = {};
   if (coverContent?.coverPage?.characterImage) {
     storybookImageUpdates['coverPage.characterImage'] = coverContent.coverPage.characterImage;
@@ -1373,11 +1492,25 @@ const formatBookPagesForJob = (book) => {
       order: page.order,
       prompt: page.characterPrompt || '',
       text: page.text || '',
+      backgroundImage: page.backgroundImage,
       pageType: page.pageType === 'cover' ? 'cover' : 'story',
       status: 'queued',
       progress: 0,
       events: [createEvent('page-queued', 'Page queued for generation')],
-    }));
+    }))
+    .filter((page) => {
+      const hasPrompt = Boolean(page.prompt && page.prompt.trim());
+      const hasText = Boolean(page.text && page.text.trim());
+      const hasBackgroundImage = Boolean(page.backgroundImage);
+      const isValid = hasPrompt || hasText || hasBackgroundImage;
+
+      if (!isValid) {
+        console.warn(`[storybook] Skipping page ${page.order} - no content. prompt: ${hasPrompt}, text: ${hasText}, backgroundImage: ${hasBackgroundImage}`);
+      } else {
+        console.log(`[storybook] Including page ${page.order} - prompt: ${hasPrompt}, text: ${hasText}, backgroundImage: ${hasBackgroundImage}`);
+      }
+      return isValid;
+    });
 
   return [...jobPages, ...storyPages];
 };
@@ -1416,6 +1549,11 @@ const startStorybookAutomation = async ({
   const resolvedReaderId = readerId || userId;
   const resolvedReaderName = readerName || user.name || '';
 
+  const jobPages = formatBookPagesForJob(book);
+  if (!jobPages || jobPages.length === 0) {
+    throw new Error('No valid pages to generate. All pages are missing content. Please add character prompts, page text, or background images to at least one page.');
+  }
+
   const job = await StorybookJob.create({
     bookId,
     trainingId,
@@ -1425,7 +1563,7 @@ const startStorybookAutomation = async ({
     title: title || `${book.name} Storybook`,
     status: 'queued',
     progress: 0,
-    pages: formatBookPagesForJob(book),
+    pages: jobPages,
     events: [createEvent('job-queued', 'Storybook automation queued')],
   });
 
@@ -1467,6 +1605,7 @@ const regenerateStorybookPage = async ({
   userId,
   readerId,
   readerName,
+  readerGender,
 }) => {
   if (!bookId) {
     throw new Error('Book ID is required for regeneration');
@@ -1542,10 +1681,14 @@ const regenerateStorybookPage = async ({
 
   const resolvedReaderId = readerId || null;
   let resolvedReaderName = readerName || '';
-  if (!resolvedReaderName && resolvedReaderId) {
-    const readerDoc = await User.findById(resolvedReaderId).select('name').lean();
-    if (readerDoc?.name) {
+  let resolvedReaderGender = readerGender || '';
+  if ((!resolvedReaderName || !resolvedReaderGender) && resolvedReaderId) {
+    const readerDoc = await User.findById(resolvedReaderId).select('name gender').lean();
+    if (readerDoc?.name && !resolvedReaderName) {
       resolvedReaderName = readerDoc.name;
+    }
+    if (readerDoc?.gender && !resolvedReaderGender) {
+      resolvedReaderGender = readerDoc.gender;
     }
   }
 
@@ -1578,7 +1721,7 @@ const regenerateStorybookPage = async ({
     throw new Error('Unable to determine a character prompt for this page');
   }
 
-  const generationPrompt = replaceReaderPlaceholders(rawPrompt, resolvedReaderName);
+  const generationPrompt = replaceReaderPlaceholders(rawPrompt, resolvedReaderName, resolvedReaderGender);
 
   const generationInput = {
     prompt: generationPrompt,
@@ -1687,6 +1830,10 @@ const regenerateStorybookPage = async ({
     page: pageContext,
     asset: winner.asset,
   });
+
+  if (!bookCharacterAsset) {
+    throw new Error(`Cannot regenerate page ${targetOrder} - generated asset file not found in S3 (key: ${winner.asset.key})`);
+  }
 
   const sanitizedOriginalAsset = sanitizeAssetForSnapshot(winner.asset);
   const candidateAssetsSnapshot = sanitizeAssetListForSnapshot(
@@ -1899,6 +2046,10 @@ const applyStorybookCandidateSelection = async ({
     },
     asset: candidateAsset,
   });
+
+  if (!appliedAsset) {
+    throw new Error(`Cannot apply candidate image - selected asset file not found in S3 (key: ${candidateAsset.key})`);
+  }
 
   const sanitizedCharacter = sanitizeAssetForSnapshot(appliedAsset);
   const sanitizedOriginal = sanitizeAssetForSnapshot(candidateAsset);

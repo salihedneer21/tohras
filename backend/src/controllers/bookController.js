@@ -47,19 +47,43 @@ const normalizeBoolean = (value) =>
 const normalizeString = (value) =>
   typeof value === 'string' ? value.trim() : '';
 
-const replaceReaderPlaceholders = (value, readerName) => {
+const getGenderPronouns = (gender) => {
+  if (!gender) return { subject: '', possessive: '', object: '' };
+  const lowerGender = gender.toLowerCase();
+  if (lowerGender === 'male') {
+    return { subject: 'He', possessive: 'His', object: 'Him' };
+  }
+  if (lowerGender === 'female') {
+    return { subject: 'She', possessive: 'Hers', object: 'Her' };
+  }
+  return { subject: 'They', possessive: 'Their', object: 'Them' };
+};
+
+const replaceReaderPlaceholders = (value, readerName, readerGender) => {
   if (!value || typeof value !== 'string') {
     return value || '';
   }
-  if (!readerName) return value;
-  const upperName = readerName.toUpperCase();
-  return value.replace(/\{name\}/gi, (matched) => {
-    const inner = matched.slice(1, -1);
-    if (inner === inner.toUpperCase()) {
-      return upperName;
-    }
-    return readerName;
-  });
+  let result = value;
+
+  if (readerName) {
+    const upperName = readerName.toUpperCase();
+    result = result.replace(/\{name\}/gi, (matched) => {
+      const inner = matched.slice(1, -1);
+      if (inner === inner.toUpperCase()) {
+        return upperName;
+      }
+      return readerName;
+    });
+  }
+
+  if (readerGender) {
+    const pronouns = getGenderPronouns(readerGender);
+    result = result.replace(/\{gender\}/gi, pronouns.subject);
+    result = result.replace(/\{genderpos\}/gi, pronouns.possessive);
+    result = result.replace(/\{genderper\}/gi, pronouns.object);
+  }
+
+  return result;
 };
 
 const clonePlainObject = (value) => {
@@ -1475,10 +1499,19 @@ exports.generateStorybook = async (req, res) => {
       });
     }
 
+    let readerGender = '';
     if (!readerName && readerId) {
-      const reader = await User.findById(readerId).select('name').lean();
+      const reader = await User.findById(readerId).select('name gender').lean();
       if (reader?.name) {
         readerName = normalizeString(reader.name);
+      }
+      if (reader?.gender) {
+        readerGender = normalizeString(reader.gender);
+      }
+    } else if (readerId) {
+      const reader = await User.findById(readerId).select('gender').lean();
+      if (reader?.gender) {
+        readerGender = normalizeString(reader.gender);
       }
     }
 
@@ -1552,9 +1585,9 @@ exports.generateStorybook = async (req, res) => {
         typeof inputPage.text === 'string' && inputPage.text.trim().length > 0
           ? inputPage.text
           : bookPage.text || '';
-      const pageText = replaceReaderPlaceholders(baseText, readerName);
+      const pageText = replaceReaderPlaceholders(baseText, readerName, readerGender);
       const baseQuote = inputPage.hebrewQuote || inputPage.quote || '';
-      const resolvedQuote = replaceReaderPlaceholders(baseQuote, readerName);
+      const resolvedQuote = replaceReaderPlaceholders(baseQuote, readerName, readerGender);
 
       const storyPage = {
         order,
@@ -1835,6 +1868,14 @@ exports.regenerateStorybookPage = async (req, res) => {
     const readerId = readerIdOverride || pdfAsset.readerId || userId;
     const readerName = readerNameOverride || pdfAsset.readerName || '';
 
+    let readerGender = '';
+    if (readerId) {
+      const reader = await User.findById(readerId).select('gender').lean();
+      if (reader?.gender) {
+        readerGender = reader.gender;
+      }
+    }
+
     const result = await regenerateStorybookPageService({
       bookId,
       assetId: pdfAsset._id ? pdfAsset._id.toString() : pdfAsset.key,
@@ -1843,6 +1884,7 @@ exports.regenerateStorybookPage = async (req, res) => {
       userId,
       readerId,
       readerName,
+      readerGender,
     });
 
     const hydratedPdfAssetPage = result.pdfAssetPage

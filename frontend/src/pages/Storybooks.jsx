@@ -17,9 +17,12 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  FileImage,
 } from 'lucide-react';
 import { bookAPI, trainingAPI, userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import {
   Card,
   CardContent,
@@ -147,12 +150,41 @@ const NAME_PLACEHOLDER_DETECTION = /\{name\}/i;
 const containsNamePlaceholder = (value) =>
   typeof value === 'string' ? NAME_PLACEHOLDER_DETECTION.test(value) : false;
 
+const getGenderPronouns = (gender) => {
+  if (!gender) return { subject: '', possessive: '', object: '' };
+  const lowerGender = gender.toLowerCase();
+  if (lowerGender === 'male') {
+    return { subject: 'He', possessive: 'His', object: 'Him' };
+  }
+  if (lowerGender === 'female') {
+    return { subject: 'She', possessive: 'Hers', object: 'Her' };
+  }
+  return { subject: 'They', possessive: 'Their', object: 'Them' };
+};
+
 const replaceNamePlaceholders = (value, replacement) => {
   if (!value || typeof value !== 'string') {
     return value || '';
   }
   if (!replacement) return value;
   return value.replace(/\{name\}/gi, replacement);
+};
+
+const replacePlaceholders = (value, readerName, readerGender) => {
+  if (!value || typeof value !== 'string') {
+    return value || '';
+  }
+  let result = value;
+  if (readerName) {
+    result = result.replace(/\{name\}/gi, readerName);
+  }
+  if (readerGender) {
+    const pronouns = getGenderPronouns(readerGender);
+    result = result.replace(/\{gender\}/gi, pronouns.subject);
+    result = result.replace(/\{genderpos\}/gi, pronouns.possessive);
+    result = result.replace(/\{genderper\}/gi, pronouns.object);
+  }
+  return result;
 };
 
 const resolveCoverText = ({ cover = {}, bodyFallback = '', readerName = '' }) => {
@@ -531,7 +563,7 @@ const renderCoverPreview = async (canvas, model, signal) => {
   const textGroups = coverLayoutText(ctx, segments, textX, textStartY, textMaxWidth);
   const beforeLayout = coverLayoutLines(textGroups.before, textX, textStartY);
 
-  const blurPaddingX = PDF_PAGE_WIDTH * 0.03;
+  const blurPaddingX = PDF_PAGE_WIDTH * 0.12;
   const qrSize = qrImage
     ? Math.min(PDF_PAGE_HEIGHT * 0.1, Math.max(PDF_PAGE_WIDTH * 0.06, 100))
     : 0;
@@ -551,7 +583,7 @@ const renderCoverPreview = async (canvas, model, signal) => {
       qrImage ? qrYPosition + qrSize : beforeLayout.bottom
     );
 
-    const internalPadding = 80;
+    const internalPadding = 120;
     const textContentTop = beforeLayout.top - 10;
     let textContentBottom = beforeLayout.bottom;
     if (afterLayout.lines.length) {
@@ -603,7 +635,7 @@ const renderCoverPreview = async (canvas, model, signal) => {
     blurCtx.putImageData(imageData, 0, 0);
 
     ctx.save();
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, 20);
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, 60);
     ctx.clip();
     ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
 
@@ -806,34 +838,10 @@ const HEBREW_WAVE_AMPLITUDE = 8;
 
 const wrapTextToLines = (text, maxWidth, fontSize) => {
   if (!text) return [];
-  const words = text.split(/\s+/);
-  const lines = [];
-  let currentLine = '';
-  const avgCharWidth = fontSize * 0.45;
-  const maxCharsPerLine = Math.max(1, Math.floor(maxWidth / Math.max(avgCharWidth, 1)));
 
-  words.forEach((word) => {
-    const tentative = currentLine ? `${currentLine} ${word}` : word;
-    const estimatedWidth = tentative.length * avgCharWidth;
-
-    if (estimatedWidth <= maxWidth && tentative.length <= maxCharsPerLine) {
-      currentLine = tentative;
-    } else {
-      if (currentLine) {
-        lines.push(currentLine);
-      }
-      if (word.length * avgCharWidth > maxWidth) {
-        lines.push(word);
-        currentLine = '';
-      } else {
-        currentLine = word;
-      }
-    }
-  });
-
-  if (currentLine) {
-    lines.push(currentLine);
-  }
+  // Split by newlines to preserve admin's exact line breaks
+  // No auto-wrapping - respect only the line breaks provided by admin
+  const lines = text.split(/\r?\n/).map(line => line.trim());
 
   return lines;
 };
@@ -872,6 +880,7 @@ const buildPagePreviewModel = ({
   assetIdentifier = 'storybook',
   assetUpdatedAt,
   readerName = '',
+  readerGender = '',
 }) => {
   if (!page) return null;
 
@@ -1015,7 +1024,8 @@ const buildPagePreviewModel = ({
     Math.max(PDF_PAGE_WIDTH * PDF_TEXT_BLOCK_WIDTH_RATIO, PDF_TEXT_BLOCK_WIDTH),
     PDF_PAGE_WIDTH - PDF_TEXT_MARGIN * 2
   );
-  const textLines = wrapTextToLines(page.text || '', textBlockWidth, PDF_FONT_SIZE);
+  const processedText = replacePlaceholders(page.text || '', readerName, readerGender);
+  const textLines = wrapTextToLines(processedText, textBlockWidth, PDF_FONT_SIZE);
   const textBaseline = PDF_PAGE_HEIGHT * 0.7;
   const textHeight = textLines.length * PDF_LINE_HEIGHT;
   const textX = isCharacterOnRight
@@ -1117,7 +1127,7 @@ const StorybookPageSvg = React.memo(
           {hasTextOverlay ? (
             <>
               <filter id={blurId} x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="15" edgeMode="duplicate" />
+                <feGaussianBlur stdDeviation="12" edgeMode="duplicate" />
               </filter>
               <radialGradient id={`${maskId}-gradient`} cx="0.5" cy="0.5" r="0.5">
                 <stop offset="0%" stopColor="white" stopOpacity="1" />
@@ -1126,10 +1136,10 @@ const StorybookPageSvg = React.memo(
               </radialGradient>
               <mask id={maskId}>
                 <ellipse
-                  cx={text.overlay.x + text.overlay.width / 2}
+                  cx={text.overlay.x + text.overlay.width / 2 - 20}
                   cy={text.overlay.y + text.overlay.height / 2}
-                  rx={text.overlay.width / 2.2}
-                  ry={text.overlay.height / 2}
+                  rx={text.overlay.width / 2.2 * 1.12}
+                  ry={text.overlay.height / 2 * 1.12}
                   fill={`url(#${maskId}-gradient)`}
                 />
               </mask>
@@ -1470,7 +1480,7 @@ const resolveAssetVariant = (asset) => {
 
 // Page Thumbnail Component - matches main preview exactly
 const PageThumbnail = React.memo(
-  ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier, readerName }) => {
+  ({ page, index, isActive, onClick, assetUpdatedAt, assetIdentifier, readerName, readerGender }) => {
     const previewModel = useMemo(
       () =>
         buildPagePreviewModel({
@@ -1479,8 +1489,9 @@ const PageThumbnail = React.memo(
           assetUpdatedAt,
           assetIdentifier: assetIdentifier || 'storybook',
           readerName,
+          readerGender,
         }),
-      [assetIdentifier, assetUpdatedAt, index, page, readerName]
+      [assetIdentifier, assetUpdatedAt, index, page, readerName, readerGender]
     );
 
     return (
@@ -1540,6 +1551,7 @@ function Storybooks() {
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [regeneratingOrder, setRegeneratingOrder] = useState(null);
   const [isRegeneratingPdf, setIsRegeneratingPdf] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [applyingCandidateKey, setApplyingCandidateKey] = useState('');
   const [confirmingAssetId, setConfirmingAssetId] = useState('');
   const preloadRefs = useRef([]);
@@ -2573,6 +2585,103 @@ function Storybooks() {
     }
   };
 
+  const handleDownloadPreviewAsPdf = async () => {
+    if (!activeAssetPages.length) {
+      toast.error('No pages to download');
+      return;
+    }
+
+    setIsDownloadingPdf(true);
+    const toastId = toast.loading('Generating PDF from preview...');
+
+    try {
+      // Create PDF document
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'pt',
+        format: [PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT],
+      });
+
+      const originalIndex = activePageIndex;
+
+      // Process each page by navigating and capturing
+      for (let i = 0; i < activeAssetPages.length; i++) {
+        toast.loading(`Processing page ${i + 1} of ${activeAssetPages.length}...`, { id: toastId });
+
+        // Navigate to the page
+        setActivePageIndex(i);
+
+        // Wait for React to render the page
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        try {
+          // Find the SVG element in the preview
+          const previewContainer = document.querySelector('.preview-container');
+          const svgElement = previewContainer?.querySelector('svg');
+
+          if (!svgElement) {
+            console.warn(`No SVG found for page ${i + 1}`);
+            continue;
+          }
+
+          // Get the SVG data
+          const svgData = new XMLSerializer().serializeToString(svgElement);
+          const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+          const svgUrl = URL.createObjectURL(svgBlob);
+
+          // Load SVG as image
+          const img = await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+            image.src = svgUrl;
+          });
+
+          // Create canvas and draw the image
+          const canvas = document.createElement('canvas');
+          canvas.width = PDF_PAGE_WIDTH;
+          canvas.height = PDF_PAGE_HEIGHT;
+          const ctx = canvas.getContext('2d');
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+          ctx.drawImage(img, 0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+
+          // Clean up
+          URL.revokeObjectURL(svgUrl);
+
+          // Add page to PDF
+          if (i > 0) {
+            pdf.addPage();
+          }
+
+          const imgData = canvas.toDataURL('image/jpeg', 0.95);
+          pdf.addImage(imgData, 'JPEG', 0, 0, PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+
+          console.log(`✓ Added page ${i + 1} to PDF`);
+
+        } catch (pageError) {
+          console.error(`Error processing page ${i + 1}:`, pageError);
+          toast.error(`Failed to process page ${i + 1}, skipping...`, { id: toastId });
+        }
+      }
+
+      // Restore original page
+      setActivePageIndex(originalIndex);
+
+      // Download the PDF
+      const filename = `${activeAsset?.title || 'storybook'}-preview.pdf`;
+      pdf.save(filename);
+
+      toast.success('PDF downloaded successfully!', { id: toastId });
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      toast.error(`Failed to generate PDF: ${error.message}`, { id: toastId });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   const handleApplyCandidate = async (order, candidateIndex) => {
     if (!activeAsset || !selectedBookId || order === undefined || order === null) return;
     const assetIdentifier = activeAsset._id || activeAsset.key;
@@ -2720,6 +2829,7 @@ function Storybooks() {
           assetIdentifier,
           assetUpdatedAt: activeAsset?.updatedAt,
           readerName: selectedReader?.name || '',
+          readerGender: selectedReader?.gender || '',
         })
       : null;
     const canNavigatePrev = hasPages && safeIndex > 0;
@@ -2829,6 +2939,28 @@ function Storybooks() {
                   )}
                 </Button>
               ) : null}
+              {hasPages ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 hidden md:flex"
+                  onClick={handleDownloadPreviewAsPdf}
+                  disabled={isDownloadingPdf}
+                >
+                  {isDownloadingPdf ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span className="hidden lg:inline">Downloading…</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileImage className="h-4 w-4" />
+                      <span className="hidden lg:inline">Download as PDF</span>
+                    </>
+                  )}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
@@ -2859,6 +2991,7 @@ function Storybooks() {
                         assetUpdatedAt={activeAsset.updatedAt}
                         assetIdentifier={assetIdentifier}
                         readerName={selectedReader?.name || ''}
+                        readerGender={selectedReader?.gender || ''}
                       />
                     ))}
                   </div>
@@ -3582,10 +3715,10 @@ function Storybooks() {
                           rows={6}
                           className="resize-none"
                         />
-                        {selectedReader?.name && containsNamePlaceholder(page.text) ? (
+                        {selectedReader?.name && (containsNamePlaceholder(page.text) || (page.text && page.text.includes('{gender}'))) ? (
                           <p className="text-xs text-foreground/50">
                             Preview with {selectedReader.name}:{' '}
-                            {replaceNamePlaceholders(page.text, selectedReader.name)}
+                            {replacePlaceholders(page.text, selectedReader.name, selectedReader.gender)}
                           </p>
                         ) : null}
                       </div>

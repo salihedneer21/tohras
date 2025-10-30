@@ -48,34 +48,32 @@ function SearchableSelect({
   }, []);
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange} modal={true}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <button
+        <Button
           ref={triggerRef}
           type="button"
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
+          variant="outline"
           className={cn(
-            'flex h-11 w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal text-foreground transition-colors hover:bg-muted hover:border-muted-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation',
+            'w-full justify-between',
             !value && 'text-muted-foreground',
             className
           )}
-          style={{
-            WebkitTapHighlightColor: 'transparent',
-            minHeight: '44px'
-          }}
         >
           <span className="truncate">{displayValue}</span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         className="p-0"
         align="start"
-        style={{ width: width ? `${width}px` : 'auto' }}
+        style={{ width: width ? `${width}px` : 'auto', pointerEvents: 'auto' }}
+        onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <Command>
+        <Command shouldFilter={true}>
           <div className="flex items-center border-b border-border px-3">
             <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
             <CommandInput
@@ -95,13 +93,12 @@ function SearchableSelect({
                     onValueChange(option.value === value ? '' : option.value);
                     setOpen(false);
                   }}
-                  onClick={(e) => {
+                  onPointerDown={(e) => {
                     e.preventDefault();
-                    e.stopPropagation();
                     onValueChange(option.value === value ? '' : option.value);
                     setOpen(false);
                   }}
-                  className="cursor-pointer"
+                  className="cursor-pointer hover:bg-accent"
                 >
                   <Check
                     className={cn(
