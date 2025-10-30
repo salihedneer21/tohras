@@ -432,6 +432,15 @@ async function generateCoverPage(options) {
     ctx.clip();
     ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
 
+    // Add subtle dark overlay for better text readability on bright backgrounds
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.fillRect(blurX, blurY, blurWidth, blurHeight);
+
+    // TEMPORARY: Add thick red border for testing
+    ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(blurX, blurY, blurWidth, blurHeight);
+
     const edgeFade = 20;
     const fadeGradient = ctx.createLinearGradient(blurX, 0, blurX + edgeFade, 0);
     fadeGradient.addColorStop(0, "rgba(255, 255, 255, 0.05)");
