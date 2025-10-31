@@ -6,7 +6,6 @@ import {
   Loader2,
   Target,
   X,
-  CheckCircle2,
   ClipboardCopy,
   Check,
   Tag,
@@ -44,13 +43,6 @@ const VERDICT_FILTER_OPTIONS = [
   { value: 'reject', label: 'Rejected' },
 ];
 
-const DECISION_FILTER_OPTIONS = [
-  { value: 'all', label: 'All decisions' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Dismissed' },
-];
-
 const SORT_OPTIONS = [
   { value: 'createdAt:desc', label: 'Newest first' },
   { value: 'createdAt:asc', label: 'Oldest first' },
@@ -59,12 +51,6 @@ const SORT_OPTIONS = [
   { value: 'score:desc', label: 'Highest score' },
   { value: 'score:asc', label: 'Lowest score' },
 ];
-
-const DECISION_BADGES = {
-  pending: { label: 'Pending', variant: 'secondary' },
-  approved: { label: 'Approved', variant: 'success' },
-  rejected: { label: 'Dismissed', variant: 'destructive' },
-};
 
 const DEFAULT_VERDICT = { label: 'Unknown', variant: 'secondary' };
 
@@ -75,14 +61,21 @@ const formatTimestamp = (value) => {
   return date.toLocaleString();
 };
 
-const mapToEvaluationCard = (record) => ({
-  verdict: record.verdict,
-  acceptable: record.acceptable,
-  overallScorePercent: record.score,
-  confidencePercent: record.confidence,
-  criteria: record.criteria || {},
-  recommendations: record.recommendations || [],
-});
+const mapToEvaluationCard = (record) => {
+  if (record?.evaluation?.images && record.evaluation.images.length > 0) {
+    const [first] = record.evaluation.images;
+    return first;
+  }
+
+  return {
+    verdict: record.verdict,
+    acceptable: record.acceptable,
+    overallScorePercent: record.score,
+    confidencePercent: record.confidence,
+    criteria: record.criteria || {},
+    recommendations: record.recommendations || [],
+  };
+};
 
 function Evaluate() {
   const [image, setImage] = useState(null);
@@ -106,25 +99,20 @@ function Evaluate() {
   });
   const [historyStats, setHistoryStats] = useState({
     total: 0,
-    totalApproved: 0,
-    totalPending: 0,
-    totalRejectedDecision: 0,
-    totalVerdictAccept: 0,
-    totalVerdictNeedsMore: 0,
-    totalVerdictReject: 0,
+    accept: 0,
+    needsMore: 0,
+    reject: 0,
   });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [verdictFilter, setVerdictFilter] = useState('all');
-  const [decisionFilter, setDecisionFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState([]);
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState('desc');
 
   const [tagEditor, setTagEditor] = useState({ id: null, value: '', saving: false });
   const [isDeletingId, setIsDeletingId] = useState(null);
-  const [decisionUpdatingId, setDecisionUpdatingId] = useState(null);
   const [copiedSummaryId, setCopiedSummaryId] = useState(null);
   const historyCopyTimerRef = useRef(null);
   const [viewerImage, setViewerImage] = useState(null);
@@ -152,7 +140,7 @@ function Evaluate() {
 
   useEffect(() => {
     setHistoryPage(1);
-  }, [debouncedSearch, verdictFilter, decisionFilter, tagFilterKey, historyLimit, sortBy, sortOrder]);
+  }, [debouncedSearch, verdictFilter, tagFilterKey, historyLimit, sortBy, sortOrder]);
 
   const fetchEvaluationHistory = useCallback(
     async ({ withSpinner = true, page: pageOverride, limit: limitOverride } = {}) => {
@@ -174,9 +162,6 @@ function Evaluate() {
         }
         if (verdictFilter !== 'all') {
           params.verdict = verdictFilter;
-        }
-        if (decisionFilter !== 'all') {
-          params.decision = decisionFilter;
         }
         if (tagFilter.length > 0) {
           params.tags = tagFilter.join(',');
@@ -217,12 +202,9 @@ function Evaluate() {
         const stats = response?.stats || {};
         setHistoryStats({
           total: stats.total || 0,
-          totalApproved: stats.totalApproved || 0,
-          totalPending: stats.totalPending || 0,
-          totalRejectedDecision: stats.totalRejectedDecision || 0,
-          totalVerdictAccept: stats.totalVerdictAccept || 0,
-          totalVerdictNeedsMore: stats.totalVerdictNeedsMore || 0,
-          totalVerdictReject: stats.totalVerdictReject || 0,
+          accept: stats.totalVerdictAccept || 0,
+          needsMore: stats.totalVerdictNeedsMore || 0,
+          reject: stats.totalVerdictReject || 0,
         });
 
         if (initialHistoryLoad) {
@@ -239,7 +221,6 @@ function Evaluate() {
       historyLimit,
       debouncedSearch,
       verdictFilter,
-      decisionFilter,
       tagFilter,
       sortBy,
       sortOrder,
@@ -266,13 +247,6 @@ function Evaluate() {
       img.onload = () => {
         const width = img.width;
         const height = img.height;
-
-        if (width < 1024 || height < 1024) {
-          toast.error(`Image too small for preprocessing. Minimum size: 1024x1024. Current: ${width}x${height}`, {
-            duration: 5000,
-          });
-          return;
-        }
 
         setImage({
           name: file.name,
@@ -387,11 +361,11 @@ function Evaluate() {
     : Math.min(historyPagination.page * historyPagination.limit, historyPagination.total);
 
   const totalEvaluations = historyStats.total || 0;
-  const totalApproved = historyStats.totalApproved || 0;
-  const totalPending = historyStats.totalPending || 0;
+  const totalAccepted = historyStats.accept || 0;
+  const totalNeedsMore = historyStats.needsMore || 0;
+  const totalRejected = historyStats.reject || 0;
 
   const verdictMeta = (verdict) => VERDICT_BADGES[verdict] || DEFAULT_VERDICT;
-  const decisionMeta = (decision) => DECISION_BADGES[decision] || DECISION_BADGES.pending;
 
   const handleHistoryPageSizeChange = (value) => {
     const numericValue = Number.parseInt(value, 10);
@@ -466,23 +440,6 @@ function Evaluate() {
     }
   };
 
-  const handleDecisionChange = async (item, decision) => {
-    if (!item?.id || item.decision === decision) return;
-    setDecisionUpdatingId(item.id);
-    try {
-      await evalAPI.updateDecision(item.id, decision);
-      setHistoryItems((prev) =>
-        prev.map((entry) => (entry.id === item.id ? { ...entry, decision } : entry))
-      );
-      await fetchEvaluationHistory({ withSpinner: false });
-      toast.success('Decision updated');
-    } catch (error) {
-      toast.error(error.message || 'Unable to update decision');
-    } finally {
-      setDecisionUpdatingId(null);
-    }
-  };
-
   const handleDeleteEvaluation = async (item) => {
     if (!item?.id) return;
     const confirmed = window.confirm('Delete this evaluation record? This action cannot be undone.');
@@ -503,11 +460,11 @@ function Evaluate() {
     }
   };
 
-  const handleCopySummary = async (item) => {
-    const text = item.summary || 'No summary available.';
+  const handleCopySummary = async (summary, id) => {
+    const text = summary || 'No summary available.';
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedSummaryId(item.id);
+      setCopiedSummaryId(id);
       if (historyCopyTimerRef.current) {
         clearTimeout(historyCopyTimerRef.current);
       }
@@ -540,7 +497,7 @@ function Evaluate() {
               Audit and curate training candidates with confidence
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-              Run every upload through the evaluator, flag issues instantly, and maintain a reviewable history with tags, decisions, and filters.
+              Run every upload through the evaluator, flag issues instantly, and maintain a reviewable history with verdicts, tags, and smart filters.
             </p>
           </div>
         </div>
@@ -551,14 +508,14 @@ function Evaluate() {
             <p className="text-xs text-muted-foreground">Recorded in the library</p>
           </div>
           <div className="rounded-lg border border-border/70 bg-background p-4 shadow-sm">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Approved</p>
-            <p className="mt-2 text-2xl font-semibold text-foreground">{totalApproved}</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Accepted verdict</p>
+            <p className="mt-2 text-2xl font-semibold text-foreground">{totalAccepted}</p>
             <p className="text-xs text-muted-foreground">Ready for training sets</p>
           </div>
           <div className="rounded-lg border border-border/70 bg-background p-4 shadow-sm">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Needs attention</p>
-            <p className="mt-2 text-2xl font-semibold text-foreground">{totalPending}</p>
-            <p className="text-xs text-muted-foreground">Awaiting curator decision</p>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Needs review</p>
+            <p className="mt-2 text-2xl font-semibold text-foreground">{totalNeedsMore}</p>
+            <p className="text-xs text-muted-foreground">Flagged for follow-up ({totalRejected} rejected)</p>
           </div>
         </div>
       </section>
@@ -603,7 +560,7 @@ function Evaluate() {
                     {isDragging ? 'Drop image here' : 'Upload training image'}
                   </h3>
                   <p className="text-sm text-muted-foreground">
-                    Drag & drop or click to browse. Minimum size 1024×1024 PNG/JPG/WebP.
+                    Drag & drop or click to browse. High-resolution PNG/JPG/WebP recommended.
                   </p>
                 </div>
                 <input
@@ -615,9 +572,13 @@ function Evaluate() {
                 />
               </div>
             ) : (
-              <div className="grid gap-4 rounded-xl border border-border/70 bg-muted/20 p-4 sm:grid-cols-[220px_1fr]">
-                <div className="relative aspect-square overflow-hidden rounded-lg border border-border">
-                  <img src={image.preview} alt={image.name} className="h-full w-full object-cover" />
+              <div className="grid gap-4 rounded-xl border border-border/70 bg-muted/20 p-4 sm:grid-cols-[260px_1fr]">
+                <div className="relative flex h-full min-h-[260px] w-full items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
+                  <img
+                    src={image.preview}
+                    alt={image.name}
+                    className="max-h-full max-w-full object-contain"
+                  />
                   <button
                     type="button"
                     className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-background/90 text-muted-foreground shadow hover:text-destructive"
@@ -707,7 +668,7 @@ function Evaluate() {
             <div className="space-y-1">
               <CardTitle className="text-lg font-semibold">Evaluation history</CardTitle>
               <CardDescription>
-                Filter by verdict, apply curator decisions, and keep a tagged backlog of every reviewed image.
+                Filter by verdict, organise with tags, and keep a searchable backlog of every reviewed image.
               </CardDescription>
             </div>
             <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
@@ -778,30 +739,11 @@ function Evaluate() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-              <Tag className="h-3.5 w-3.5" />
-              Decisions
-            </span>
-            {DECISION_FILTER_OPTIONS.map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                variant="outline"
-                className={cn(
-                  'h-8 rounded-full border border-border/60 px-3 text-xs font-medium transition-colors',
-                  decisionFilter === option.value
-                    ? 'bg-foreground text-background hover:bg-foreground/90'
-                    : 'bg-background text-muted-foreground hover:text-foreground'
-                )}
-                onClick={() => setDecisionFilter(option.value)}
-              >
-                {option.label}
-              </Button>
-            ))}
             {availableTags.length > 0 ? (
               <>
-                <span className="mx-1 inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  Tags:
+                <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  <Tag className="h-3.5 w-3.5" />
+                  Tags
                 </span>
                 {availableTags.map((tag) => {
                   const active = tagFilter.includes(tag);
@@ -833,7 +775,11 @@ function Evaluate() {
                   </Button>
                 ) : null}
               </>
-            ) : null}
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Add tags to evaluations to create quick filters.
+              </span>
+            )}
           </div>
         </CardHeader>
 
@@ -884,8 +830,9 @@ function Evaluate() {
 
                 {historyItems.map((item) => {
                   const verdictBadge = verdictMeta(item.verdict);
-                  const decisionBadge = decisionMeta(item.decision);
                   const evaluationCardData = mapToEvaluationCard(item);
+                  const summaryText =
+                    item.evaluation?.overallAcceptance?.summary || item.summary || '';
                   const isExpanded = expandedId === item.id;
 
                   return (
@@ -900,6 +847,10 @@ function Evaluate() {
                               title: item.fileName,
                               downloadUrl: item.s3Url,
                               sizeLabel: formatFileSize(item.size),
+                              dimensions:
+                                item.width && item.height
+                                  ? { width: item.width, height: item.height }
+                                  : undefined,
                             })
                           }
                           disabled={!item.s3Url}
@@ -928,10 +879,7 @@ function Evaluate() {
                                 <span>•</span>
                                 <span>{formatTimestamp(item.createdAt)}</span>
                               </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant={verdictBadge.variant}>{verdictBadge.label}</Badge>
-                                <Badge variant={decisionBadge.variant}>{decisionBadge.label}</Badge>
-                              </div>
+                              <Badge variant={verdictBadge.variant}>{verdictBadge.label}</Badge>
                             </div>
                             <div className="flex items-center gap-2">
                               <Button
@@ -939,7 +887,7 @@ function Evaluate() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                                onClick={() => handleCopySummary(item)}
+                                onClick={() => handleCopySummary(summaryText, item.id)}
                               >
                                 {copiedSummaryId === item.id ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
                                 Copy summary
@@ -956,56 +904,9 @@ function Evaluate() {
                             </div>
                           </div>
 
-                          {item.summary ? (
-                            <p className="text-sm text-muted-foreground">{item.summary}</p>
+                          {summaryText ? (
+                            <p className="text-sm text-muted-foreground">{summaryText}</p>
                           ) : null}
-
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground/70">
-                              Decision
-                            </span>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className={cn(
-                                'h-7 gap-1.5 text-xs',
-                                item.decision === 'approved' ? 'border-foreground text-foreground' : 'text-muted-foreground hover:text-foreground'
-                              )}
-                              disabled={decisionUpdatingId === item.id}
-                              onClick={() => handleDecisionChange(item, 'approved')}
-                            >
-                              {decisionUpdatingId === item.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-                              Approve
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className={cn(
-                                'h-7 gap-1.5 text-xs',
-                                item.decision === 'pending' ? 'border-foreground text-foreground' : 'text-muted-foreground hover:text-foreground'
-                              )}
-                              disabled={decisionUpdatingId === item.id}
-                              onClick={() => handleDecisionChange(item, 'pending')}
-                            >
-                              Reset
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className={cn(
-                                'h-7 gap-1.5 text-xs',
-                                item.decision === 'rejected' ? 'border-destructive text-destructive' : 'text-muted-foreground hover:text-destructive'
-                              )}
-                              disabled={decisionUpdatingId === item.id}
-                              onClick={() => handleDecisionChange(item, 'rejected')}
-                            >
-                              <X className="h-3 w-3" />
-                              Dismiss
-                            </Button>
-                          </div>
 
                           <div className="flex flex-wrap gap-1.5">
                             {Array.isArray(item.tags) && item.tags.length > 0 ? (
@@ -1079,7 +980,7 @@ function Evaluate() {
                           {isExpanded ? (
                             <EvaluationImageCard
                               evaluation={evaluationCardData}
-                              summary={item.summary}
+                              summary={summaryText}
                             />
                           ) : null}
                         </div>

@@ -33,26 +33,29 @@ const toPositiveInteger = (value, fallback) => {
 
 const serializeEvaluation = (doc) => {
   if (!doc) return null;
+  const source = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+  const id = source.id || (source._id ? source._id.toString() : null);
   return {
-    id: doc.id,
-    fileName: doc.fileName,
-    mimeType: doc.mimeType,
-    size: doc.size,
-    width: doc.width,
-    height: doc.height,
-    verdict: doc.verdict,
-    acceptable: doc.acceptable,
-    score: doc.score,
-    confidence: doc.confidence,
-    summary: doc.summary,
-    recommendations: doc.recommendations,
-    criteria: doc.criteria,
-    tags: Array.isArray(doc.tags) ? doc.tags : [],
-    decision: doc.decision,
-    s3Key: doc.s3Key,
-    s3Url: doc.s3Url,
-    createdAt: doc.createdAt,
-    updatedAt: doc.updatedAt,
+    id,
+    fileName: source.fileName,
+    mimeType: source.mimeType,
+    size: source.size,
+    width: source.width,
+    height: source.height,
+    verdict: source.verdict,
+    acceptable: source.acceptable,
+    score: source.score,
+    confidence: source.confidence,
+    summary: source.summary,
+    recommendations: source.recommendations,
+    criteria: source.criteria,
+    tags: Array.isArray(source.tags) ? source.tags : [],
+    decision: source.decision,
+    s3Key: source.s3Key,
+    s3Url: source.s3Url,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+    evaluation: source.evaluation || null,
   };
 };
 
@@ -160,9 +163,13 @@ exports.evaluateImages = async (req, res) => {
   } catch (error) {
     const statusCode = error.statusCode || error.status || 500;
     console.error('❌ Error evaluating images:', error);
+    const friendlyMessage =
+      statusCode === 502
+        ? 'The evaluator was not able to process the image. Please try again in a moment or use a different photo.'
+        : error.message || 'Failed to evaluate images';
     return res.status(statusCode).json({
       success: false,
-      message: error.message || 'Failed to evaluate images',
+      message: friendlyMessage,
       error: error.details || undefined,
     });
   }
@@ -245,11 +252,12 @@ exports.listEvaluations = async (req, res) => {
     }
 
     const items = await query.lean();
+    const data = items.map((item) => serializeEvaluation(item));
 
     res.status(200).json({
       success: true,
-      count: items.length,
-      data: items.map((item) => serializeEvaluation(item)),
+      count: data.length,
+      data,
       pagination: {
         page: totalPages === 0 ? 1 : effectivePage,
         limit,
