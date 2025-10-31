@@ -6,21 +6,121 @@ const { evaluateSingleImage } = require('../services/evaluator');
 const parseBoolean = (value) =>
   typeof value === 'string' ? value === 'true' || value === '1' : Boolean(value);
 
+const escapeRegex = (value) =>
+  typeof value === 'string' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value;
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'name', 'age', 'email']);
+
 /**
  * Get all users
  * @route GET /api/users
  */
 exports.getAllUsers = async (req, res) => {
   try {
-    const { status } = req.query;
-    const filter = status ? { status } : {};
+    const {
+      page = 1,
+      limit = 10,
+      search = '',
+      status,
+      gender,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
 
-    const users = await User.find(filter).sort({ createdAt: -1 });
+    const numericLimit = toPositiveInteger(limit, 10);
+    const rawPage = toPositiveInteger(page, 1) || 1;
+
+    const filter = {};
+
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+
+    if (gender && gender !== 'all') {
+      filter.gender = gender;
+    }
+
+    if (search && typeof search === 'string') {
+      const expression = new RegExp(escapeRegex(search.trim()), 'i');
+      filter.$or = [
+        { name: expression },
+        { email: expression },
+        { phoneNumber: expression },
+        { countryCode: expression },
+      ];
+    }
+
+    const resolvedSortField = VALID_SORT_FIELDS.has(sortBy) ? sortBy : 'createdAt';
+    const resolvedSortOrder = sortOrder === 'asc' ? 1 : -1;
+    const sort = { [resolvedSortField]: resolvedSortOrder, _id: resolvedSortOrder };
+
+    const countPromise = User.countDocuments(filter);
+    const imageStatsPromise = User.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalImages: {
+            $sum: {
+              $size: {
+                $ifNull: ['$imageAssets', []],
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    const [totalUsers, imageStats] = await Promise.all([countPromise, imageStatsPromise]);
+
+    const totalImages = Array.isArray(imageStats) && imageStats.length > 0 ? imageStats[0].totalImages : 0;
+
+    const totalPages =
+      numericLimit > 0 && totalUsers > 0 ? Math.ceil(totalUsers / numericLimit) : totalUsers > 0 ? 1 : 0;
+    const effectivePage =
+      numericLimit > 0
+        ? Math.min(Math.max(rawPage, 1), Math.max(totalPages, 1))
+        : 1;
+    const skip = numericLimit > 0 ? (effectivePage - 1) * numericLimit : 0;
+
+    const query = User.find(filter).sort(sort);
+    if (numericLimit > 0) {
+      query.skip(skip).limit(numericLimit);
+    }
+
+    const users = await query.exec();
 
     res.status(200).json({
       success: true,
       count: users.length,
       data: users,
+      pagination: {
+        page: totalPages === 0 ? 1 : effectivePage,
+        limit: numericLimit,
+        total: totalUsers,
+        totalPages,
+        hasNextPage: numericLimit > 0 && effectivePage < totalPages,
+        hasPrevPage: numericLimit > 0 && effectivePage > 1,
+      },
+      filters: {
+        search: typeof search === 'string' ? search : '',
+        status: status || 'all',
+        gender: gender || 'all',
+        sortBy: resolvedSortField,
+        sortOrder: resolvedSortOrder === 1 ? 'asc' : 'desc',
+      },
+      stats: {
+        totalUsers,
+        totalImages,
+      },
     });
   } catch (error) {
     console.error('Error fetching users:', error);

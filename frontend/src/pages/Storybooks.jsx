@@ -1566,8 +1566,8 @@ function Storybooks() {
       try {
         setLoading(true);
         const [booksResponse, usersResponse] = await Promise.all([
-          bookAPI.getAll(),
-          userAPI.getAll(),
+          bookAPI.getAll({ limit: 0 }),
+          userAPI.getAll({ limit: 0 }),
         ]);
         if (booksResponse?.success === false) {
           throw new Error(booksResponse?.message || 'Failed to load books');
@@ -1802,6 +1802,7 @@ function Storybooks() {
         const response = await trainingAPI.getAll({
           userId: selectedUserId,
           status: 'succeeded',
+          limit: 0,
         });
         if (cancelled) return;
         if (response?.success === false) {

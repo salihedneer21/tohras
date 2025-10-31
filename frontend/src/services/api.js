@@ -79,7 +79,7 @@ export const bookAPI = {
 
 // User API
 export const userAPI = {
-  getAll: () => api.get('/users'),
+  getAll: (params = {}) => api.get('/users', { params }),
   getById: (id) => api.get(`/users/${id}`),
   create: (data) => api.post('/users', data),
   update: (id, data) => api.put(`/users/${id}`, data),
@@ -131,11 +131,22 @@ export const generationAPI = {
 
 // Evaluation API
 export const evalAPI = {
+  list: (params = {}) => api.get('/evals', { params }),
   evaluate: (data) => api.post('/evals', data),
+  updateTags: (id, tags) => api.patch(`/evals/${id}/tags`, { tags }),
+  updateDecision: (id, decision) => api.patch(`/evals/${id}/decision`, { decision }),
+  delete: (id) => api.delete(`/evals/${id}`),
 };
 
 // Prompt API
 export const promptAPI = {
+  list: (params = {}) => api.get('/prompts', { params }),
+  getById: (id) => api.get(`/prompts/${id}`),
+  updateQuality: (id, quality) =>
+    api.patch(`/prompts/${id}/quality`, { quality }),
+  updateTags: (id, tags) =>
+    api.patch(`/prompts/${id}/tags`, { tags }),
+  delete: (id) => api.delete(`/prompts/${id}`),
   generate: (formData) =>
     api.post('/prompts/generate', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },

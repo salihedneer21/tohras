@@ -643,18 +643,173 @@ const ensureBackgroundRemovedCharacter = async ({
 /**
  * @route GET /api/books
  */
+const escapeRegex = (value) =>
+  typeof value === 'string' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value;
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const VALID_BOOK_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'name', 'status']);
+
 exports.getAllBooks = async (req, res) => {
   try {
-    const { status } = req.query;
-    const filter = {};
-    if (status) filter.status = status;
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      gender,
+      search = '',
+      from,
+      to,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
 
-    const books = await Book.find(filter).sort({ createdAt: -1 });
+    const filter = {};
+
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+
+    if (gender && gender !== 'all') {
+      filter.gender = gender;
+    }
+
+    if (search && typeof search === 'string') {
+      const expression = new RegExp(escapeRegex(search.trim()), 'i');
+      filter.$or = [{ name: expression }, { description: expression }, { slug: expression }];
+    }
+
+    if (from || to) {
+      const dateFilter = {};
+      if (from) {
+        const fromDate = new Date(from);
+        if (!Number.isNaN(fromDate.getTime())) {
+          dateFilter.$gte = fromDate;
+        }
+      }
+      if (to) {
+        const toDate = new Date(to);
+        if (!Number.isNaN(toDate.getTime())) {
+          dateFilter.$lte = toDate;
+        }
+      }
+      if (Object.keys(dateFilter).length > 0) {
+        filter.createdAt = dateFilter;
+      }
+    }
+
+    const numericLimit = toPositiveInteger(limit, 10);
+    const rawPage = toPositiveInteger(page, 1) || 1;
+
+    const sortField = VALID_BOOK_SORT_FIELDS.has(sortBy) ? sortBy : 'createdAt';
+    const sortDirection = sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortField]: sortDirection, _id: sortDirection };
+
+    const totalBooks = await Book.countDocuments(filter);
+    const totalPages =
+      numericLimit > 0 && totalBooks > 0
+        ? Math.ceil(totalBooks / numericLimit)
+        : totalBooks > 0
+        ? 1
+        : 0;
+    const effectivePage =
+      numericLimit > 0
+        ? Math.min(Math.max(rawPage, 1), Math.max(totalPages, 1))
+        : 1;
+    const skip = numericLimit > 0 ? (effectivePage - 1) * numericLimit : 0;
+
+    const query = Book.find(filter).sort(sort);
+    if (numericLimit > 0) {
+      query.skip(skip).limit(numericLimit);
+    }
+
+    const books = await query.exec();
+
+    const aggregation = await Book.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalBooks: { $sum: 1 },
+          totalPages: { $sum: { $size: { $ifNull: ['$pages', []] } } },
+          active: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'active'] }, 1, 0],
+            },
+          },
+          inactive: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'inactive'] }, 1, 0],
+            },
+          },
+          male: {
+            $sum: {
+              $cond: [{ $eq: ['$gender', 'male'] }, 1, 0],
+            },
+          },
+          female: {
+            $sum: {
+              $cond: [{ $eq: ['$gender', 'female'] }, 1, 0],
+            },
+          },
+          both: {
+            $sum: {
+              $cond: [{ $eq: ['$gender', 'both'] }, 1, 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    const statsSummary = aggregation.length
+      ? {
+          totalBooks: aggregation[0].totalBooks || 0,
+          totalPages: aggregation[0].totalPages || 0,
+          byStatus: {
+            active: aggregation[0].active || 0,
+            inactive: aggregation[0].inactive || 0,
+          },
+          byGender: {
+            male: aggregation[0].male || 0,
+            female: aggregation[0].female || 0,
+            both: aggregation[0].both || 0,
+          },
+        }
+      : {
+          totalBooks: 0,
+          totalPages: 0,
+          byStatus: { active: 0, inactive: 0 },
+          byGender: { male: 0, female: 0, both: 0 },
+        };
 
     res.status(200).json({
       success: true,
       count: books.length,
       data: books,
+      pagination: {
+        page: totalPages === 0 ? 1 : effectivePage,
+        limit: numericLimit,
+        total: totalBooks,
+        totalPages,
+        hasNextPage: numericLimit > 0 && effectivePage < totalPages,
+        hasPrevPage: numericLimit > 0 && effectivePage > 1,
+      },
+      filters: {
+        search: typeof search === 'string' ? search : '',
+        status: status || 'all',
+        gender: gender || 'all',
+        from: from || '',
+        to: to || '',
+        sortBy: sortField,
+        sortOrder: sortDirection === 1 ? 'asc' : 'desc',
+      },
+      stats: statsSummary,
     });
   } catch (error) {
     console.error('Error fetching books:', error);
