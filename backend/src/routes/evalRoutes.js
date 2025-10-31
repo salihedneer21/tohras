@@ -1,12 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const { evaluateImages } = require('../controllers/evalController');
+const {
+  evaluateImages,
+  listEvaluations,
+  updateEvaluationTags,
+  updateEvaluationDecision,
+  deleteEvaluation,
+} = require('../controllers/evalController');
 
-/**
- * @route   POST /api/evals
- * @desc    Evaluate uploaded images for fine-tuning suitability
- * @access  Public
- */
+router.get('/', listEvaluations);
 router.post('/', evaluateImages);
+router.patch('/:id/tags', updateEvaluationTags);
+router.patch('/:id/decision', updateEvaluationDecision);
+router.delete('/:id', deleteEvaluation);
 
 module.exports = router;

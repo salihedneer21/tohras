@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Generation = require('../models/Generation');
 const Training = require('../models/Training');
 const User = require('../models/User');
@@ -13,28 +14,162 @@ const {
   broadcastGeneration,
 } = require('../services/generationWorkflow');
 
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const escapeRegex = (value) =>
+  typeof value === 'string' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value;
+
+const VALID_GENERATION_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'status']);
+
 /**
  * Get all generations
  * @route GET /api/generations
  */
 exports.getAllGenerations = async (req, res) => {
   try {
-    const { userId, trainingId, status } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      userId,
+      trainingId,
+      status,
+      search = '',
+      from,
+      to,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
+
     const filter = {};
 
-    if (userId) filter.userId = userId;
-    if (trainingId) filter.trainingId = trainingId;
-    if (status) filter.status = status;
+    if (userId) {
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid userId provided',
+        });
+      }
+      filter.userId = new mongoose.Types.ObjectId(userId);
+    }
 
-    const generations = await Generation.find(filter)
-      .populate('userId', 'name email')
+    if (trainingId) {
+      if (!mongoose.Types.ObjectId.isValid(trainingId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid trainingId provided',
+        });
+      }
+      filter.trainingId = new mongoose.Types.ObjectId(trainingId);
+    }
+
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+
+    if (search && typeof search === 'string') {
+      const expression = new RegExp(escapeRegex(search.trim()), 'i');
+      filter.$or = [{ prompt: expression }];
+    }
+
+    if (from || to) {
+      const dateFilter = {};
+      if (from) {
+        const fromDate = new Date(from);
+        if (!Number.isNaN(fromDate.getTime())) {
+          dateFilter.$gte = fromDate;
+        }
+      }
+      if (to) {
+        const toDate = new Date(to);
+        if (!Number.isNaN(toDate.getTime())) {
+          dateFilter.$lte = toDate;
+        }
+      }
+      if (Object.keys(dateFilter).length > 0) {
+        filter.createdAt = dateFilter;
+      }
+    }
+
+    const numericLimit = toPositiveInteger(limit, 10);
+    const rawPage = toPositiveInteger(page, 1) || 1;
+
+    const sortField = VALID_GENERATION_SORT_FIELDS.has(sortBy) ? sortBy : 'createdAt';
+    const sortDirection = sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortField]: sortDirection, _id: sortDirection };
+
+    const totalGenerations = await Generation.countDocuments(filter);
+    const totalPages =
+      numericLimit > 0 && totalGenerations > 0
+        ? Math.ceil(totalGenerations / numericLimit)
+        : totalGenerations > 0
+        ? 1
+        : 0;
+    const effectivePage =
+      numericLimit > 0
+        ? Math.min(Math.max(rawPage, 1), Math.max(totalPages, 1))
+        : 1;
+    const skip = numericLimit > 0 ? (effectivePage - 1) * numericLimit : 0;
+
+    const query = Generation.find(filter)
+      .populate('userId', 'name email status')
       .populate('trainingId', 'modelName modelVersion')
-      .sort({ createdAt: -1 });
+      .sort(sort);
+
+    if (numericLimit > 0) {
+      query.skip(skip).limit(numericLimit);
+    }
+
+    const generations = await query.exec();
+
+    const statusAggregation = await Generation.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const statusBreakdown = statusAggregation.reduce((accumulator, item) => {
+      if (item?._id) {
+        accumulator[item._id] = item.count;
+      }
+      return accumulator;
+    }, {});
 
     res.status(200).json({
       success: true,
       count: generations.length,
       data: generations,
+      pagination: {
+        page: totalPages === 0 ? 1 : effectivePage,
+        limit: numericLimit,
+        total: totalGenerations,
+        totalPages,
+        hasNextPage: numericLimit > 0 && effectivePage < totalPages,
+        hasPrevPage: numericLimit > 0 && effectivePage > 1,
+      },
+      filters: {
+        search: typeof search === 'string' ? search : '',
+        status: status || 'all',
+        userId: userId || '',
+        trainingId: trainingId || '',
+        from: from || '',
+        to: to || '',
+        sortBy: sortField,
+        sortOrder: sortDirection === 1 ? 'asc' : 'desc',
+      },
+      stats: {
+        total: totalGenerations,
+        byStatus: statusBreakdown,
+      },
     });
   } catch (error) {
     console.error('Error fetching generations:', error);

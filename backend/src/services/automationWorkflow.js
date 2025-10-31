@@ -708,13 +708,232 @@ const createAutomationRun = async ({ bookId, userInput, files, overrides = [] })
   }
 };
 
-const listAutomationRuns = async ({ limit = 20 } = {}) => {
-  return AutomationRun.find({})
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .populate('userId', 'name email age gender')
-    .populate('bookId', 'name')
-    .lean();
+const escapeRegex = (value) =>
+  typeof value === 'string' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : value;
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const VALID_AUTOMATION_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'status', 'progress']);
+
+const listAutomationRuns = async (options = {}) => {
+  const {
+    page = 1,
+    limit = 10,
+    status,
+    bookId,
+    userId,
+    search = '',
+    from,
+    to,
+    sortBy = 'createdAt',
+    sortOrder = 'desc',
+  } = options;
+
+  const numericLimit = toPositiveInteger(limit, 10);
+  const rawPage = toPositiveInteger(page, 1) || 1;
+
+  const matchStage = {};
+
+  if (status && status !== 'all') {
+    matchStage.status = status;
+  }
+
+  if (bookId && mongoose.Types.ObjectId.isValid(bookId)) {
+    matchStage.bookId = new mongoose.Types.ObjectId(bookId);
+  }
+
+  if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    matchStage.userId = new mongoose.Types.ObjectId(userId);
+  }
+
+  if (from || to) {
+    const createdAtFilter = {};
+    if (from) {
+      const fromDate = new Date(from);
+      if (!Number.isNaN(fromDate.getTime())) {
+        createdAtFilter.$gte = fromDate;
+      }
+    }
+    if (to) {
+      const toDate = new Date(to);
+      if (!Number.isNaN(toDate.getTime())) {
+        createdAtFilter.$lte = toDate;
+      }
+    }
+    if (Object.keys(createdAtFilter).length > 0) {
+      matchStage.createdAt = createdAtFilter;
+    }
+  }
+
+  const sortField = VALID_AUTOMATION_SORT_FIELDS.has(sortBy) ? sortBy : 'createdAt';
+  const sortDirection = sortOrder === 'asc' ? 1 : -1;
+  const sortStage = { [sortField]: sortDirection, _id: sortDirection };
+
+  const pipeline = [{ $match: matchStage }];
+
+  pipeline.push(
+    {
+      $lookup: {
+        from: 'books',
+        localField: 'bookId',
+        foreignField: '_id',
+        as: 'book',
+      },
+    },
+    {
+      $unwind: {
+        path: '$book',
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'userId',
+        foreignField: '_id',
+        as: 'user',
+      },
+    },
+    {
+      $unwind: {
+        path: '$user',
+        preserveNullAndEmptyArrays: true,
+      },
+    }
+  );
+
+  if (search && typeof search === 'string') {
+    const regex = new RegExp(escapeRegex(search.trim()), 'i');
+    pipeline.push({
+      $match: {
+        $or: [
+          { 'book.name': regex },
+          { 'user.name': regex },
+          { 'user.email': regex },
+        ],
+      },
+    });
+  }
+
+  pipeline.push({
+    $project: {
+      _id: 1,
+      userId: {
+        _id: '$user._id',
+        name: '$user.name',
+        email: '$user.email',
+        age: '$user.age',
+        gender: '$user.gender',
+      },
+      user: {
+        _id: '$user._id',
+        name: '$user.name',
+        email: '$user.email',
+        age: '$user.age',
+        gender: '$user.gender',
+      },
+      bookId: {
+        _id: '$book._id',
+        name: '$book.name',
+      },
+      book: {
+        _id: '$book._id',
+        name: '$book.name',
+      },
+      trainingId: 1,
+      storybookJobId: 1,
+      status: 1,
+      progress: 1,
+      error: 1,
+      steps: 1,
+      trainingSnapshot: 1,
+      storybookSnapshot: 1,
+      events: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  });
+
+  pipeline.push({ $sort: sortStage });
+
+  const dataPipeline = [];
+  if (numericLimit > 0) {
+    const skip = (Math.max(rawPage, 1) - 1) * numericLimit;
+    if (skip > 0) {
+      dataPipeline.push({ $skip: skip });
+    }
+    dataPipeline.push({ $limit: numericLimit });
+  } else if (rawPage > 1) {
+    // No limit means return everything, ignore page.
+  }
+
+  const aggregatePipeline = [
+    ...pipeline,
+    {
+      $facet: {
+        data: dataPipeline,
+        totalCount: [{ $count: 'count' }],
+        statusCounts: [
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 },
+            },
+          },
+        ],
+      },
+    },
+  ];
+
+  const [result] = await AutomationRun.aggregate(aggregatePipeline);
+  const runs = Array.isArray(result?.data) ? result.data : [];
+  const total = Array.isArray(result?.totalCount) && result.totalCount.length > 0 ? result.totalCount[0].count : 0;
+
+  const statusBreakdown = {};
+  if (Array.isArray(result?.statusCounts)) {
+    result.statusCounts.forEach((item) => {
+      if (item?._id) {
+        statusBreakdown[item._id] = item.count;
+      }
+    });
+  }
+
+  const totalPages =
+    numericLimit > 0 && total > 0 ? Math.ceil(total / numericLimit) : total > 0 ? 1 : 0;
+  const effectivePage =
+    numericLimit > 0 ? Math.min(Math.max(rawPage, 1), Math.max(totalPages, 1)) : 1;
+
+  return {
+    data: runs,
+    pagination: {
+      page: totalPages === 0 ? 1 : effectivePage,
+      limit: numericLimit,
+      total,
+      totalPages,
+      hasNextPage: numericLimit > 0 && effectivePage < totalPages,
+      hasPrevPage: numericLimit > 0 && effectivePage > 1,
+    },
+    filters: {
+      search: typeof search === 'string' ? search : '',
+      status: status || 'all',
+      bookId: bookId || '',
+      userId: userId || '',
+      from: from || '',
+      to: to || '',
+      sortBy: sortField,
+      sortOrder: sortDirection === 1 ? 'asc' : 'desc',
+    },
+    stats: {
+      totalRuns: total,
+      byStatus: statusBreakdown,
+    },
+  };
 };
 
 const getAutomationRun = async (id) => {

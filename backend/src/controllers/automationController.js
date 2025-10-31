@@ -68,12 +68,39 @@ exports.startAutomation = async (req, res) => {
 
 exports.listRuns = async (req, res) => {
   try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
-    const runs = await listAutomationRuns({ limit });
+    const {
+      page,
+      limit,
+      status,
+      bookId,
+      userId,
+      search,
+      from,
+      to,
+      sortBy,
+      sortOrder,
+    } = req.query;
+
+    const result = await listAutomationRuns({
+      page,
+      limit,
+      status,
+      bookId,
+      userId,
+      search,
+      from,
+      to,
+      sortBy,
+      sortOrder,
+    });
+
     res.status(200).json({
       success: true,
-      count: runs.length,
-      data: runs,
+      count: Array.isArray(result.data) ? result.data.length : 0,
+      data: result.data,
+      pagination: result.pagination,
+      filters: result.filters,
+      stats: result.stats,
     });
   } catch (error) {
     console.error('Error listing automation runs:', error);

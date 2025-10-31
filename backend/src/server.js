@@ -61,7 +61,7 @@ app.get('/', (req, res) => {
     endpoints: {
       users: '/api/users',
       books: '/api/books',
-      prompts: '/api/prompts/generate',
+      prompts: '/api/prompts',
       trainings: '/api/trainings',
       generations: '/api/generations',
       evals: '/api/evals',

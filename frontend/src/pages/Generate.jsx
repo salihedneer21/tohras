@@ -9,6 +9,9 @@ import {
   Crown,
   Star,
   Loader2,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { userAPI, trainingAPI, generationAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -45,66 +48,10 @@ const DEFAULT_CONFIG = Object.freeze({
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 const MAX_GENERATION_ATTEMPTS = Number(import.meta.env.VITE_GENERATION_MAX_ATTEMPTS || 3);
+const GENERATION_PAGE_SIZES = [10, 20, 50];
 
 const sortByCreatedAtDesc = (a, b) =>
   new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
-
-const mergeGenerationPayload = (current = {}, incoming = {}) => {
-  const merged = {
-    ...current,
-    ...incoming,
-  };
-
-  if (incoming.userId || current.userId) {
-    merged.userId = incoming.userId || current.userId;
-  }
-
-  if (incoming.trainingId || current.trainingId) {
-    merged.trainingId = incoming.trainingId || current.trainingId;
-  }
-
-  merged.imageAssets = Array.isArray(incoming.imageAssets)
-    ? incoming.imageAssets
-    : Array.isArray(current.imageAssets)
-    ? current.imageAssets
-    : [];
-
-  merged.imageUrls = Array.isArray(incoming.imageUrls)
-    ? incoming.imageUrls
-    : Array.isArray(current.imageUrls)
-    ? current.imageUrls
-    : [];
-
-  merged.events = Array.isArray(incoming.events)
-    ? incoming.events
-    : Array.isArray(current.events)
-    ? current.events
-    : [];
-
-  merged.logs = Array.isArray(incoming.logs)
-    ? incoming.logs
-    : Array.isArray(current.logs)
-    ? current.logs
-    : [];
-
-  return merged;
-};
-
-const upsertGenerationList = (list, incoming) => {
-  if (!incoming?._id) {
-    return list;
-  }
-
-  const existingIndex = list.findIndex((item) => item._id === incoming._id);
-  if (existingIndex === -1) {
-    const next = [incoming, ...list];
-    return next.sort(sortByCreatedAtDesc);
-  }
-
-  const next = [...list];
-  next[existingIndex] = mergeGenerationPayload(list[existingIndex], incoming);
-  return next.sort(sortByCreatedAtDesc);
-};
 
 const formatTimestamp = (value) => {
   if (!value) return '';
@@ -128,6 +75,7 @@ function Generate() {
   const [trainings, setTrainings] = useState([]);
   const [generations, setGenerations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isFetchingGenerations, setIsFetchingGenerations] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [showRankForm, setShowRankForm] = useState(false);
   const [formData, setFormData] = useState(() => ({
@@ -143,14 +91,186 @@ function Generate() {
   }));
   const [rankTrainings, setRankTrainings] = useState([]);
   const [isRankGenerating, setIsRankGenerating] = useState(false);
+  const [generationPage, setGenerationPage] = useState(1);
+  const [generationLimit, setGenerationLimit] = useState(GENERATION_PAGE_SIZES[0]);
+  const [generationSearch, setGenerationSearch] = useState('');
+  const [debouncedGenerationSearch, setDebouncedGenerationSearch] = useState('');
+  const [generationStatus, setGenerationStatus] = useState('all');
+  const [generationUser, setGenerationUser] = useState('');
+  const [generationPagination, setGenerationPagination] = useState({
+    page: 1,
+    totalPages: 0,
+    total: 0,
+    limit: GENERATION_PAGE_SIZES[0],
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+  const [generationStatsMeta, setGenerationStatsMeta] = useState({
+    total: 0,
+    byStatus: {},
+  });
 
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const generationRefreshTimeoutRef = useRef(null);
+  const hasInitialisedRef = useRef(false);
   const [isStreamConnected, setIsStreamConnected] = useState(false);
 
-  const applyGenerationUpdate = useCallback((payload) => {
-    setGenerations((previous) => upsertGenerationList(previous, payload));
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedGenerationSearch(generationSearch.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [generationSearch]);
+
+  useEffect(() => {
+    setGenerationPage(1);
+  }, [debouncedGenerationSearch, generationStatus, generationUser, generationLimit]);
+
+  const fetchUsersList = useCallback(async () => {
+    try {
+      const response = await userAPI.getAll({ limit: 0 });
+      const resolvedUsers = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray(response)
+        ? response
+        : [];
+      setUsers(resolvedUsers);
+    } catch (error) {
+      setUsers([]);
+      throw error;
+    }
   }, []);
+
+  const fetchGenerations = useCallback(
+    async ({ silent = false } = {}) => {
+      try {
+        if (generationRefreshTimeoutRef.current) {
+          clearTimeout(generationRefreshTimeoutRef.current);
+          generationRefreshTimeoutRef.current = null;
+        }
+
+        if (!silent) {
+          setIsFetchingGenerations(true);
+        }
+
+        const params = {
+          page: generationPage,
+          limit: generationLimit,
+        };
+
+        if (debouncedGenerationSearch) {
+          params.search = debouncedGenerationSearch;
+        }
+        if (generationStatus !== 'all') {
+          params.status = generationStatus;
+        }
+        if (generationUser) {
+          params.userId = generationUser;
+        }
+
+        const response = await generationAPI.getAll(params);
+        const fetchedGenerations = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response)
+          ? response
+          : [];
+
+        const sortedGenerations = fetchedGenerations.slice().sort(sortByCreatedAtDesc);
+        setGenerations(sortedGenerations);
+
+        const responsePagination = response?.pagination || {};
+        const responseStats = response?.stats || {};
+
+        const nextPage = responsePagination.page ?? generationPage;
+        const nextTotalPages = responsePagination.totalPages ?? 0;
+        const nextTotal = responsePagination.total ?? sortedGenerations.length;
+        const nextLimit = responsePagination.limit ?? generationLimit;
+
+        const computedHasNext =
+          typeof responsePagination.hasNextPage === 'boolean'
+            ? responsePagination.hasNextPage
+            : nextTotalPages > 0 && nextPage < nextTotalPages;
+        const computedHasPrev =
+          typeof responsePagination.hasPrevPage === 'boolean'
+            ? responsePagination.hasPrevPage
+            : nextPage > 1;
+
+        setGenerationPagination({
+          page: nextPage,
+          totalPages: nextTotalPages,
+          total: nextTotal,
+          limit: nextLimit,
+          hasNextPage: computedHasNext,
+          hasPrevPage: computedHasPrev,
+        });
+
+        setGenerationStatsMeta({
+          total:
+            typeof responseStats.total === 'number'
+              ? responseStats.total
+              : nextTotal,
+          byStatus: responseStats.byStatus || {},
+        });
+
+        if (responsePagination.page && responsePagination.page !== generationPage) {
+          setGenerationPage(responsePagination.page);
+        }
+      } catch (error) {
+        if (!silent) {
+          toast.error(`Failed to fetch generations: ${error.message}`);
+        }
+        throw error;
+      } finally {
+        if (!silent) {
+          setIsFetchingGenerations(false);
+        }
+      }
+    },
+    [
+      generationPage,
+      generationLimit,
+      debouncedGenerationSearch,
+      generationStatus,
+      generationUser,
+    ]
+  );
+
+  const scheduleGenerationRefresh = useCallback(() => {
+    if (generationRefreshTimeoutRef.current) return;
+    generationRefreshTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetchGenerations({ silent: true });
+      } catch (error) {
+        console.warn('Failed to refresh generations feed', error);
+      } finally {
+        generationRefreshTimeoutRef.current = null;
+      }
+    }, 600);
+  }, [fetchGenerations]);
+
+  const applyGenerationUpdate = useCallback(() => {
+    scheduleGenerationRefresh();
+  }, [scheduleGenerationRefresh]);
+
+  const fetchData = useCallback(
+    async ({ withSpinner = true } = {}) => {
+      try {
+        if (withSpinner) {
+          setLoading(true);
+        }
+        await Promise.all([fetchUsersList(), fetchGenerations({ silent: true })]);
+        hasInitialisedRef.current = true;
+      } catch (error) {
+        toast.error(`Failed to fetch data: ${error.message}`);
+      } finally {
+        if (withSpinner) {
+          setLoading(false);
+        }
+      }
+    },
+    [fetchUsersList, fetchGenerations]
+  );
 
   const connectEventStream = useCallback(() => {
     if (eventSourceRef.current) {
@@ -173,11 +293,12 @@ function Generate() {
     source.onmessage = (event) => {
       if (!event?.data) return;
       try {
-        const payload = JSON.parse(event.data);
-        applyGenerationUpdate(payload);
+        JSON.parse(event.data);
       } catch (parseError) {
         console.error('Failed to parse generation stream payload', parseError);
+        return;
       }
+      applyGenerationUpdate();
     };
 
     source.onerror = (error) => {
@@ -195,8 +316,15 @@ function Generate() {
   }, [applyGenerationUpdate]);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData({ withSpinner: true });
+  }, [fetchData]);
+
+  useEffect(() => {
+    if (!hasInitialisedRef.current) {
+      return;
+    }
+    fetchGenerations();
+  }, [fetchGenerations]);
 
   useEffect(() => {
     connectEventStream();
@@ -209,34 +337,52 @@ function Generate() {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (generationRefreshTimeoutRef.current) {
+        clearTimeout(generationRefreshTimeoutRef.current);
+        generationRefreshTimeoutRef.current = null;
+      }
       setIsStreamConnected(false);
     };
   }, [connectEventStream]);
 
-  const totalGenerations = generations.length;
+  const totalGenerations =
+    typeof generationStatsMeta.total === 'number'
+      ? generationStatsMeta.total
+      : generationPagination.total || 0;
   const successfulGenerations = useMemo(
-    () => generations.filter((item) => item.status === 'succeeded').length,
-    [generations]
+    () =>
+      generationStatsMeta.byStatus && typeof generationStatsMeta.byStatus.succeeded === 'number'
+        ? generationStatsMeta.byStatus.succeeded
+        : generations.filter((item) => item.status === 'succeeded').length,
+    [generationStatsMeta, generations]
   );
-
-  const fetchData = async (withSpinner = true) => {
-    try {
-      if (withSpinner) setLoading(true);
-      const [usersResponse, generationsResponse] = await Promise.all([
-        userAPI.getAll(),
-        generationAPI.getAll(),
-      ]);
-      setUsers(usersResponse.data);
-      const initialGenerations = Array.isArray(generationsResponse.data)
-        ? generationsResponse.data.slice().sort(sortByCreatedAtDesc)
-        : [];
-      setGenerations(initialGenerations);
-    } catch (error) {
-      toast.error(`Failed to fetch data: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const totalGenerationPages =
+    generationPagination.totalPages && generationPagination.totalPages > 0
+      ? generationPagination.totalPages
+      : generationPagination.total > 0
+      ? 1
+      : 1;
+  const currentGenerationPage =
+    generationPagination.totalPages && generationPagination.totalPages > 0
+      ? generationPagination.page
+      : 1;
+  const generationPageSize =
+    generationPagination.limit && generationPagination.limit > 0
+      ? generationPagination.limit
+      : generationLimit;
+  const generationPageStart =
+    generationPagination.total === 0 ? 0 : (currentGenerationPage - 1) * generationPageSize + 1;
+  const generationPageEnd =
+    generationPagination.total === 0
+      ? 0
+      : Math.min(currentGenerationPage * generationPageSize, generationPagination.total);
+  const hasGenerationFilters =
+    Boolean(generationSearch) ||
+    generationStatus !== 'all' ||
+    Boolean(generationUser) ||
+    generationLimit !== GENERATION_PAGE_SIZES[0];
+  const canGoPrevGeneration = generationPagination.hasPrevPage && !isFetchingGenerations;
+  const canGoNextGeneration = generationPagination.hasNextPage && !isFetchingGenerations;
 
   const fetchTrainingsForUser = async (userId, setter) => {
     if (!userId) {
@@ -303,20 +449,12 @@ function Generate() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     try {
-      const response = await generationAPI.create(formData);
-      const newGeneration = response.data || response;
-      const selectedUser = users.find((user) => user._id === formData.userId);
-      const selectedTraining = trainings.find(
-        (training) => training._id === formData.trainingId
-      );
-
-      applyGenerationUpdate({
-        ...newGeneration,
-        userId: newGeneration.userId || selectedUser,
-        trainingId: newGeneration.trainingId || selectedTraining,
-      });
+      await generationAPI.create(formData);
       toast.success('Generation started! Check the feed below.');
       resetForm();
+      fetchGenerations({ silent: true }).catch((error) =>
+        console.warn('Failed to refresh generations after create', error)
+      );
     } catch (error) {
       toast.error(`Failed to generate image: ${error.message}`);
     }
@@ -338,20 +476,12 @@ function Generate() {
         prompt: rankForm.prompt.trim(),
       };
 
-      const response = await generationAPI.createRanked(payload);
-      const newGeneration = response.data || response;
-      const selectedUser = users.find((user) => user._id === rankForm.userId);
-      const selectedTraining = rankTrainings.find(
-        (training) => training._id === rankForm.trainingId
-      );
-
-      applyGenerationUpdate({
-        ...newGeneration,
-        userId: newGeneration.userId || selectedUser,
-        trainingId: newGeneration.trainingId || selectedTraining,
-      });
+      await generationAPI.createRanked(payload);
       toast.success('Generated and ranked images successfully');
       resetRankForm();
+      fetchGenerations({ silent: true }).catch((error) =>
+        console.warn('Failed to refresh generations after ranked create', error)
+      );
     } catch (error) {
       toast.error(`Failed to generate ranked images: ${error.message}`);
     } finally {
@@ -388,6 +518,24 @@ function Generate() {
     setRankTrainings([]);
     setShowRankForm(false);
   };
+
+  const handleGenerationResetFilters = useCallback(() => {
+    setGenerationSearch('');
+    setGenerationStatus('all');
+    setGenerationUser('');
+    setGenerationLimit(GENERATION_PAGE_SIZES[0]);
+    setGenerationPage(1);
+  }, []);
+
+  const handleGenerationPreviousPage = useCallback(() => {
+    if (!generationPagination.hasPrevPage) return;
+    setGenerationPage((prev) => Math.max(prev - 1, 1));
+  }, [generationPagination.hasPrevPage]);
+
+  const handleGenerationNextPage = useCallback(() => {
+    if (!generationPagination.hasNextPage) return;
+    setGenerationPage((prev) => prev + 1);
+  }, [generationPagination.hasNextPage]);
 
   if (loading) {
     return (
@@ -450,6 +598,9 @@ function Generate() {
           </Badge>
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
             {successfulGenerations} completed
+          </Badge>
+          <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
+            Page {currentGenerationPage} / {totalGenerationPages}
           </Badge>
           <Badge
             variant={isStreamConnected ? 'success' : 'outline'}
@@ -742,6 +893,86 @@ function Generate() {
           </span>
         </div>
 
+        <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+          <div className="space-y-2">
+            <Label htmlFor="generation-search">Search prompts</Label>
+            <Input
+              id="generation-search"
+              type="search"
+              placeholder="Search by prompt or notes"
+              value={generationSearch}
+              onChange={(event) => setGenerationSearch(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Status</Label>
+            <Select value={generationStatus} onValueChange={setGenerationStatus}>
+              <SelectTrigger>
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="queued">Queued</SelectItem>
+                <SelectItem value="processing">Processing</SelectItem>
+                <SelectItem value="succeeded">Succeeded</SelectItem>
+                <SelectItem value="failed">Failed</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>User</Label>
+            <SearchableSelect
+              value={generationUser}
+              onValueChange={setGenerationUser}
+              options={users.map((user) => ({
+                value: user._id,
+                label: `${user.name} · ${user.email}`,
+                searchText: `${user.name} ${user.email}`,
+              }))}
+              placeholder="All users"
+              searchPlaceholder="Search users..."
+              emptyText="No users found."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Per page</Label>
+            <Select
+              value={String(generationLimit)}
+              onValueChange={(value) => setGenerationLimit(Number(value))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Results per page" />
+              </SelectTrigger>
+              <SelectContent>
+                {GENERATION_PAGE_SIZES.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size} / page
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-end justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleGenerationResetFilters}
+              disabled={!hasGenerationFilters}
+              className="justify-center"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Reset
+            </Button>
+          </div>
+        </div>
+
+        {isFetchingGenerations && (
+          <div className="flex items-center gap-2 text-sm text-foreground/60">
+            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+            Refreshing feed…
+          </div>
+        )}
+
         <div className="grid gap-4">
           {generations.map((generation) => {
             const statusMeta = STATUS_LABEL[generation.status] ?? STATUS_LABEL.processing;
@@ -1019,23 +1250,67 @@ function Generate() {
           })}
         </div>
 
-        {generations.length === 0 && (
+        {generations.length === 0 && !isFetchingGenerations && (
           <Card className="border-dashed border-border/50 bg-card text-center">
             <CardContent className="space-y-3 py-14">
               <Workflow className="mx-auto h-10 w-10 text-foreground/30" />
               <h3 className="text-lg font-medium text-foreground">
-                No generations yet
+                {hasGenerationFilters ? 'No generations match your filters' : 'No generations yet'}
               </h3>
               <p className="text-sm text-foreground/55">
-                Kick off a generation above to see outputs appear here.
+                {hasGenerationFilters
+                  ? 'Update your filters or search terms to reveal matching generations.'
+                  : 'Kick off a generation above to see outputs appear here.'}
               </p>
-              <Button onClick={() => setShowForm(true)} className="mt-3">
-                <Sparkles className="mr-2 h-4 w-4" />
-                Generate images
-              </Button>
+              {hasGenerationFilters ? (
+                <Button onClick={handleGenerationResetFilters} className="mt-3">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Clear filters
+                </Button>
+              ) : (
+                <Button onClick={() => setShowForm(true)} className="mt-3">
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Generate images
+                </Button>
+              )}
             </CardContent>
           </Card>
         )}
+
+        <div className="flex flex-col items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:flex-row">
+          <p className="text-sm text-foreground/60">
+            {generationPagination.total === 0
+              ? 'No generations found'
+              : `Showing ${generationPageStart}-${generationPageEnd} of ${generationPagination.total} generations`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleGenerationPreviousPage}
+              disabled={!canGoPrevGeneration}
+              className="gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-sm font-medium text-foreground">
+              Page {currentGenerationPage} / {totalGenerationPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleGenerationNextPage}
+              disabled={!canGoNextGeneration}
+              className="gap-1"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

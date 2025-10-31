@@ -138,10 +138,10 @@ function Dashboard() {
     }
 
     const requests = [
-      ['books', () => bookAPI.getAll()],
-      ['users', () => userAPI.getAll()],
-      ['trainings', () => trainingAPI.getAll()],
-      ['generations', () => generationAPI.getAll()],
+      ['books', () => bookAPI.getAll({ limit: 0 })],
+      ['users', () => userAPI.getAll({ limit: 0 })],
+      ['trainings', () => trainingAPI.getAll({ limit: 0 })],
+      ['generations', () => generationAPI.getAll({ limit: 0 })],
     ];
 
     const results = await Promise.allSettled(requests.map(([, request]) => request()));

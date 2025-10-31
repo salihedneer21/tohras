@@ -12,6 +12,8 @@ import {
   UploadCloud,
   Image as ImageIcon,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { automationAPI, bookAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -37,8 +39,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import EvaluationImageCard from '@/components/evaluation/EvaluationImageCard';
 import EvaluationSummary from '@/components/evaluation/EvaluationSummary';
 import { evaluateImageFile } from '@/utils/evaluation';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+const AUTOMATION_PAGE_SIZES = [10, 20, 50];
 
 const createEmptyForm = () => ({
   name: '',
@@ -93,6 +97,10 @@ const RUN_STATUS_META = {
   failed: { label: 'Automation failed', icon: AlertTriangle, badge: 'destructive' },
 };
 
+const RUN_STATUS_OPTIONS = [{ value: 'all', label: 'All statuses' }].concat(
+  Object.entries(RUN_STATUS_META).map(([value, meta]) => ({ value, label: meta.label }))
+);
+
 const TRAINING_STATUS_META = {
   queued: { label: 'Queued', badge: 'warning' },
   starting: { label: 'Starting', badge: 'warning' },
@@ -108,50 +116,6 @@ const STORYBOOK_STATUS_META = {
   assembling: { label: 'Assembling', badge: 'warning' },
   succeeded: { label: 'Completed', badge: 'success' },
   failed: { label: 'Failed', badge: 'destructive' },
-};
-
-const sortByCreatedAtDesc = (a, b) =>
-  new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
-
-const mergeRunPayload = (current = {}, incoming = {}) => {
-  const merged = {
-    ...current,
-    ...incoming,
-  };
-
-  merged.events = Array.isArray(incoming.events)
-    ? incoming.events
-    : Array.isArray(current.events)
-    ? current.events
-    : [];
-
-  merged.trainingSnapshot =
-    incoming.trainingSnapshot !== undefined ? incoming.trainingSnapshot : current.trainingSnapshot;
-
-  merged.storybookSnapshot =
-    incoming.storybookSnapshot !== undefined
-      ? incoming.storybookSnapshot
-      : current.storybookSnapshot;
-
-  if (incoming.userId || current.userId) {
-    merged.userId = incoming.userId || current.userId;
-  }
-  if (incoming.bookId || current.bookId) {
-    merged.bookId = incoming.bookId || current.bookId;
-  }
-
-  return merged;
-};
-
-const upsertRunList = (list, incoming) => {
-  if (!incoming?._id) return list;
-  const index = list.findIndex((item) => item._id === incoming._id);
-  if (index === -1) {
-    return [incoming, ...list].sort(sortByCreatedAtDesc);
-  }
-  const next = [...list];
-  next[index] = mergeRunPayload(list[index], incoming);
-  return next.sort(sortByCreatedAtDesc);
 };
 
 const formatTimestamp = (value) => {
@@ -180,50 +144,178 @@ function Automate() {
   const [books, setBooks] = useState([]);
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isFetchingRuns, setIsFetchingRuns] = useState(false);
   const [formData, setFormData] = useState(createEmptyForm);
   const [formImages, setFormImages] = useState([]);
   const [selectedBookId, setSelectedBookId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(AUTOMATION_PAGE_SIZES[0]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [bookFilter, setBookFilter] = useState('');
+  const [pagination, setPagination] = useState({
+    page: 1,
+    totalPages: 0,
+    total: 0,
+    limit: AUTOMATION_PAGE_SIZES[0],
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+  const [stats, setStats] = useState({
+    totalRuns: 0,
+    byStatus: {},
+  });
 
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const runRefreshTimeoutRef = useRef(null);
+  const hasInitialisedRef = useRef(false);
 
   const formEvaluationOverall = useMemo(
     () => summariseEvaluationItems(formImages),
     [formImages]
   );
 
-  const fetchInitialData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [booksResponse, runsResponse] = await Promise.all([
-        bookAPI.getAll(),
-        automationAPI.getAll({ limit: 25 }),
-      ]);
-
-      const resolvedBooks = Array.isArray(booksResponse?.data)
-        ? booksResponse.data
-        : Array.isArray(booksResponse)
-        ? booksResponse
-        : [];
-      const resolvedRuns = Array.isArray(runsResponse?.data)
-        ? runsResponse.data
-        : Array.isArray(runsResponse)
-        ? runsResponse
-        : [];
-
-      setBooks(resolvedBooks);
-      setRuns(resolvedRuns.sort(sortByCreatedAtDesc));
-    } catch (error) {
-      toast.error(`Failed to load automation data: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   useEffect(() => {
-    fetchInitialData();
-  }, [fetchInitialData]);
+    setPage(1);
+  }, [debouncedSearch, statusFilter, bookFilter, limit]);
+
+  const fetchBooksList = useCallback(async () => {
+    const response = await bookAPI.getAll({ limit: 0 });
+    const resolvedBooks = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response)
+      ? response
+      : [];
+    setBooks(resolvedBooks);
+  }, []);
+
+  const fetchRuns = useCallback(
+    async ({ withSpinner = false, suppressSpinner = false } = {}) => {
+      try {
+        if (withSpinner) {
+          setLoading(true);
+        } else if (!suppressSpinner) {
+          setIsFetchingRuns(true);
+        }
+
+        const params = {
+          page,
+          limit,
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+        };
+
+        if (debouncedSearch) {
+          params.search = debouncedSearch;
+        }
+        if (statusFilter !== 'all') {
+          params.status = statusFilter;
+        }
+        if (bookFilter) {
+          params.bookId = bookFilter;
+        }
+
+        const response = await automationAPI.getAll(params);
+        const resolvedRuns = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response)
+          ? response
+          : [];
+        setRuns(resolvedRuns);
+
+        const responsePagination = response?.pagination || {};
+        const responseStats = response?.stats || {};
+
+        const nextPage = responsePagination.page ?? page;
+        const nextTotalPages = responsePagination.totalPages ?? 0;
+        const nextTotal = responsePagination.total ?? resolvedRuns.length;
+        const nextLimit = responsePagination.limit ?? limit;
+
+        const hasNext =
+          typeof responsePagination.hasNextPage === 'boolean'
+            ? responsePagination.hasNextPage
+            : nextTotalPages > 0 && nextPage < nextTotalPages;
+        const hasPrev =
+          typeof responsePagination.hasPrevPage === 'boolean'
+            ? responsePagination.hasPrevPage
+            : nextPage > 1;
+
+        setPagination({
+          page: nextPage,
+          totalPages: nextTotalPages,
+          total: nextTotal,
+          limit: nextLimit,
+          hasNextPage: hasNext,
+          hasPrevPage: hasPrev,
+        });
+
+        setStats({
+          totalRuns:
+            typeof responseStats.totalRuns === 'number' ? responseStats.totalRuns : nextTotal,
+          byStatus: responseStats.byStatus || {},
+        });
+
+        if (responsePagination.page && responsePagination.page !== page) {
+          setPage(responsePagination.page);
+        }
+      } catch (error) {
+        toast.error(`Failed to fetch automation runs: ${error.message}`);
+        throw error;
+      } finally {
+        if (withSpinner) {
+          setLoading(false);
+        } else if (!suppressSpinner) {
+          setIsFetchingRuns(false);
+        }
+      }
+    },
+    [page, limit, debouncedSearch, statusFilter, bookFilter]
+  );
+
+  useEffect(() => {
+    const initialise = async () => {
+      try {
+        setLoading(true);
+        await fetchBooksList();
+        await fetchRuns({ suppressSpinner: true });
+        hasInitialisedRef.current = true;
+      } catch (error) {
+        // errors already surfaced via toasts
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initialise();
+  }, [fetchBooksList, fetchRuns]);
+
+  useEffect(() => {
+    if (!hasInitialisedRef.current) return;
+    fetchRuns({ suppressSpinner: false }).catch(() => {});
+  }, [fetchRuns]);
+
+  const scheduleRunRefresh = useCallback(() => {
+    if (runRefreshTimeoutRef.current) return;
+    runRefreshTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetchRuns({ suppressSpinner: true });
+      } catch (error) {
+        console.warn('Failed to refresh automation runs:', error);
+      } finally {
+        runRefreshTimeoutRef.current = null;
+      }
+    }, 600);
+  }, [fetchRuns]);
 
   const connectEventStream = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
@@ -246,8 +338,8 @@ function Automate() {
     source.onmessage = (event) => {
       if (!event?.data) return;
       try {
-        const payload = JSON.parse(event.data);
-        setRuns((previous) => upsertRunList(previous, payload));
+        JSON.parse(event.data);
+        scheduleRunRefresh();
       } catch (error) {
         console.error('Failed to parse automation stream payload', error);
       }
@@ -264,7 +356,7 @@ function Automate() {
         connectEventStream();
       }, 4000);
     };
-  }, []);
+  }, [scheduleRunRefresh]);
 
   useEffect(() => {
     connectEventStream();
@@ -276,6 +368,10 @@ function Automate() {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
+      }
+      if (runRefreshTimeoutRef.current) {
+        clearTimeout(runRefreshTimeoutRef.current);
+        runRefreshTimeoutRef.current = null;
       }
       formImages.forEach((item) => {
         if (item.preview?.startsWith('blob:')) {
@@ -445,12 +541,8 @@ function Automate() {
 
       payload.append('overrides', JSON.stringify(overrides));
 
-      const response = await automationAPI.start(payload);
-      const run = response?.data || response;
-
-      if (run?._id) {
-        setRuns((previous) => upsertRunList(previous, run));
-      }
+      await automationAPI.start(payload);
+      scheduleRunRefresh();
 
       toast.success('Automation started. You can close this tab and check progress later.');
       resetForm();
@@ -461,9 +553,66 @@ function Automate() {
     }
   };
 
-  const totalRuns = runs.length;
-  const completedRuns = runs.filter((run) => run.status === 'completed').length;
-  const failedRuns = runs.filter((run) => run.status === 'failed').length;
+  const totalRuns =
+    typeof stats.totalRuns === 'number' && stats.totalRuns >= 0
+      ? stats.totalRuns
+      : pagination.total || runs.length;
+  const completedRuns =
+    typeof stats.byStatus?.completed === 'number'
+      ? stats.byStatus.completed
+      : runs.filter((run) => run.status === 'completed').length;
+  const failedRuns =
+    typeof stats.byStatus?.failed === 'number'
+      ? stats.byStatus.failed
+      : runs.filter((run) => run.status === 'failed').length;
+  const inProgressRuns = Math.max(totalRuns - completedRuns - failedRuns, 0);
+  const bookFilterOptions = useMemo(
+    () =>
+      books.map((book) => ({
+        value: book._id,
+        label: book.name,
+        searchText: book.name,
+      })),
+    [books]
+  );
+  const hasActiveFilters =
+    Boolean(searchTerm) ||
+    statusFilter !== 'all' ||
+    Boolean(bookFilter) ||
+    limit !== AUTOMATION_PAGE_SIZES[0];
+  const handleResetFilters = useCallback(() => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setBookFilter('');
+    setLimit(AUTOMATION_PAGE_SIZES[0]);
+    setPage(1);
+  }, []);
+  const handlePreviousPage = useCallback(() => {
+    if (!pagination.hasPrevPage) return;
+    setPage((prev) => Math.max(prev - 1, 1));
+  }, [pagination.hasPrevPage]);
+  const handleNextPage = useCallback(() => {
+    if (!pagination.hasNextPage) return;
+    setPage((prev) => prev + 1);
+  }, [pagination.hasNextPage]);
+  const totalPagesDisplay =
+    pagination.totalPages && pagination.totalPages > 0
+      ? pagination.totalPages
+      : pagination.total > 0
+      ? 1
+      : 1;
+  const currentPage =
+    pagination.totalPages && pagination.totalPages > 0 ? pagination.page : 1;
+  const effectivePageSize =
+    pagination.limit && pagination.limit > 0 ? pagination.limit : limit;
+  const pageStart =
+    pagination.total === 0 ? 0 : (currentPage - 1) * effectivePageSize + 1;
+  const pageEnd =
+    pagination.total === 0
+      ? 0
+      : Math.min(currentPage * effectivePageSize, pagination.total);
+  const canGoPrev = pagination.hasPrevPage && !isFetchingRuns;
+  const canGoNext = pagination.hasNextPage && !isFetchingRuns;
 
   if (loading) {
     return (
@@ -533,6 +682,10 @@ function Automate() {
           <span className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/50 px-3 py-1">
             <UsersIcon className="h-3.5 w-3.5" />
             {totalRuns} runs
+          </span>
+          <span className="inline-flex items-center gap-2 rounded-full border border-foreground/20 bg-foreground/10 px-3 py-1">
+            <Workflow className="h-3.5 w-3.5" />
+            {inProgressRuns} in progress
           </span>
           <span className="inline-flex items-center gap-2 rounded-full border border-foreground/20 bg-foreground/10 px-3 py-1">
             <CircleCheck className="h-3.5 w-3.5" />
@@ -822,12 +975,89 @@ function Automate() {
           </div>
         </div>
 
-        {runs.length === 0 ? (
+        <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+          <div className="space-y-2">
+            <Label htmlFor="automation-search">Search runs</Label>
+            <Input
+              id="automation-search"
+              type="search"
+              placeholder="Search by reader or book"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Status</Label>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                {RUN_STATUS_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Book</Label>
+            <SearchableSelect
+              value={bookFilter}
+              onValueChange={setBookFilter}
+              options={bookFilterOptions}
+              placeholder="All books"
+              searchPlaceholder="Search books..."
+              emptyText="No books found."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Per page</Label>
+            <Select value={String(limit)} onValueChange={(value) => setLimit(Number(value))}>
+              <SelectTrigger>
+                <SelectValue placeholder="Results per page" />
+              </SelectTrigger>
+              <SelectContent>
+                {AUTOMATION_PAGE_SIZES.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size} / page
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-end justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleResetFilters}
+              disabled={!hasActiveFilters}
+              className="justify-center"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Reset
+            </Button>
+          </div>
+        </div>
+
+        {isFetchingRuns && (
+          <div className="flex items-center gap-2 text-sm text-foreground/60">
+            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+            Refreshing runs…
+          </div>
+        )}
+
+        {runs.length === 0 && !isFetchingRuns ? (
           <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border/70 bg-muted/20 p-10 text-center text-sm text-foreground/60">
             <Sparkles className="h-6 w-6 text-foreground/40" />
-            <p>No automation runs yet. Create a reader above to get started.</p>
+            <p>
+              {hasActiveFilters
+                ? 'No runs match your filters. Adjust them to see results.'
+                : 'No automation runs yet. Create a reader above to get started.'}
+            </p>
           </div>
-        ) : (
+        ) : runs.length > 0 ? (
           <div className="space-y-4">
             {runs.map((run) => {
               const statusMeta = RUN_STATUS_META[run.status] || RUN_STATUS_META.training;
@@ -842,17 +1072,20 @@ function Automate() {
                 storybookSnapshot && storybookSnapshot.status
                   ? STORYBOOK_STATUS_META[storybookSnapshot.status] || STORYBOOK_STATUS_META.queued
                   : STORYBOOK_STATUS_META.queued;
+              const runUserName = run.user?.name || run.userId?.name || 'Reader';
+              const runBookName = run.book?.name || run.bookId?.name || 'Storybook';
+              const runUserEmail = run.user?.email || run.userId?.email || '';
 
               return (
                 <Card key={run._id} className="border border-border/60">
                   <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="space-y-1">
                       <CardTitle className="text-lg font-semibold text-foreground">
-                        {(run.userId && run.userId.name) || 'Reader'} →{' '}
-                        {(run.bookId && run.bookId.name) || 'Storybook'}
+                        {runUserName} → {runBookName}
                       </CardTitle>
                       <CardDescription>
                         Launched {formatTimestamp(run.createdAt)} · Run ID {run._id}
+                        {runUserEmail ? ` · ${runUserEmail}` : ''}
                       </CardDescription>
                     </div>
                     <Badge variant={statusMeta.badge}>
@@ -995,8 +1228,43 @@ function Automate() {
                 </Card>
               );
             })}
+
+            <div className="flex flex-col items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:flex-row">
+              <p className="text-sm text-foreground/60">
+                {pagination.total === 0
+                  ? 'No runs found'
+                  : `Showing ${pageStart}-${pageEnd} of ${pagination.total} runs`}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePreviousPage}
+                  disabled={!canGoPrev}
+                  className="gap-1"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm font-medium text-foreground">
+                  Page {currentPage} / {totalPagesDisplay}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNextPage}
+                  disabled={!canGoNext}
+                  className="gap-1"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   );

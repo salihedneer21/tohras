@@ -10,6 +10,8 @@ import {
   Loader2,
   Maximize2,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -82,6 +84,8 @@ const summariseEvaluationItems = (items) => {
   };
 };
 
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+
 function Users() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -92,6 +96,35 @@ function Users() {
   const [formImages, setFormImages] = useState([]);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [pendingEvaluations, setPendingEvaluations] = useState({});
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [genderFilter, setGenderFilter] = useState('all');
+  const [pagination, setPagination] = useState({
+    page: 1,
+    totalPages: 0,
+    total: 0,
+    limit: 10,
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    totalImages: 0,
+  });
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter, genderFilter, limit]);
 
   const handleViewerClose = useCallback(() => {
     if (viewerAsset?.shouldRevoke && viewerAsset?.src?.startsWith('blob:')) {
@@ -100,45 +133,148 @@ function Users() {
     setViewerAsset(null);
   }, [viewerAsset]);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  const totalImages = useMemo(
-    () => users.reduce((sum, user) => sum + (user.imageAssets?.length || 0), 0),
-    [users]
-  );
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await userAPI.getAll();
-      const fetchedUsers = response.data;
+      const params = {
+        page,
+        limit,
+      };
+      if (debouncedSearch) {
+        params.search = debouncedSearch;
+      }
+      if (statusFilter !== 'all') {
+        params.status = statusFilter;
+      }
+      if (genderFilter !== 'all') {
+        params.gender = genderFilter;
+      }
+
+      const response = await userAPI.getAll(params);
+      const fetchedUsers = Array.isArray(response?.data) ? response.data : [];
+
       setUsers(fetchedUsers);
-      setPendingEvaluations((prev) => {
-        if (!prev || Object.keys(prev).length === 0) return prev;
-        const validIds = new Set(fetchedUsers.map((item) => item._id));
-        const next = {};
-        Object.entries(prev).forEach(([userId, bucket]) => {
-          if (!bucket) return;
-          if (validIds.has(userId)) {
-            next[userId] = bucket;
-          } else {
-            bucket.items?.forEach((item) => {
-              if (item.preview?.startsWith('blob:')) {
-                URL.revokeObjectURL(item.preview);
-              }
-            });
-          }
-        });
-        return next;
+      const responsePagination = response?.pagination || {};
+      const responseStats = response?.stats || {};
+
+      const nextPage = responsePagination.page ?? page;
+      const nextTotalPages = responsePagination.totalPages ?? 0;
+      const nextTotal = responsePagination.total ?? fetchedUsers.length;
+      const nextLimit = responsePagination.limit ?? limit;
+
+      const computedHasNext =
+        typeof responsePagination.hasNextPage === 'boolean'
+          ? responsePagination.hasNextPage
+          : nextTotalPages > 0 && nextPage < nextTotalPages;
+      const computedHasPrev =
+        typeof responsePagination.hasPrevPage === 'boolean'
+          ? responsePagination.hasPrevPage
+          : nextPage > 1;
+
+      setPagination({
+        page: nextPage,
+        totalPages: nextTotalPages,
+        total: nextTotal,
+        limit: nextLimit,
+        hasNextPage: computedHasNext,
+        hasPrevPage: computedHasPrev,
       });
+
+      const fallbackImageCount = fetchedUsers.reduce(
+        (sum, user) => sum + (user.imageAssets?.length || 0),
+        0
+      );
+
+      setStats({
+        totalUsers:
+          typeof responseStats.totalUsers === 'number' ? responseStats.totalUsers : nextTotal,
+        totalImages:
+          typeof responseStats.totalImages === 'number'
+            ? responseStats.totalImages
+            : fallbackImageCount,
+      });
+
+      if (responsePagination.page && responsePagination.page !== page) {
+        setPage(responsePagination.page);
+      }
+
+      if (nextTotal <= fetchedUsers.length) {
+        setPendingEvaluations((prev) => {
+          if (!prev || Object.keys(prev).length === 0) return prev;
+          const validIds = new Set(fetchedUsers.map((item) => item._id));
+          const next = {};
+          Object.entries(prev).forEach(([userId, bucket]) => {
+            if (!bucket) return;
+            if (validIds.has(userId)) {
+              next[userId] = bucket;
+            } else {
+              bucket.items?.forEach((item) => {
+                if (item.preview?.startsWith('blob:')) {
+                  URL.revokeObjectURL(item.preview);
+                }
+              });
+            }
+          });
+          return next;
+        });
+      }
     } catch (error) {
       toast.error(`Failed to fetch users: ${error.message}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, limit, debouncedSearch, statusFilter, genderFilter]);
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  const handleResetFilters = useCallback(() => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setGenderFilter('all');
+    setLimit(PAGE_SIZE_OPTIONS[0]);
+    setPage(1);
+  }, []);
+
+  const handlePreviousPage = useCallback(() => {
+    if (!pagination.hasPrevPage) return;
+    setPage((prev) => Math.max(prev - 1, 1));
+  }, [pagination.hasPrevPage]);
+
+  const handleNextPage = useCallback(() => {
+    if (!pagination.hasNextPage) return;
+    setPage((prev) => prev + 1);
+  }, [pagination.hasNextPage]);
+
+  const totalImages = useMemo(
+    () =>
+      typeof stats.totalImages === 'number' && stats.totalImages >= 0
+        ? stats.totalImages
+        : users.reduce((sum, user) => sum + (user.imageAssets?.length || 0), 0),
+    [stats.totalImages, users]
+  );
+
+  const totalPagesDisplay =
+    pagination.totalPages && pagination.totalPages > 0
+      ? pagination.totalPages
+      : pagination.total > 0
+      ? 1
+      : 1;
+  const currentPage = pagination.totalPages && pagination.totalPages > 0 ? pagination.page : 1;
+  const hasActiveFilters =
+    Boolean(searchTerm) ||
+    statusFilter !== 'all' ||
+    genderFilter !== 'all' ||
+    limit !== PAGE_SIZE_OPTIONS[0];
+  const effectivePageSize =
+    pagination.limit && pagination.limit > 0 ? pagination.limit : limit || PAGE_SIZE_OPTIONS[0];
+  const pageStart =
+    pagination.total === 0 ? 0 : (currentPage - 1) * effectivePageSize + 1;
+  const pageEnd =
+    pagination.total === 0 ? 0 : Math.min(currentPage * effectivePageSize, pagination.total);
+  const canGoPrev = pagination.hasPrevPage && !loading;
+  const canGoNext = pagination.hasNextPage && !loading;
 
   const mutateFormImage = useCallback(
     (id, updater) => {
@@ -688,14 +824,84 @@ function Users() {
         </div>
         <div className="flex items-center gap-2">
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
-            {users.length} users
+            {stats.totalUsers} users
           </Badge>
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
             {totalImages} training images
           </Badge>
+          <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
+            Page {currentPage} / {totalPagesDisplay}
+          </Badge>
           <Button onClick={() => setShowForm((prev) => !prev)} className="gap-2">
             <UserPlus className="h-4 w-4" />
             {showForm ? 'Close form' : 'Add user'}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+        <div className="space-y-2">
+          <Label htmlFor="user-search">Search users</Label>
+          <Input
+            id="user-search"
+            type="search"
+            placeholder="Search by name, email, or phone"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Status</Label>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Gender</Label>
+          <Select value={genderFilter} onValueChange={setGenderFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Filter by gender" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All genders</SelectItem>
+              <SelectItem value="male">Male</SelectItem>
+              <SelectItem value="female">Female</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Per page</Label>
+          <Select value={String(limit)} onValueChange={(value) => setLimit(Number(value))}>
+            <SelectTrigger>
+              <SelectValue placeholder="Results per page" />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <SelectItem key={option} value={String(option)}>
+                  {option} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-end justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleResetFilters}
+            disabled={!hasActiveFilters}
+            className="justify-center"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Reset
           </Button>
         </div>
       </div>
@@ -1346,20 +1552,64 @@ function Users() {
         })}
       </div>
 
-      {users.length === 0 && (
+      <div className="flex flex-col items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:flex-row">
+        <p className="text-sm text-foreground/60">
+          {pagination.total === 0
+            ? 'No users found'
+            : `Showing ${pageStart}-${pageEnd} of ${pagination.total} users`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handlePreviousPage}
+            disabled={!canGoPrev}
+            className="gap-1"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </Button>
+          <span className="text-sm font-medium text-foreground">
+            Page {currentPage} / {totalPagesDisplay}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleNextPage}
+            disabled={!canGoNext}
+            className="gap-1"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {users.length === 0 && !loading && (
         <Card className="border-dashed border-border/50 bg-card text-center">
           <CardContent className="space-y-3 py-14">
             <UserCircle2 className="mx-auto h-10 w-10 text-foreground/30" />
             <h3 className="text-lg font-medium text-foreground">
-              No users yet
+              {hasActiveFilters ? 'No users match your filters' : 'No users yet'}
             </h3>
             <p className="text-sm text-foreground/55">
-              Add your first persona to start fine-tuning your models.
+              {hasActiveFilters
+                ? 'Adjust your filters or search terms to see matching personas.'
+                : 'Add your first persona to start fine-tuning your models.'}
             </p>
-            <Button onClick={() => setShowForm(true)} className="mt-3">
-              <UserPlus className="mr-2 h-4 w-4" />
-              Add user
-            </Button>
+            {hasActiveFilters ? (
+              <Button onClick={handleResetFilters} className="mt-3">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Clear filters
+              </Button>
+            ) : (
+              <Button onClick={() => setShowForm(true)} className="mt-3">
+                <UserPlus className="mr-2 h-4 w-4" />
+                Add user
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}

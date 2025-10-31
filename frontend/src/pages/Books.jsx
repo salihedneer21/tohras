@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   BookOpen,
@@ -12,6 +12,9 @@ import {
   ArrowDown,
   Ban,
   CheckCircle2,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { bookAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -49,6 +52,8 @@ const STATUS_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'inactive', label: 'Inactive' },
 ];
+
+const BOOK_PAGE_SIZES = [10, 20, 50];
 
 const defaultCoverConfig = () => ({
   headline: '',
@@ -145,6 +150,7 @@ const revokeIfNeeded = (preview, isObjectUrl) => {
 function Books() {
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isFetchingBooks, setIsFetchingBooks] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState('create');
   const [formState, setFormState] = useState(createEmptyBookForm);
@@ -156,27 +162,196 @@ function Books() {
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [dedicationPreview, setDedicationPreview] = useState(null);
   const [isGeneratingDedicationPreview, setIsGeneratingDedicationPreview] = useState(false);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(BOOK_PAGE_SIZES[0]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [genderFilter, setGenderFilter] = useState('all');
+  const [pagination, setPagination] = useState({
+    page: 1,
+    totalPages: 0,
+    total: 0,
+    limit: BOOK_PAGE_SIZES[0],
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+  const [stats, setStats] = useState({
+    totalBooks: 0,
+    totalPages: 0,
+    byStatus: { active: 0, inactive: 0 },
+    byGender: { male: 0, female: 0, both: 0 },
+  });
+  const hasInitialisedRef = useRef(false);
 
   useEffect(() => {
-    fetchBooks();
-  }, []);
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
-  const totalPages = useMemo(
-    () => books.reduce((sum, book) => sum + (book.pages?.length || 0), 0),
-    [books]
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter, genderFilter, limit]);
+
+  const fetchBooks = useCallback(
+    async ({ withSpinner = true } = {}) => {
+      try {
+        if (withSpinner) {
+          setLoading(true);
+        } else {
+          setIsFetchingBooks(true);
+        }
+
+        const params = {
+          page,
+          limit,
+        };
+        if (debouncedSearch) {
+          params.search = debouncedSearch;
+        }
+        if (statusFilter !== 'all') {
+          params.status = statusFilter;
+        }
+        if (genderFilter !== 'all') {
+          params.gender = genderFilter;
+        }
+
+        const response = await bookAPI.getAll(params);
+        const fetchedBooks = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response)
+          ? response
+          : [];
+        setBooks(fetchedBooks);
+
+        const responsePagination = response?.pagination || {};
+        const responseStats = response?.stats || {};
+
+        const nextPage = responsePagination.page ?? page;
+        const nextTotalPages = responsePagination.totalPages ?? 0;
+        const nextTotal = responsePagination.total ?? fetchedBooks.length;
+        const nextLimit = responsePagination.limit ?? limit;
+
+        const computedHasNext =
+          typeof responsePagination.hasNextPage === 'boolean'
+            ? responsePagination.hasNextPage
+            : nextTotalPages > 0 && nextPage < nextTotalPages;
+        const computedHasPrev =
+          typeof responsePagination.hasPrevPage === 'boolean'
+            ? responsePagination.hasPrevPage
+            : nextPage > 1;
+
+        setPagination({
+          page: nextPage,
+          totalPages: nextTotalPages,
+          total: nextTotal,
+          limit: nextLimit,
+          hasNextPage: computedHasNext,
+          hasPrevPage: computedHasPrev,
+        });
+
+        const fallbackPageCount = fetchedBooks.reduce(
+          (sum, book) => sum + (book.pages?.length || 0),
+          0
+        );
+
+        setStats({
+          totalBooks:
+            typeof responseStats.totalBooks === 'number'
+              ? responseStats.totalBooks
+              : nextTotal,
+          totalPages:
+            typeof responseStats.totalPages === 'number'
+              ? responseStats.totalPages
+              : fallbackPageCount,
+          byStatus: {
+            active: responseStats?.byStatus?.active ?? 0,
+            inactive: responseStats?.byStatus?.inactive ?? 0,
+          },
+          byGender: {
+            male: responseStats?.byGender?.male ?? 0,
+            female: responseStats?.byGender?.female ?? 0,
+            both: responseStats?.byGender?.both ?? 0,
+          },
+        });
+
+        if (responsePagination.page && responsePagination.page !== page) {
+          setPage(responsePagination.page);
+        }
+      } catch (error) {
+        toast.error(`Failed to fetch books: ${error.message}`);
+      } finally {
+        if (withSpinner) {
+          setLoading(false);
+        }
+        setIsFetchingBooks(false);
+      }
+    },
+    [page, limit, debouncedSearch, statusFilter, genderFilter]
   );
 
-  const fetchBooks = async (withSpinner = true) => {
-    try {
-      if (withSpinner) setLoading(true);
-      const response = await bookAPI.getAll();
-      setBooks(response.data);
-    } catch (error) {
-      toast.error(`Failed to fetch books: ${error.message}`);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    fetchBooks({ withSpinner: !hasInitialisedRef.current });
+    if (!hasInitialisedRef.current) {
+      hasInitialisedRef.current = true;
     }
-  };
+  }, [fetchBooks]);
+
+  const totalBooksCount =
+    typeof stats.totalBooks === 'number' && stats.totalBooks >= 0
+      ? stats.totalBooks
+      : pagination.total || books.length;
+
+  const totalStoryPages = useMemo(() => {
+    if (typeof stats.totalPages === 'number' && stats.totalPages >= 0) {
+      return stats.totalPages;
+    }
+    return books.reduce((sum, book) => sum + (book.pages?.length || 0), 0);
+  }, [stats.totalPages, books]);
+
+  const effectivePageSize =
+    pagination.limit && pagination.limit > 0 ? pagination.limit : limit;
+  const totalPagesDisplay =
+    pagination.totalPages && pagination.totalPages > 0
+      ? pagination.totalPages
+      : pagination.total > 0
+      ? 1
+      : 1;
+  const currentPage =
+    pagination.totalPages && pagination.totalPages > 0 ? pagination.page : 1;
+  const pageStart =
+    pagination.total === 0 ? 0 : (currentPage - 1) * effectivePageSize + 1;
+  const pageEnd =
+    pagination.total === 0
+      ? 0
+      : Math.min(currentPage * effectivePageSize, pagination.total);
+  const hasActiveFilters =
+    Boolean(searchTerm) ||
+    statusFilter !== 'all' ||
+    genderFilter !== 'all' ||
+    limit !== BOOK_PAGE_SIZES[0];
+  const canGoPrev = pagination.hasPrevPage && !isFetchingBooks;
+  const canGoNext = pagination.hasNextPage && !isFetchingBooks;
+
+  const handleResetFilters = useCallback(() => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setGenderFilter('all');
+    setLimit(BOOK_PAGE_SIZES[0]);
+    setPage(1);
+  }, []);
+
+  const handlePreviousPage = useCallback(() => {
+    if (!pagination.hasPrevPage) return;
+    setPage((prev) => Math.max(prev - 1, 1));
+  }, [pagination.hasPrevPage]);
+
+  const handleNextPage = useCallback(() => {
+    if (!pagination.hasNextPage) return;
+    setPage((prev) => prev + 1);
+  }, [pagination.hasNextPage]);
 
   const resetForm = useCallback(() => {
     revokeIfNeeded(formState.cover.preview, formState.cover.previewIsObject);
@@ -1024,7 +1199,7 @@ const handleRemovePageImage = (index) => {
         await bookAPI.create(formData);
         toast.success('Book created');
       }
-      await fetchBooks(false);
+      await fetchBooks({ withSpinner: false });
       resetForm();
     } catch (error) {
       toast.error(`Failed to save book: ${error.message}`);
@@ -1037,7 +1212,7 @@ const handleRemovePageImage = (index) => {
     try {
       await bookAPI.delete(bookId);
       toast.success('Book deleted');
-      fetchBooks(false);
+      fetchBooks({ withSpinner: false });
     } catch (error) {
       toast.error(`Failed to delete book: ${error.message}`);
     }
@@ -1050,7 +1225,7 @@ const handleRemovePageImage = (index) => {
       toast.success(
         `Book ${nextStatus === 'active' ? 'activated' : 'deactivated'}`
       );
-      fetchBooks(false);
+      fetchBooks({ withSpinner: false });
     } catch (error) {
       toast.error(`Failed to update status: ${error.message}`);
     }
@@ -1125,10 +1300,13 @@ const handleRemovePageImage = (index) => {
         </div>
         <div className="flex items-center gap-2">
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
-            {books.length} books
+            {totalBooksCount} books
           </Badge>
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
-            {totalPages} pages
+            {totalStoryPages} story pages
+          </Badge>
+          <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
+            Page {currentPage} / {totalPagesDisplay}
           </Badge>
           <Button className="gap-2" onClick={openCreateForm}>
             <Plus className="h-4 w-4" />
@@ -1137,7 +1315,81 @@ const handleRemovePageImage = (index) => {
         </div>
       </div>
 
-  {showForm && (
+      <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+        <div className="space-y-2">
+          <Label htmlFor="book-search">Search books</Label>
+          <Input
+            id="book-search"
+            type="search"
+            placeholder="Search by name or description"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Status</Label>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Gender focus</Label>
+          <Select value={genderFilter} onValueChange={setGenderFilter}>
+            <SelectTrigger>
+              <SelectValue placeholder="Filter by gender focus" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All genders</SelectItem>
+              <SelectItem value="male">Male</SelectItem>
+              <SelectItem value="female">Female</SelectItem>
+              <SelectItem value="both">Both</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Per page</Label>
+          <Select value={String(limit)} onValueChange={(value) => setLimit(Number(value))}>
+            <SelectTrigger>
+              <SelectValue placeholder="Results per page" />
+            </SelectTrigger>
+            <SelectContent>
+              {BOOK_PAGE_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-end justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleResetFilters}
+            disabled={!hasActiveFilters}
+            className="justify-center"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Reset
+          </Button>
+        </div>
+      </div>
+
+      {isFetchingBooks && (
+        <div className="flex items-center gap-2 text-sm text-foreground/60">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          Refreshing library…
+        </div>
+      )}
+
+      {showForm && (
         <Card>
           <CardHeader>
             <CardTitle>{formMode === 'edit' ? 'Edit book' : 'Create new book'}</CardTitle>
@@ -1969,20 +2221,64 @@ const handleRemovePageImage = (index) => {
         ))}
       </div>
 
-      {books.length === 0 && (
+      <div className="flex flex-col items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:flex-row">
+        <p className="text-sm text-foreground/60">
+          {pagination.total === 0
+            ? 'No books found'
+            : `Showing ${pageStart}-${pageEnd} of ${pagination.total} books`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handlePreviousPage}
+            disabled={!canGoPrev}
+            className="gap-1"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </Button>
+          <span className="text-sm font-medium text-foreground">
+            Page {currentPage} / {totalPagesDisplay}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleNextPage}
+            disabled={!canGoNext}
+            className="gap-1"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {books.length === 0 && !loading && !isFetchingBooks && (
         <Card className="border-dashed border-border/50 bg-card text-center">
           <CardContent className="space-y-3 py-14">
             <BookOpen className="mx-auto h-10 w-10 text-foreground/30" />
             <h3 className="text-lg font-medium text-foreground">
-              No books yet
+              {hasActiveFilters ? 'No books match your filters' : 'No books yet'}
             </h3>
             <p className="text-sm text-foreground/55">
-              Create your first personalised storybook to get started.
+              {hasActiveFilters
+                ? 'Update your filters or search terms to view matching books.'
+                : 'Create your first personalised storybook to get started.'}
             </p>
-            <Button onClick={openCreateForm} className="mt-3">
-              <Plus className="mr-2 h-4 w-4" />
-              Add book
-            </Button>
+            {hasActiveFilters ? (
+              <Button onClick={handleResetFilters} className="mt-3">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Clear filters
+              </Button>
+            ) : (
+              <Button onClick={openCreateForm} className="mt-3">
+                <Plus className="mr-2 h-4 w-4" />
+                Add book
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}

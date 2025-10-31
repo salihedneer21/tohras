@@ -10,6 +10,8 @@ import {
   Maximize2,
   Loader2,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { userAPI, trainingAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -34,6 +36,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
 import { formatFileSize } from '@/utils/file';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 
 const createInitialForm = () => ({
   userId: '',
@@ -53,59 +56,10 @@ const STATUS_VARIANTS = {
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 const MAX_TRAINING_ATTEMPTS = Number(import.meta.env.VITE_TRAINING_MAX_ATTEMPTS || 1);
 
+const TRAINING_PAGE_SIZES = [10, 20, 50];
+
 const sortByCreatedAtDesc = (a, b) =>
   new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
-
-const mergeTrainingPayload = (current = {}, incoming = {}) => {
-  const merged = {
-    ...current,
-    ...incoming,
-  };
-
-  if (incoming.userId || current.userId) {
-    merged.userId = incoming.userId || current.userId;
-  }
-
-  merged.imageAssets = Array.isArray(incoming.imageAssets)
-    ? incoming.imageAssets
-    : Array.isArray(current.imageAssets)
-    ? current.imageAssets
-    : [];
-
-  merged.imageUrls = Array.isArray(incoming.imageUrls)
-    ? incoming.imageUrls
-    : Array.isArray(current.imageUrls)
-    ? current.imageUrls
-    : [];
-
-  merged.events = Array.isArray(incoming.events)
-    ? incoming.events
-    : Array.isArray(current.events)
-    ? current.events
-    : [];
-
-  merged.logs = Array.isArray(incoming.logs)
-    ? incoming.logs
-    : Array.isArray(current.logs)
-    ? current.logs
-    : [];
-
-  return merged;
-};
-
-const upsertTrainingList = (list, incoming) => {
-  if (!incoming?._id) return list;
-
-  const index = list.findIndex((item) => item._id === incoming._id);
-  if (index === -1) {
-    const next = [incoming, ...list];
-    return next.sort(sortByCreatedAtDesc);
-  }
-
-  const next = [...list];
-  next[index] = mergeTrainingPayload(list[index], incoming);
-  return next.sort(sortByCreatedAtDesc);
-};
 
 const formatTimestamp = (value) => {
   if (!value) return '';
@@ -132,90 +86,230 @@ function Training() {
   const [users, setUsers] = useState([]);
   const [trainings, setTrainings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isFetchingTrainings, setIsFetchingTrainings] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState(createInitialForm);
   const [viewerImage, setViewerImage] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const trainingRefreshTimeoutRef = useRef(null);
   const statusMapRef = useRef(new Map());
+  const hasInitialisedRef = useRef(false);
   const [isStreamConnected, setIsStreamConnected] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [trainingPage, setTrainingPage] = useState(1);
+  const [trainingLimit, setTrainingLimit] = useState(TRAINING_PAGE_SIZES[0]);
+  const [trainingSearch, setTrainingSearch] = useState('');
+  const [debouncedTrainingSearch, setDebouncedTrainingSearch] = useState('');
+  const [trainingStatus, setTrainingStatus] = useState('all');
+  const [trainingUserFilter, setTrainingUserFilter] = useState('');
+  const [trainingPagination, setTrainingPagination] = useState({
+    page: 1,
+    totalPages: 0,
+    total: 0,
+    limit: TRAINING_PAGE_SIZES[0],
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+  const [trainingStatsMeta, setTrainingStatsMeta] = useState({
+    total: 0,
+    byStatus: {},
+  });
 
   useEffect(() => {
-    fetchData();
+    const timer = setTimeout(() => {
+      setDebouncedTrainingSearch(trainingSearch.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [trainingSearch]);
+
+  useEffect(() => {
+    setTrainingPage(1);
+  }, [debouncedTrainingSearch, trainingStatus, trainingUserFilter, trainingLimit]);
+
+  const fetchUsersList = useCallback(async () => {
+    const response = await userAPI.getAll({ limit: 0 });
+    const resolvedUsers = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response)
+      ? response
+      : [];
+    setUsers(resolvedUsers);
   }, []);
+
+  const fetchTrainings = useCallback(
+    async ({ silent = false } = {}) => {
+      try {
+        if (trainingRefreshTimeoutRef.current) {
+          clearTimeout(trainingRefreshTimeoutRef.current);
+          trainingRefreshTimeoutRef.current = null;
+        }
+
+        if (!silent) {
+          setIsFetchingTrainings(true);
+        }
+
+        const params = {
+          page: trainingPage,
+          limit: trainingLimit,
+        };
+
+        if (debouncedTrainingSearch) {
+          params.search = debouncedTrainingSearch;
+        }
+        if (trainingStatus !== 'all') {
+          params.status = trainingStatus;
+        }
+        if (trainingUserFilter) {
+          params.userId = trainingUserFilter;
+        }
+
+        const response = await trainingAPI.getAll(params);
+        const fetchedTrainings = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response)
+          ? response
+          : [];
+
+        const sortedTrainings = fetchedTrainings.slice().sort(sortByCreatedAtDesc);
+        setTrainings(sortedTrainings);
+
+        const responsePagination = response?.pagination || {};
+        const responseStats = response?.stats || {};
+
+        const nextPage = responsePagination.page ?? trainingPage;
+        const nextTotalPages = responsePagination.totalPages ?? 0;
+        const nextTotal = responsePagination.total ?? sortedTrainings.length;
+        const nextLimit = responsePagination.limit ?? trainingLimit;
+
+        const computedHasNext =
+          typeof responsePagination.hasNextPage === 'boolean'
+            ? responsePagination.hasNextPage
+            : nextTotalPages > 0 && nextPage < nextTotalPages;
+        const computedHasPrev =
+          typeof responsePagination.hasPrevPage === 'boolean'
+            ? responsePagination.hasPrevPage
+            : nextPage > 1;
+
+        setTrainingPagination({
+          page: nextPage,
+          totalPages: nextTotalPages,
+          total: nextTotal,
+          limit: nextLimit,
+          hasNextPage: computedHasNext,
+          hasPrevPage: computedHasPrev,
+        });
+
+        setTrainingStatsMeta({
+          total: typeof responseStats.total === 'number' ? responseStats.total : nextTotal,
+          byStatus: responseStats.byStatus || {},
+        });
+
+        if (responsePagination.page && responsePagination.page !== trainingPage) {
+          setTrainingPage(responsePagination.page);
+        }
+
+        const nextStatuses = new Map(statusMapRef.current);
+        sortedTrainings.forEach((training) => {
+          if (training?._id) {
+            nextStatuses.set(training._id, training.status);
+          }
+        });
+        statusMapRef.current = nextStatuses;
+      } catch (error) {
+        if (!silent) {
+          toast.error(`Failed to fetch trainings: ${error.message}`);
+        }
+        throw error;
+      } finally {
+        if (!silent) {
+          setIsFetchingTrainings(false);
+        }
+      }
+    },
+    [
+      trainingPage,
+      trainingLimit,
+      debouncedTrainingSearch,
+      trainingStatus,
+      trainingUserFilter,
+    ]
+  );
+
+  const fetchData = useCallback(
+    async ({ withSpinner = true } = {}) => {
+      try {
+        if (withSpinner) {
+          setLoading(true);
+        }
+        await Promise.all([fetchUsersList(), fetchTrainings({ silent: true })]);
+        hasInitialisedRef.current = true;
+      } catch (error) {
+        toast.error(`Failed to fetch data: ${error.message}`);
+      } finally {
+        if (withSpinner) {
+          setLoading(false);
+        }
+      }
+    },
+    [fetchUsersList, fetchTrainings]
+  );
+
+  useEffect(() => {
+    fetchData({ withSpinner: true });
+  }, [fetchData]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(timer);
   }, []);
 
-  const modelCount = trainings.length;
-  const completedCount = useMemo(
-    () => trainings.filter((t) => t.status === 'succeeded').length,
-    [trainings]
-  );
+  useEffect(() => {
+    if (!hasInitialisedRef.current) return;
+    fetchTrainings();
+  }, [fetchTrainings]);
 
-  const selectedUser = useMemo(
-    () => users.find((candidate) => candidate._id === formData.userId),
-    [users, formData.userId]
-  );
+  const scheduleTrainingRefresh = useCallback(() => {
+    if (trainingRefreshTimeoutRef.current) return;
+    trainingRefreshTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetchTrainings({ silent: true });
+      } catch (error) {
+        console.warn('Failed to refresh trainings feed', error);
+      } finally {
+        trainingRefreshTimeoutRef.current = null;
+      }
+    }, 600);
+  }, [fetchTrainings]);
 
-  const selectedUserAssets = selectedUser?.imageAssets ?? [];
-  const selectedUserAssetCount = selectedUserAssets.length;
-
-  const totalDatasetSize = useMemo(
-    () =>
-      selectedUserAssets.reduce(
-        (sum, asset) => sum + (typeof asset.size === 'number' ? asset.size : 0),
-        0
-      ),
-    [selectedUserAssets]
-  );
-
-  const fetchData = async (withSpinner = true) => {
-    try {
-      if (withSpinner) setLoading(true);
-      const [usersResponse, trainingsResponse] = await Promise.all([
-        userAPI.getAll(),
-        trainingAPI.getAll(),
-      ]);
-      const resolvedUsers = Array.isArray(usersResponse?.data)
-        ? usersResponse.data
-        : Array.isArray(usersResponse)
-        ? usersResponse
-        : [];
-      const resolvedTrainings = Array.isArray(trainingsResponse?.data)
-        ? trainingsResponse.data
-        : Array.isArray(trainingsResponse)
-        ? trainingsResponse
-        : [];
-      setUsers(resolvedUsers);
-      const initialTrainings = resolvedTrainings.slice().sort(sortByCreatedAtDesc);
-      setTrainings(initialTrainings);
-      const nextStatuses = new Map(statusMapRef.current);
-      initialTrainings.forEach((training) => {
-        if (training?._id) {
-          nextStatuses.set(training._id, training.status);
+  const handleTrainingStreamUpdate = useCallback(
+    (payload) => {
+      const items = Array.isArray(payload) ? payload : payload ? [payload] : [];
+      items.forEach((item) => {
+        if (!item?._id || !item.status) {
+          return;
         }
+        const previousStatus = statusMapRef.current.get(item._id);
+        if (previousStatus && previousStatus !== item.status) {
+          if (item.status === 'succeeded') {
+            toast.success(`Training "${item.modelName || 'model'}" completed`);
+          } else if (item.status === 'failed') {
+            toast.error(
+              item.error
+                ? `Training "${item.modelName || 'model'}" failed: ${item.error}`
+                : `Training "${item.modelName || 'model'}" failed`
+            );
+          } else if (item.status === 'canceled') {
+            toast(`Training "${item.modelName || 'model'}" canceled`, { icon: '⚠️' });
+          }
+        }
+        statusMapRef.current.set(item._id, item.status);
       });
-      statusMapRef.current = nextStatuses;
-    } catch (error) {
-      toast.error(`Failed to fetch data: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const applyTrainingUpdate = useCallback((payload) => {
-    if (Array.isArray(payload)) {
-      setTrainings(payload.slice().sort(sortByCreatedAtDesc));
-      return;
-    }
-    if (!payload?._id) return;
-    setTrainings((previous) => upsertTrainingList(previous, payload));
-  }, []);
+      scheduleTrainingRefresh();
+    },
+    [scheduleTrainingRefresh]
+  );
 
   const connectEventStream = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
@@ -243,7 +337,7 @@ function Training() {
       if (!event?.data) return;
       try {
         const payload = JSON.parse(event.data);
-        applyTrainingUpdate(payload);
+        handleTrainingStreamUpdate(payload);
       } catch (parseError) {
         console.error('Failed to parse training stream payload', parseError);
       }
@@ -261,7 +355,7 @@ function Training() {
         connectEventStream();
       }, 4000);
     };
-  }, [applyTrainingUpdate]);
+  }, [handleTrainingStreamUpdate]);
 
   useEffect(() => {
     connectEventStream();
@@ -274,32 +368,97 @@ function Training() {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (trainingRefreshTimeoutRef.current) {
+        clearTimeout(trainingRefreshTimeoutRef.current);
+        trainingRefreshTimeoutRef.current = null;
+      }
       setIsStreamConnected(false);
     };
-  }, [connectEventStream]);
+  }, [connectEventStream, handleTrainingStreamUpdate]);
 
   useEffect(() => {
+    const nextStatuses = new Map(statusMapRef.current);
     trainings.forEach((training) => {
-      if (!training?._id) return;
-      const previousStatus = statusMapRef.current.get(training._id);
-      if (previousStatus && previousStatus !== training.status) {
-        if (training.status === 'succeeded') {
-          toast.success(`Training "${training.modelName}" completed`);
-        } else if (training.status === 'failed') {
-          toast.error(
-            training.error
-              ? `Training "${training.modelName}" failed: ${training.error}`
-              : `Training "${training.modelName}" failed`
-          );
-        } else if (training.status === 'canceled') {
-          toast(`Training "${training.modelName}" canceled`, {
-            icon: '⚠️',
-          });
-        }
+      if (training?._id) {
+        nextStatuses.set(training._id, training.status);
       }
-      statusMapRef.current.set(training._id, training.status);
     });
+    statusMapRef.current = nextStatuses;
   }, [trainings]);
+
+  const modelCount =
+    typeof trainingStatsMeta.total === 'number' && trainingStatsMeta.total >= 0
+      ? trainingStatsMeta.total
+      : trainings.length;
+  const completedCount = useMemo(() => {
+    if (typeof trainingStatsMeta.byStatus?.succeeded === 'number') {
+      return trainingStatsMeta.byStatus.succeeded;
+    }
+    return trainings.filter((t) => t.status === 'succeeded').length;
+  }, [trainingStatsMeta, trainings]);
+
+  const totalTrainingPages =
+    trainingPagination.totalPages && trainingPagination.totalPages > 0
+      ? trainingPagination.totalPages
+      : trainingPagination.total > 0
+      ? 1
+      : 1;
+  const currentTrainingPage =
+    trainingPagination.totalPages && trainingPagination.totalPages > 0
+      ? trainingPagination.page
+      : 1;
+  const trainingPageSize =
+    trainingPagination.limit && trainingPagination.limit > 0
+      ? trainingPagination.limit
+      : trainingLimit;
+  const trainingPageStart =
+    trainingPagination.total === 0 ? 0 : (currentTrainingPage - 1) * trainingPageSize + 1;
+  const trainingPageEnd =
+    trainingPagination.total === 0
+      ? 0
+      : Math.min(currentTrainingPage * trainingPageSize, trainingPagination.total);
+  const hasTrainingFilters =
+    Boolean(trainingSearch) ||
+    trainingStatus !== 'all' ||
+    Boolean(trainingUserFilter) ||
+    trainingLimit !== TRAINING_PAGE_SIZES[0];
+  const canGoPrevTraining = trainingPagination.hasPrevPage && !isFetchingTrainings;
+  const canGoNextTraining = trainingPagination.hasNextPage && !isFetchingTrainings;
+
+  const selectedUser = useMemo(
+    () => users.find((candidate) => candidate._id === formData.userId),
+    [users, formData.userId]
+  );
+
+  const selectedUserAssets = selectedUser?.imageAssets ?? [];
+  const selectedUserAssetCount = selectedUserAssets.length;
+
+  const totalDatasetSize = useMemo(
+    () =>
+      selectedUserAssets.reduce(
+        (sum, asset) => sum + (typeof asset.size === 'number' ? asset.size : 0),
+        0
+      ),
+    [selectedUserAssets]
+  );
+
+  const handleTrainingResetFilters = useCallback(() => {
+    setTrainingSearch('');
+    setTrainingStatus('all');
+    setTrainingUserFilter('');
+    setTrainingLimit(TRAINING_PAGE_SIZES[0]);
+    setTrainingPage(1);
+  }, []);
+
+  const handleTrainingPreviousPage = useCallback(() => {
+    if (!trainingPagination.hasPrevPage) return;
+    setTrainingPage((prev) => Math.max(prev - 1, 1));
+  }, [trainingPagination.hasPrevPage]);
+
+  const handleTrainingNextPage = useCallback(() => {
+    if (!trainingPagination.hasNextPage) return;
+    setTrainingPage((prev) => prev + 1);
+  }, [trainingPagination.hasNextPage]);
 
   const handleInputChange = (event) => {
     const { name, value } = event.target;
@@ -339,9 +498,14 @@ function Training() {
 
       const response = await trainingAPI.create(payload);
       const createdTraining = response?.data || response;
-      applyTrainingUpdate(createdTraining);
+      if (createdTraining?._id && createdTraining.status) {
+        statusMapRef.current.set(createdTraining._id, createdTraining.status);
+      }
       toast.success('Training kicked off');
       resetForm();
+      fetchTrainings({ silent: true }).catch((error) =>
+        console.warn('Failed to refresh trainings after create', error)
+      );
     } catch (error) {
       toast.error(`Failed to start training: ${error.message}`);
     } finally {
@@ -375,8 +539,13 @@ function Training() {
     try {
       const response = await trainingAPI.cancel(id);
       const canceledTraining = response?.data || response;
-      applyTrainingUpdate(canceledTraining);
+      if (canceledTraining?._id && canceledTraining.status) {
+        statusMapRef.current.set(canceledTraining._id, canceledTraining.status);
+      }
       toast.success('Training canceled');
+      fetchTrainings({ silent: true }).catch((error) =>
+        console.warn('Failed to refresh trainings after cancel', error)
+      );
     } catch (error) {
       toast.error(`Failed to cancel: ${error.message}`);
     }
@@ -459,6 +628,9 @@ function Training() {
           <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
             {completedCount} completed
           </Badge>
+          <Badge className="hidden sm:inline-flex bg-foreground/10 text-foreground/70">
+            Page {currentTrainingPage} / {totalTrainingPages}
+          </Badge>
           <Badge
             variant={isStreamConnected ? 'success' : 'outline'}
             className="hidden sm:inline-flex"
@@ -471,6 +643,88 @@ function Training() {
           </Button>
         </div>
       </div>
+
+      <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1fr_auto]">
+        <div className="space-y-2">
+          <Label htmlFor="training-search">Search trainings</Label>
+          <Input
+            id="training-search"
+            type="search"
+            placeholder="Search by model name or version"
+            value={trainingSearch}
+            onChange={(event) => setTrainingSearch(event.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Status</Label>
+          <Select value={trainingStatus} onValueChange={setTrainingStatus}>
+            <SelectTrigger>
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="queued">Queued</SelectItem>
+              <SelectItem value="starting">Starting</SelectItem>
+              <SelectItem value="processing">Processing</SelectItem>
+              <SelectItem value="succeeded">Succeeded</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="canceled">Canceled</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>User</Label>
+          <SearchableSelect
+            value={trainingUserFilter}
+            onValueChange={setTrainingUserFilter}
+            options={users.map((user) => ({
+              value: user._id,
+              label: `${user.name} · ${user.email}`,
+              searchText: `${user.name} ${user.email}`,
+            }))}
+            placeholder="All users"
+            searchPlaceholder="Search users..."
+            emptyText="No users found."
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Per page</Label>
+          <Select
+            value={String(trainingLimit)}
+            onValueChange={(value) => setTrainingLimit(Number(value))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Results per page" />
+            </SelectTrigger>
+            <SelectContent>
+              {TRAINING_PAGE_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-end justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleTrainingResetFilters}
+            disabled={!hasTrainingFilters}
+            className="justify-center"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Reset
+          </Button>
+        </div>
+      </div>
+
+      {isFetchingTrainings && (
+        <div className="flex items-center gap-2 text-sm text-foreground/60">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          Refreshing training feed…
+        </div>
+      )}
 
       {showForm && (
         <Card>
@@ -891,20 +1145,64 @@ function Training() {
           })}
         </div>
 
-        {trainings.length === 0 && (
+        <div className="flex flex-col items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:flex-row">
+          <p className="text-sm text-foreground/60">
+            {trainingPagination.total === 0
+              ? 'No trainings found'
+              : `Showing ${trainingPageStart}-${trainingPageEnd} of ${trainingPagination.total} trainings`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleTrainingPreviousPage}
+              disabled={!canGoPrevTraining}
+              className="gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-sm font-medium text-foreground">
+              Page {currentTrainingPage} / {totalTrainingPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleTrainingNextPage}
+              disabled={!canGoNextTraining}
+              className="gap-1"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {trainings.length === 0 && !isFetchingTrainings && (
           <Card className="border-dashed border-border/50 bg-card text-center">
             <CardContent className="space-y-3 py-14">
               <CloudUpload className="mx-auto h-10 w-10 text-foreground/30" />
               <h3 className="text-lg font-medium text-foreground">
-                No training jobs yet
+                {hasTrainingFilters ? 'No trainings match your filters' : 'No training jobs yet'}
               </h3>
               <p className="text-sm text-foreground/55">
-                Start a training job to generate your first custom checkpoints.
+                {hasTrainingFilters
+                  ? 'Adjust your filters or search terms to reveal matching training jobs.'
+                  : 'Start a training job to generate your first custom checkpoints.'}
               </p>
-              <Button onClick={() => setShowForm(true)} className="mt-3">
-                <Rocket className="mr-2 h-4 w-4" />
-                Start training
-              </Button>
+              {hasTrainingFilters ? (
+                <Button onClick={handleTrainingResetFilters} className="mt-3">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Clear filters
+                </Button>
+              ) : (
+                <Button onClick={() => setShowForm(true)} className="mt-3">
+                  <Rocket className="mr-2 h-4 w-4" />
+                  Start training
+                </Button>
+              )}
             </CardContent>
           </Card>
         )}

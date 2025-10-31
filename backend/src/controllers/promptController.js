@@ -1,5 +1,11 @@
 const fetch = require('node-fetch');
 const { validationResult } = require('express-validator');
+const Prompt = require('../models/Prompt');
+const {
+  uploadBufferToS3,
+  deleteFromS3,
+  generatePromptImageKey,
+} = require('../config/s3');
 
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini-2024-07-18';
@@ -62,6 +68,56 @@ const parseApiResponse = (content) => {
   }
 };
 
+const escapeRegex = (value) =>
+  typeof value === 'string' ? value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const normalizeTags = (tags) => {
+    if (!tags) return [];
+    const source = Array.isArray(tags) ? tags : [tags];
+    const seen = new Set();
+    const result = [];
+    source.forEach((entry) => {
+    if (typeof entry !== 'string') return;
+      const trimmed = entry.trim();
+      if (!trimmed) return;
+      const lower = trimmed.toLowerCase();
+      if (seen.has(lower)) return;
+      seen.add(lower);
+      result.push(lower);
+    });
+    return result.slice(0, 12);
+  };
+
+const serializePrompt = (doc) => {
+  if (!doc) return null;
+  return {
+    id: doc.id,
+    promptId: doc.id,
+    fileName: doc.fileName,
+    prompt: doc.prompt,
+    negativePrompt: doc.negativePrompt,
+    additionalContext: doc.additionalContext,
+    imageUrl: doc.s3Url,
+    mimeType: doc.mimeType,
+    size: doc.size,
+    provider: doc.provider,
+    model: doc.model,
+    status: doc.status,
+    quality: doc.quality,
+    tags: Array.isArray(doc.tags) ? doc.tags : [],
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+};
+
 exports.generatePrompts = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -89,83 +145,163 @@ exports.generatePrompts = async (req, res) => {
   }
 
   try {
-    const additionalContext =
+    const additionalContextRaw =
       typeof req.body.additionalContext === 'string'
         ? req.body.additionalContext
         : '';
-    const results = [];
+    const normalizedAdditionalContext = additionalContextRaw.trim() || null;
 
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      const mime = file.mimetype || 'image/jpeg';
-      const base64 = file.buffer.toString('base64');
-      const dataUrl = `data:${mime};base64,${base64}`;
+    const preparedEntries = [];
+    const uploadedKeys = [];
 
-      const userContent = [];
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const mime = file.mimetype || 'image/jpeg';
 
-      if (additionalContext?.trim()) {
-        userContent.push({ type: 'text', text: additionalContext.trim() });
+        const uploadKey = generatePromptImageKey(file.originalname);
+        const { key: s3Key, url: s3Url } = await uploadBufferToS3(
+          file.buffer,
+          uploadKey,
+          mime
+        );
+        uploadedKeys.push(s3Key);
+
+        const base64 = file.buffer.toString('base64');
+        const dataUrl = `data:${mime};base64,${base64}`;
+
+        const userContent = [];
+
+        if (normalizedAdditionalContext) {
+          userContent.push({
+            type: 'text',
+            text: normalizedAdditionalContext,
+          });
+        }
+
+        userContent.push({
+          type: 'text',
+          text: 'Use the following reference image to extract visual details. Do not fabricate traits that are not visible.',
+        });
+
+        userContent.push({
+          type: 'image_url',
+          image_url: {
+            url: dataUrl,
+          },
+        });
+
+        const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            'HTTP-Referer': OPENROUTER_APP_URL,
+            'X-Title': OPENROUTER_APP_NAME,
+          },
+          body: JSON.stringify({
+            model: OPENROUTER_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: SYSTEM_INSTRUCTION,
+              },
+              {
+                role: 'user',
+                content: userContent,
+              },
+            ],
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (!response.ok) {
+          const errorPayload = await response.text();
+          throw new Error(
+            `OpenRouter request failed (${response.status}): ${errorPayload}`
+          );
+        }
+
+        const payload = await response.json();
+        const choice = payload?.choices?.[0]?.message;
+        const parsed = parseApiResponse(choice?.content);
+        const trimmedPrompt = parsed.prompt?.trim?.() || '';
+        const trimmedNegative = parsed.negative_prompt?.trim?.() || '';
+        const mergedPrompt =
+          trimmedNegative && trimmedNegative.length > 0
+            ? `${trimmedPrompt}${trimmedPrompt.endsWith('.') ? '' : '.'}\nDo not: ${trimmedNegative}`
+            : trimmedPrompt;
+
+        preparedEntries.push({
+          position: index,
+          fileName: file.originalname,
+          mimeType: mime,
+          size: file.size || 0,
+          prompt: mergedPrompt,
+          negativePrompt: trimmedNegative || null,
+          additionalContext: normalizedAdditionalContext,
+          s3Key,
+          s3Url,
+          quality: 'neutral',
+          tags: [],
+        });
       }
-
-      userContent.push({
-        type: 'text',
-        text: 'Use the following reference image to extract visual details. Do not fabricate traits that are not visible.',
-      });
-
-      userContent.push({
-        type: 'image_url',
-        image_url: {
-          url: dataUrl,
-        },
-      });
-
-      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          'HTTP-Referer': OPENROUTER_APP_URL,
-          'X-Title': OPENROUTER_APP_NAME,
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages: [
-            {
-              role: 'system',
-              content: SYSTEM_INSTRUCTION,
-            },
-            {
-              role: 'user',
-              content: userContent,
-            },
-          ],
-          response_format: { type: 'json_object' },
-        }),
-      });
-
-      if (!response.ok) {
-        const errorPayload = await response.text();
-        throw new Error(
-          `OpenRouter request failed (${response.status}): ${errorPayload}`
+    } catch (processingError) {
+      if (uploadedKeys.length) {
+        await Promise.allSettled(
+          uploadedKeys.map((key) => deleteFromS3(key))
         );
       }
-
-      const payload = await response.json();
-      const choice = payload?.choices?.[0]?.message;
-      const parsed = parseApiResponse(choice?.content);
-      const trimmedPrompt = parsed.prompt?.trim?.() || '';
-      const trimmedNegative = parsed.negative_prompt?.trim?.();
-      const mergedPrompt =
-        trimmedNegative && trimmedNegative.length > 0
-          ? `${trimmedPrompt}${trimmedPrompt.endsWith('.') ? '' : '.'}\nDo not: ${trimmedNegative}`
-          : trimmedPrompt;
-
-      results.push({
-        fileName: file.originalname,
-        position: index,
-        prompt: mergedPrompt,
-      });
+      throw processingError;
     }
+
+    let createdDocs = [];
+    if (preparedEntries.length) {
+      const docsToInsert = preparedEntries.map((entry) => ({
+        fileName: entry.fileName,
+        mimeType: entry.mimeType,
+        size: entry.size,
+        prompt: entry.prompt,
+        negativePrompt: entry.negativePrompt,
+        additionalContext: entry.additionalContext,
+        s3Key: entry.s3Key,
+        s3Url: entry.s3Url,
+        provider: 'openrouter',
+        model: OPENROUTER_MODEL,
+        status: 'succeeded',
+        quality: entry.quality,
+        tags: entry.tags || [],
+        requestContext: {
+          uploadPosition: entry.position,
+          additionalContext: entry.additionalContext,
+        },
+      }));
+
+      try {
+        createdDocs = await Prompt.insertMany(docsToInsert, {
+          ordered: true,
+        });
+      } catch (storageError) {
+        await Promise.allSettled(uploadedKeys.map((key) => deleteFromS3(key)));
+        throw storageError;
+      }
+    }
+
+    const results = createdDocs.map((doc, idx) => ({
+      id: doc._id,
+      promptId: doc._id,
+      position: preparedEntries[idx].position,
+      fileName: doc.fileName,
+      prompt: doc.prompt,
+      imageUrl: doc.s3Url,
+      s3Key: doc.s3Key,
+      size: doc.size,
+      mimeType: doc.mimeType,
+      additionalContext: doc.additionalContext,
+      quality: doc.quality,
+      tags: Array.isArray(doc.tags) ? doc.tags : [],
+      createdAt: doc.createdAt,
+    }));
 
     res.status(200).json({
       success: true,
@@ -178,6 +314,269 @@ exports.generatePrompts = async (req, res) => {
       success: false,
       message: 'Failed to generate prompts',
       error: error.message,
+    });
+  }
+};
+
+exports.listPrompts = async (req, res) => {
+  try {
+    const rawPage = toPositiveInteger(req.query.page, 1);
+    const rawLimit = toPositiveInteger(req.query.limit, 10);
+    const limit = Math.min(rawLimit, 100);
+    const searchRaw = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const allowedSortFields = new Set(['createdAt', 'fileName']);
+    const requestedSortBy = typeof req.query.sortBy === 'string' ? req.query.sortBy : 'createdAt';
+    const resolvedSortField = allowedSortFields.has(requestedSortBy) ? requestedSortBy : 'createdAt';
+    const sortOrderRaw = req.query.sortOrder === 'asc' ? 1 : -1;
+
+    const filters = {};
+    if (searchRaw) {
+      const expression = new RegExp(escapeRegex(searchRaw), 'i');
+      filters.$or = [
+        { prompt: expression },
+        { fileName: expression },
+        { additionalContext: expression },
+      ];
+    }
+    if (typeof req.query.quality === 'string' && req.query.quality !== 'all') {
+      const quality = req.query.quality.trim().toLowerCase();
+      if (['neutral', 'good'].includes(quality)) {
+        filters.quality = quality;
+      }
+    }
+    if (typeof req.query.tags === 'string' && req.query.tags.trim()) {
+      const parsedTags = normalizeTags(req.query.tags.split(','));
+      if (parsedTags.length > 0) {
+        filters.tags = { $all: parsedTags };
+      }
+    }
+
+    const [total, qualityStats] = await Promise.all([
+      Prompt.countDocuments(filters),
+      Prompt.aggregate([
+        {
+          $group: {
+            _id: '$quality',
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+    const totalPages =
+      limit > 0 && total > 0 ? Math.ceil(total / limit) : total > 0 ? 1 : 0;
+
+    const effectivePage =
+      limit > 0 && totalPages > 0
+        ? Math.min(Math.max(rawPage, 1), totalPages)
+        : 1;
+
+    const skip = limit > 0 ? (effectivePage - 1) * limit : 0;
+
+    const sort = { [resolvedSortField]: sortOrderRaw, _id: sortOrderRaw };
+    const query = Prompt.find(filters).sort(sort);
+    if (limit > 0) {
+      query.skip(skip).limit(limit);
+    }
+
+    const items = await query.lean();
+
+    const data = items.map((item) => ({
+      id: item._id.toString(),
+      promptId: item._id.toString(),
+      fileName: item.fileName,
+      prompt: item.prompt,
+      negativePrompt: item.negativePrompt,
+      additionalContext: item.additionalContext,
+      imageUrl: item.s3Url,
+      mimeType: item.mimeType,
+      size: item.size,
+      provider: item.provider,
+      model: item.model,
+      status: item.status,
+      quality: item.quality,
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+      pagination: {
+        page: totalPages === 0 ? 1 : effectivePage,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: limit > 0 && effectivePage < totalPages,
+        hasPrevPage: limit > 0 && effectivePage > 1,
+      },
+      filters: {
+        search: searchRaw,
+        quality:
+          typeof filters.quality === 'string' ? filters.quality : 'all',
+        tags: Array.isArray(filters?.tags?.$all) ? filters.tags.$all : [],
+        sortBy: resolvedSortField,
+        sortOrder: sortOrderRaw === 1 ? 'asc' : 'desc',
+      },
+      stats: qualityStats.reduce(
+        (acc, item) => {
+          if (item?._id === 'good') {
+            acc.totalGood = item.count;
+          } else if (item?._id === 'neutral') {
+            acc.totalNeutral = item.count;
+          }
+          acc.totalTracked += item.count;
+          return acc;
+        },
+        { totalGood: 0, totalNeutral: 0, totalTracked: 0 }
+      ),
+    });
+  } catch (error) {
+    console.error('Error fetching prompts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch prompts',
+      error: error.message,
+    });
+  }
+};
+
+exports.getPromptById = async (req, res) => {
+  try {
+    const prompt = await Prompt.findById(req.params.id);
+
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Prompt not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: serializePrompt(prompt),
+    });
+  } catch (error) {
+    console.error('Error fetching prompt:', error);
+    const status = error.name === 'CastError' ? 400 : 500;
+    res.status(status).json({
+      success: false,
+      message: status === 400 ? 'Invalid prompt identifier' : 'Failed to fetch prompt',
+      error: status === 400 ? undefined : error.message,
+    });
+  }
+};
+
+exports.updatePromptQuality = async (req, res) => {
+  try {
+    const { quality } = req.body || {};
+    const allowed = ['neutral', 'good'];
+
+    if (!quality || !allowed.includes(String(quality).toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide a valid quality value (neutral | good)',
+      });
+    }
+
+    const prompt = await Prompt.findByIdAndUpdate(
+      req.params.id,
+      {
+        quality: quality.toLowerCase(),
+      },
+      {
+        new: true,
+      }
+    );
+
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Prompt not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: serializePrompt(prompt),
+    });
+  } catch (error) {
+    console.error('Error updating prompt quality:', error);
+    const status = error.name === 'CastError' ? 400 : 500;
+    res.status(status).json({
+      success: false,
+      message: status === 400 ? 'Invalid prompt identifier' : 'Failed to update prompt quality',
+      error: status === 400 ? undefined : error.message,
+    });
+  }
+};
+
+exports.updatePromptTags = async (req, res) => {
+  try {
+    const normalizedTags = normalizeTags(req.body?.tags);
+
+    const prompt = await Prompt.findByIdAndUpdate(
+      req.params.id,
+      {
+        tags: normalizedTags,
+      },
+      {
+        new: true,
+      }
+    );
+
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Prompt not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: serializePrompt(prompt),
+    });
+  } catch (error) {
+    console.error('Error updating prompt tags:', error);
+    const status = error.name === 'CastError' ? 400 : 500;
+    res.status(status).json({
+      success: false,
+      message: status === 400 ? 'Invalid prompt identifier' : 'Failed to update prompt tags',
+      error: status === 400 ? undefined : error.message,
+    });
+  }
+};
+
+exports.deletePrompt = async (req, res) => {
+  try {
+    const prompt = await Prompt.findById(req.params.id);
+    if (!prompt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Prompt not found',
+      });
+    }
+
+    if (prompt.s3Key) {
+      await deleteFromS3(prompt.s3Key).catch((error) =>
+        console.warn(`Failed to remove prompt asset ${prompt.s3Key}: ${error.message}`)
+      );
+    }
+
+    await prompt.deleteOne();
+
+    res.status(200).json({
+      success: true,
+      message: 'Prompt deleted successfully',
+    });
+  } catch (error) {
+    console.error('Error deleting prompt:', error);
+    const status = error.name === 'CastError' ? 400 : 500;
+    res.status(status).json({
+      success: false,
+      message: status === 400 ? 'Invalid prompt identifier' : 'Failed to delete prompt',
+      error: status === 400 ? undefined : error.message,
     });
   }
 };
