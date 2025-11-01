@@ -2645,12 +2645,20 @@ exports.generateCoverPreview = async (req, res) => {
     const { generateCoverPage } = require('../utils/coverGenerator');
 
     // Generate the cover preview
+    const previewChildName =
+      typeof req.body?.childName === 'string' && req.body.childName.trim()
+        ? req.body.childName.trim()
+        : typeof leftSideData.childName === 'string' && leftSideData.childName.trim()
+        ? leftSideData.childName.trim()
+        : '';
+
     const previewBuffer = await generateCoverPage({
       backgroundImage: backgroundImageBuffer || backgroundImageUrl,
       characterImage: null,
       leftSide: leftSideData,
       rightSide: rightSideData,
       qrCode: qrCodeBuffer || qrCodeUrl,
+      childName: previewChildName,
     });
 
     // Upload to S3 temporarily with a preview key

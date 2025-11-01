@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -26,6 +27,9 @@ app.use(cors({
 }));
 app.use(bodyParser.json({ limit: '25mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' }));
+
+// Static font assets for canvas rendering
+app.use('/fonts', express.static(path.join(__dirname, 'fonts')));
 
 // Request logging middleware
 app.use((req, res, next) => {

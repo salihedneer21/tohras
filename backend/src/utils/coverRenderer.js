@@ -1,4 +1,29 @@
-const { createCanvas, loadImage } = require('canvas');
+const path = require('path');
+const { createCanvas, loadImage, registerFont } = require('canvas');
+
+const registerCoverFonts = (() => {
+  let registered = false;
+  return () => {
+    if (registered) return;
+    const fontDir = path.join(__dirname, '..', '..', 'fonts');
+    const fontEntries = [
+      { file: 'CanvaSans-Regular.otf', family: 'CanvaSans', weight: '400' },
+      { file: 'CanvaSans-Medium.otf', family: 'CanvaSans', weight: '500' },
+      { file: 'CanvaSans-Bold.otf', family: 'CanvaSans', weight: '700' },
+      { file: 'CanvaSans-RegularItalic.otf', family: 'CanvaSans', weight: '400', style: 'italic' },
+      { file: 'CanvaSans-BoldItalic.otf', family: 'CanvaSans', weight: '700', style: 'italic' },
+      { file: 'CanvaSans-MediumItalic.otf', family: 'CanvaSans', weight: '500', style: 'italic' },
+    ];
+    fontEntries.forEach(({ file, ...options }) => {
+      try {
+        registerFont(path.join(fontDir, file), options);
+      } catch (error) {
+        console.warn('[coverRenderer] Failed to register font', file, error.message);
+      }
+    });
+    registered = true;
+  };
+})();
 
 function drawRoundedRect(ctx, x, y, width, height, radius) {
   const r = Math.max(0, Math.min(radius, width / 2, height / 2));
@@ -89,34 +114,46 @@ function fitImageCover(ctx, image, width, height) {
   ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
 }
 
-function createTextSegments({ headline, bodyText, footer }) {
+function createTextSegments({ childName, headline, bodyText, footer }) {
+  const safeChildName =
+    typeof childName === 'string' && childName.trim() ? childName.trim() : 'Your child';
+
+  const defaultHeadline = `Join ${safeChildName} on an Unforgettable Adventure Across Israel!`;
+  const defaultBody = `From the sparkling shores of the Kinneret to the ancient stones of the Kotel, ${safeChildName} is on a journey like no other! With his trusty backpack and endless curiosity, he explores Israel's most treasured landmarks - floating in the Dead Sea, climbing Masada at sunrise, and dancing through the colorful streets of Jerusalem.
+Packed with wonder, learning, and heart, ${safeChildName}'s Trip to Israel is the perfect introduction to the Land of Israel for young explorers everywhere.`;
+  const defaultFooter = 'Shop more books at Mytorahtales.com';
+
+  const resolvedHeadline = headline && headline.trim() ? headline : defaultHeadline;
+  const resolvedBody = bodyText && bodyText.trim() ? bodyText : defaultBody;
+  const resolvedFooter = footer && footer.trim() ? footer : defaultFooter;
+
   const segments = [];
-  if (headline) {
+  if (resolvedHeadline) {
     segments.push({
       type: 'text',
-      text: headline,
-      font: '600 100px Arial',
+      text: resolvedHeadline,
+      font: '600 100px "CanvaSans"',
       lineHeight: 1.08,
       color: 'rgba(255,255,255,0.96)',
     });
     segments.push({ type: 'spacer', size: 28 });
   }
-  if (bodyText) {
+  if (resolvedBody) {
     segments.push({
       type: 'text',
-      text: bodyText,
-      font: '70px Arial',
+      text: resolvedBody,
+      font: '400 70px "CanvaSans"',
       lineHeight: 1.45,
       color: 'rgba(255,255,255,0.92)',
     });
   }
   segments.push({ type: 'qrBreak' });
   segments.push({ type: 'spacer', size: 28 });
-  if (footer) {
+  if (resolvedFooter) {
     segments.push({
       type: 'text',
-      text: footer,
-      font: 'bold 60px Arial',
+      text: resolvedFooter,
+      font: '700 60px "CanvaSans"',
       lineHeight: 1.1,
       color: 'rgba(255,255,255,0.94)',
     });
@@ -142,38 +179,22 @@ function layoutText(ctx, segments, startX, startY, maxWidth) {
       return;
     }
     if (segment.type === 'text') {
-      const font = segment.font || '30px Arial';
+      const font = segment.font || '30px "CanvaSans"';
       const lineHeight = segment.lineHeight || 1.3;
       const color = segment.color;
-      const rawLines = segment.text.split('\n');
-      rawLines.forEach((rawLine) => {
+      segment.text.split(/\r?\n/).forEach((rawLine) => {
         if (!rawLine.trim()) {
           currentGroup.push({ type: 'spacer', size: getFontSize(font) * (lineHeight + 0.2) });
           return;
         }
-        ctx.font = font;
-        const words = rawLine.split(' ');
-        let currentLine = '';
-        words.forEach((word) => {
-          const candidate = currentLine ? `${currentLine} ${word}` : word;
-          const width = ctx.measureText(candidate).width;
-          if (width > maxWidth && currentLine) {
-            currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
-            currentLine = word;
-          } else {
-            currentLine = candidate;
-          }
-        });
-        if (currentLine) {
-          currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
-        }
+        currentGroup.push({ type: 'text', text: rawLine, font, lineHeight, color });
       });
     }
   });
   return groups;
 }
 
-function layoutLines(lines, startX, startY) {
+function layoutLines(ctx, lines, startX, startY) {
   const positioned = [];
   let cursorY = startY;
   let top = Infinity;
@@ -187,8 +208,10 @@ function layoutLines(lines, startX, startY) {
     if (line.type === 'text') {
       const fontSize = getFontSize(line.font);
       const leading = line.lineHeight || 1.3;
+      ctx.font = line.font || '30px "CanvaSans"';
+      const measuredWidth = ctx.measureText(line.text).width;
       cursorY += fontSize;
-      positioned.push({ ...line, x: startX, y: cursorY });
+      positioned.push({ ...line, x: startX, y: cursorY, width: measuredWidth });
       top = Math.min(top, cursorY - fontSize * 1.05);
       bottom = Math.max(bottom, cursorY);
       cursorY += Math.round(fontSize * Math.max(leading - 1, 0.25));
@@ -224,7 +247,7 @@ function drawHeroTitle(ctx, childName, width, height) {
   topGradient.addColorStop(0.7, '#FFB300');
   topGradient.addColorStop(1, '#FF9800');
 
-  ctx.font = 'bold 280px Arial';
+  ctx.font = '700 280px "CanvaSans"';
   ctx.strokeStyle = '#1565C0';
   ctx.lineWidth = 35;
   ctx.strokeText(topLine, textX, topY);
@@ -237,7 +260,7 @@ function drawHeroTitle(ctx, childName, width, height) {
   bottomGradient.addColorStop(0.7, '#FFB300');
   bottomGradient.addColorStop(1, '#FF9800');
 
-  ctx.font = 'bold 200px Arial';
+  ctx.font = '700 200px "CanvaSans"';
   ctx.strokeStyle = '#1565C0';
   ctx.lineWidth = 28;
   ctx.strokeText(bottomLine, textX, bottomY);
@@ -255,6 +278,7 @@ async function renderCoverToCanvas({
   bodyText,
   childName,
 }) {
+  registerCoverFonts();
   const canvas = createCanvas(pageWidth, pageHeight);
   const ctx = canvas.getContext('2d');
 
@@ -290,34 +314,36 @@ async function renderCoverToCanvas({
   }
 
   if (characterImage) {
-    const charTargetWidth = pageWidth * 0.5;
-    const charTargetHeight = pageHeight * 1.04;
-    const charX = pageWidth * 0.5;
-    const charY = -pageHeight * 0.02;
+    const baseWidthRatio = 0.4 * 1.1;
+    const baseHeightRatio = 0.8 * 1.1;
+    const charAreaWidth = pageWidth * baseWidthRatio;
+    const charAreaHeight = pageHeight * baseHeightRatio;
+    const horizontalMargin = pageWidth * 0.02;
+    const bottomMargin = pageHeight * 0.02;
+    const areaX = pageWidth - charAreaWidth - horizontalMargin;
+    const areaY = Math.max(-pageHeight * 0.02, pageHeight - charAreaHeight - bottomMargin);
 
     const charAspectRatio = characterImage.width / characterImage.height;
-    const targetAspectRatio = charTargetWidth / charTargetHeight;
+    const targetAspectRatio = charAreaWidth / charAreaHeight;
 
     let drawWidth;
     let drawHeight;
-    let drawX;
-    let drawY;
 
     if (charAspectRatio > targetAspectRatio) {
-      drawWidth = charTargetWidth;
+      drawWidth = charAreaWidth;
       drawHeight = drawWidth / charAspectRatio;
-      drawX = charX;
-      drawY = charY + (charTargetHeight - drawHeight);
     } else {
-      drawHeight = charTargetHeight;
+      drawHeight = charAreaHeight;
       drawWidth = drawHeight * charAspectRatio;
-      drawX = charX + (charTargetWidth - drawWidth) / 2;
-      drawY = charY;
     }
+
+    const drawX = areaX + (charAreaWidth - drawWidth) / 2;
+    const drawY = areaY + (charAreaHeight - drawHeight);
     ctx.drawImage(characterImage, drawX, drawY, drawWidth, drawHeight);
   }
 
   const segments = createTextSegments({
+    childName,
     headline: cover?.headline || '',
     bodyText,
     footer: cover?.footer || '',
@@ -328,9 +354,10 @@ async function renderCoverToCanvas({
   const textMaxWidth = pageWidth * 0.32;
 
   const textGroups = layoutText(ctx, segments, textX, textStartY, textMaxWidth);
-  const beforeLayout = layoutLines(textGroups.before, textX, textStartY);
+  const beforeLayout = layoutLines(ctx, textGroups.before, textX, textStartY);
 
   const blurPaddingX = pageWidth * 0.03;
+
   let qrImage = null;
   if (qrBuffer) {
     try {
@@ -340,26 +367,32 @@ async function renderCoverToCanvas({
       qrImage = null;
     }
   }
+
+  const qrGapTop = qrImage ? 50 : 0;
+  const qrGapBottom = qrImage ? 50 : 0;
+
   const qrSize = qrImage
     ? Math.min(pageHeight * 0.1, Math.max(pageWidth * 0.06, 100))
     : 0;
 
-  const blurX = Math.max(0, textX - blurPaddingX);
-  const blurWidth = Math.min(pageWidth - blurX, textMaxWidth + blurPaddingX * 2);
+  let blurX = Math.max(0, textX - blurPaddingX);
+  const baseMaxLineWidth = Math.max(
+    textMaxWidth,
+    beforeLayout.lines.reduce((max, line) => Math.max(max, line.width || 0), 0)
+  );
 
   const computeLayout = (qrYPosition) => {
     const afterLayout = layoutLines(
+      ctx,
       textGroups.after,
       textX,
-      qrYPosition + (qrImage ? qrSize + 36 : 0)
+      qrYPosition + (qrImage ? qrSize + qrGapBottom : 0)
     );
 
-    const textBottom = afterLayout.lines.length ? afterLayout.bottom : beforeLayout.bottom;
-    const contentBottom = Math.max(textBottom, qrImage ? qrYPosition + qrSize : beforeLayout.bottom);
-
-    const internalPadding = 80;
+    const internalPadding = 100;
     const textContentTop = beforeLayout.top - 10;
     let textContentBottom = beforeLayout.bottom;
+
     if (afterLayout.lines.length) {
       textContentBottom = afterLayout.bottom;
     }
@@ -367,14 +400,47 @@ async function renderCoverToCanvas({
       textContentBottom = Math.max(textContentBottom, qrYPosition + qrSize);
     }
 
-    const blurHeight = textContentBottom - textContentTop + internalPadding * 2;
-    const blurY = pageHeight / 2 - blurHeight / 2;
+    const lastLineGroup = afterLayout.lines.length ? afterLayout.lines : beforeLayout.lines;
+    const lastLine = lastLineGroup[lastLineGroup.length - 1];
+    const lastFontSize = lastLine ? getFontSize(lastLine.font) : 0;
+    const dynamicPadding = Math.max(40, Math.round(lastFontSize * 0.6));
 
-    return { afterLayout, contentBottom, blurY, blurHeight };
+    const topPadding = 70;
+    const bottomPadding = Math.max(100, dynamicPadding);
+    const blurHeight = textContentBottom - textContentTop + topPadding + bottomPadding;
+    let blurY = textContentTop - topPadding;
+    if (blurY < 0) {
+      blurY = 0;
+    }
+    if (blurY + blurHeight > pageHeight) {
+      blurY = Math.max(0, pageHeight - blurHeight);
+    }
+
+    const afterMaxWidth = afterLayout.lines.reduce(
+      (max, line) => Math.max(max, line.width || 0),
+      0
+    );
+    const maxLineWidth = Math.max(baseMaxLineWidth, afterMaxWidth, qrImage ? qrSize : 0);
+    const desiredWidth = maxLineWidth + blurPaddingX * 2;
+    let effectiveBlurX = blurX;
+    let blurWidth = desiredWidth;
+
+    if (effectiveBlurX + blurWidth > pageWidth) {
+      if (desiredWidth >= pageWidth) {
+        effectiveBlurX = 0;
+        blurWidth = pageWidth;
+      } else {
+        effectiveBlurX = Math.max(0, pageWidth - desiredWidth);
+        blurWidth = desiredWidth;
+      }
+    }
+
+    return { afterLayout, blurY, blurHeight, blurWidth, blurX: effectiveBlurX };
   };
 
-  let qrY = qrImage ? beforeLayout.bottom + 50 : beforeLayout.bottom;
-  let { afterLayout, blurY, blurHeight } = computeLayout(qrY);
+  let qrY = qrImage ? beforeLayout.bottom + qrGapTop : beforeLayout.bottom;
+  let { afterLayout, blurY, blurHeight, blurWidth, blurX: effectiveBlurX } = computeLayout(qrY);
+  blurX = effectiveBlurX;
 
   if (blurHeight > 0 && blurWidth > 0) {
     const scale = 0.5;
@@ -413,21 +479,9 @@ async function renderCoverToCanvas({
     ctx.clip();
     ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
 
-    // Add subtle dark overlay for better text readability on bright backgrounds
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.fillRect(blurX, blurY, blurWidth, blurHeight);
-
-    // TEMPORARY: Add thick red border for testing
-    ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(blurX, blurY, blurWidth, blurHeight);
-
-    const edgeFade = 20;
-    const fadeGradient = ctx.createLinearGradient(blurX, 0, blurX + edgeFade, 0);
-    fadeGradient.addColorStop(0, 'rgba(255, 255, 255, 0.05)');
-    fadeGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = fadeGradient;
-    ctx.fillRect(blurX, blurY, edgeFade, blurHeight);
+    drawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fill();
 
     ctx.restore();
   }
@@ -442,7 +496,7 @@ async function renderCoverToCanvas({
   allLines.forEach((line) => {
     ctx.font = line.font;
     ctx.fillStyle = line.color || '#ffffff';
-    if (line.text.toLowerCase().includes('shop more books')) {
+    if (line.text.includes('Shop more books')) {
       ctx.textAlign = 'center';
       const centerX = blurX + blurWidth / 2;
       ctx.fillText(line.text, centerX, line.y);
