@@ -1,10 +1,35 @@
-const { createCanvas, loadImage } = require('canvas');
+const path = require('path');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 const fetch = require('node-fetch');
 const Replicate = require('replicate');
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
 });
+
+const registerCoverFonts = (() => {
+  let registered = false;
+  return () => {
+    if (registered) return;
+    const fontDir = path.join(__dirname, '..', '..', 'fonts');
+    const fontEntries = [
+      { file: 'CanvaSans-Regular.otf', family: 'CanvaSans', weight: '400' },
+      { file: 'CanvaSans-Medium.otf', family: 'CanvaSans', weight: '500' },
+      { file: 'CanvaSans-Bold.otf', family: 'CanvaSans', weight: '700' },
+      { file: 'CanvaSans-RegularItalic.otf', family: 'CanvaSans', weight: '400', style: 'italic' },
+      { file: 'CanvaSans-MediumItalic.otf', family: 'CanvaSans', weight: '500', style: 'italic' },
+      { file: 'CanvaSans-BoldItalic.otf', family: 'CanvaSans', weight: '700', style: 'italic' },
+    ];
+    fontEntries.forEach(({ file, ...options }) => {
+      try {
+        registerFont(path.join(fontDir, file), options);
+      } catch (error) {
+        console.warn('[coverGenerator] Failed to register font', file, error.message);
+      }
+    });
+    registered = true;
+  };
+})();
 
 /**
  * Helper function to draw rounded rectangles
@@ -114,11 +139,11 @@ function buildWrappedLines(ctx, segments, maxWidth) {
     }
 
     if (segment.type === 'text') {
-      const font = segment.font || '30px Arial';
+      const font = segment.font || '30px "CanvaSans"';
       const lineHeight = segment.lineHeight || 1.3;
       const color = segment.color;
 
-      const rawLines = segment.text.split('\n');
+      const rawLines = segment.text.split(/\r?\n/);
       rawLines.forEach((rawLine) => {
         if (!rawLine.trim()) {
           currentGroup.push({
@@ -128,37 +153,13 @@ function buildWrappedLines(ctx, segments, maxWidth) {
           return;
         }
 
-        ctx.font = font;
-        const words = rawLine.split(' ');
-        let currentLine = '';
-
-        words.forEach((word) => {
-          const candidate = currentLine ? `${currentLine} ${word}` : word;
-          const width = ctx.measureText(candidate).width;
-
-          if (width > maxWidth && currentLine) {
-            currentGroup.push({
-              type: 'text',
-              text: currentLine,
-              font,
-              lineHeight,
-              color,
-            });
-            currentLine = word;
-          } else {
-            currentLine = candidate;
-          }
+        currentGroup.push({
+          type: 'text',
+          text: rawLine,
+          font,
+          lineHeight,
+          color,
         });
-
-        if (currentLine) {
-          currentGroup.push({
-            type: 'text',
-            text: currentLine,
-            font,
-            lineHeight,
-            color,
-          });
-        }
       });
     }
   });
@@ -169,7 +170,7 @@ function buildWrappedLines(ctx, segments, maxWidth) {
 /**
  * Layout text lines with positioning
  */
-function layoutTextLines(lines, startX, startY) {
+function layoutTextLines(ctx, lines, startX, startY) {
   const positioned = [];
   let cursorY = startY;
   let top = Infinity;
@@ -184,12 +185,15 @@ function layoutTextLines(lines, startX, startY) {
     if (line.type === 'text') {
       const fontSize = getFontSize(line.font);
       const leading = line.lineHeight || 1.3;
+      ctx.font = line.font || '30px "CanvaSans"';
+      const measuredWidth = ctx.measureText(line.text).width;
       cursorY += fontSize;
 
       positioned.push({
         ...line,
         x: startX,
         y: cursorY,
+        width: measuredWidth,
       });
 
       top = Math.min(top, cursorY - fontSize * 1.05);
@@ -205,6 +209,55 @@ function layoutTextLines(lines, startX, startY) {
   }
 
   return { lines: positioned, top, bottom, cursor: cursorY };
+}
+
+function drawHeroTitle(ctx, childName, width, height, overrides = {}) {
+  const safeName =
+    childName && childName.trim() ? childName.trim().toUpperCase() : 'YOUR CHILD';
+  const topLine =
+    typeof overrides.mainTitle === 'string' && overrides.mainTitle.trim()
+      ? overrides.mainTitle.trim()
+      : `${safeName}'S TRIP`;
+  const bottomLine =
+    typeof overrides.subtitle === 'string' && overrides.subtitle.trim()
+      ? overrides.subtitle.trim()
+      : 'TO ISRAEL';
+
+  const textX = width * 0.75;
+  const bottomMargin = 250;
+  const topY = height - bottomMargin - 280;
+  const bottomY = topY + 280;
+
+  ctx.lineJoin = 'round';
+  ctx.miterLimit = 2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  const topGradient = ctx.createLinearGradient(0, topY - 280, 0, topY);
+  topGradient.addColorStop(0, '#FFE082');
+  topGradient.addColorStop(0.3, '#FFD54F');
+  topGradient.addColorStop(0.7, '#FFB300');
+  topGradient.addColorStop(1, '#FF9800');
+
+  ctx.font = '700 280px "CanvaSans"';
+  ctx.strokeStyle = '#1565C0';
+  ctx.lineWidth = 35;
+  ctx.strokeText(topLine, textX, topY);
+  ctx.fillStyle = topGradient;
+  ctx.fillText(topLine, textX, topY);
+
+  const bottomGradient = ctx.createLinearGradient(0, bottomY - 200, 0, bottomY);
+  bottomGradient.addColorStop(0, '#FFE082');
+  bottomGradient.addColorStop(0.3, '#FFD54F');
+  bottomGradient.addColorStop(0.7, '#FFB300');
+  bottomGradient.addColorStop(1, '#FF9800');
+
+  ctx.font = '700 200px "CanvaSans"';
+  ctx.strokeStyle = '#1565C0';
+  ctx.lineWidth = 28;
+  ctx.strokeText(bottomLine, textX, bottomY);
+  ctx.fillStyle = bottomGradient;
+  ctx.fillText(bottomLine, textX, bottomY);
 }
 
 /**
@@ -232,7 +285,10 @@ async function generateCoverPage(options) {
     leftSide = {},
     rightSide = {},
     qrCode = null,
+    childName = '',
   } = options;
+
+  registerCoverFonts();
 
   // Load background image
   const bgImage = await loadImageFromSource(backgroundImage);
@@ -278,31 +334,32 @@ async function generateCoverPage(options) {
     }
   }
 
-  // Draw character image if loaded - positioned in bottom center of right half
   if (charImage) {
-    // Character size optimized for better visibility
-    const charTargetWidth = width * 0.42; // 42% of canvas width
-    const charTargetHeight = height * 1.25; // 125% of canvas height
+    const baseWidthRatio = 0.4 * 1.1;
+    const baseHeightRatio = 0.8 * 1.1;
+    const charAreaWidth = width * baseWidthRatio;
+    const charAreaHeight = height * baseHeightRatio;
+    const horizontalMargin = width * 0.02;
+    const bottomMargin = height * 0.02;
+    const areaX = width - charAreaWidth - horizontalMargin;
+    const areaY = Math.max(-height * 0.02, height - charAreaHeight - bottomMargin);
 
     const charAspectRatio = charImage.width / charImage.height;
-    const targetAspectRatio = charTargetWidth / charTargetHeight;
+    const targetAspectRatio = charAreaWidth / charAreaHeight;
 
     let drawWidth;
     let drawHeight;
 
-    // Calculate dimensions to fit the target area while maintaining aspect ratio
     if (charAspectRatio > targetAspectRatio) {
-      drawWidth = charTargetWidth;
+      drawWidth = charAreaWidth;
       drawHeight = drawWidth / charAspectRatio;
     } else {
-      drawHeight = charTargetHeight;
+      drawHeight = charAreaHeight;
       drawWidth = drawHeight * charAspectRatio;
     }
 
-    // Position: horizontally centered in right half (shifted 40px left), vertically aligned to bottom
-    const rightHalfCenterX = width * 0.75 - 40; // Center of right half (50% + 25%) - 40px
-    const drawX = rightHalfCenterX - drawWidth / 2; // Center the character
-    const drawY = height - drawHeight; // Align to bottom
+    const drawX = areaX + (charAreaWidth - drawWidth) / 2;
+    const drawY = areaY + (charAreaHeight - drawHeight);
 
     ctx.drawImage(charImage, drawX, drawY, drawWidth, drawHeight);
   }
@@ -317,40 +374,58 @@ async function generateCoverPage(options) {
     }
   }
 
-  // Prepare text segments for left side
+  const safeChildName =
+    typeof childName === 'string' && childName.trim()
+      ? childName.trim()
+      : 'Your child';
+
+  const defaultTitle = `Join ${safeChildName} on an Unforgettable Adventure Across Israel!`;
+  const defaultContent = `From the sparkling shores of the Kinneret to the ancient stones of the Kotel, ${safeChildName} is on a journey like no other! With his trusty backpack and endless curiosity, he explores Israel's most treasured landmarks - floating in the Dead Sea, climbing Masada at sunrise, and dancing through the colorful streets of Jerusalem.
+Packed with wonder, learning, and heart, ${safeChildName}'s Trip to Israel is the perfect introduction to the Land of Israel for young explorers everywhere.`;
+  const defaultFooter = 'Shop more books at Mytorahtales.com';
+
+  const resolvedTitle =
+    typeof leftSide.title === 'string' && leftSide.title.trim() ? leftSide.title : defaultTitle;
+  const resolvedContent =
+    typeof leftSide.content === 'string' && leftSide.content.trim()
+      ? leftSide.content
+      : defaultContent;
+  const resolvedFooter =
+    typeof leftSide.bottomText === 'string' && leftSide.bottomText.trim()
+      ? leftSide.bottomText
+      : defaultFooter;
+
   const textSegments = [];
 
-  if (leftSide.title) {
+  if (resolvedTitle) {
     textSegments.push({
       type: 'text',
-      text: leftSide.title,
-      font: '600 100px Arial',
+      text: resolvedTitle,
+      font: '600 100px "CanvaSans"',
       lineHeight: 1.08,
       color: 'rgba(255,255,255,0.96)',
     });
     textSegments.push({ type: 'spacer', size: 28 });
   }
 
-  if (leftSide.content) {
+  if (resolvedContent) {
     textSegments.push({
       type: 'text',
-      text: leftSide.content,
-      font: '70px Arial',
+      text: resolvedContent,
+      font: '400 70px "CanvaSans"',
       lineHeight: 1.45,
       color: 'rgba(255,255,255,0.92)',
     });
   }
 
-  if (qrImage) {
-    textSegments.push({ type: 'qrBreak' });
-    textSegments.push({ type: 'spacer', size: 28 });
-  }
+  textSegments.push({ type: 'qrBreak' });
+  textSegments.push({ type: 'spacer', size: 28 });
 
-  if (leftSide.bottomText) {
+  if (resolvedFooter) {
     textSegments.push({
       type: 'text',
-      text: leftSide.bottomText,
-      font: 'bold 60px Arial',
+      text: resolvedFooter,
+      font: '700 60px "CanvaSans"',
       lineHeight: 1.1,
       color: 'rgba(255,255,255,0.94)',
     });
@@ -362,7 +437,7 @@ async function generateCoverPage(options) {
   const textMaxWidth = width * 0.32;
 
   const textGroups = buildWrappedLines(ctx, textSegments, textMaxWidth);
-  const beforeLayout = layoutTextLines(textGroups.before, textX, textStartY);
+  const beforeLayout = layoutTextLines(ctx, textGroups.before, textX, textStartY);
 
   // QR code dimensions and layout
   const qrSize = qrImage ? Math.min(height * 0.10, Math.max(width * 0.06, 100)) : 0;
@@ -371,6 +446,7 @@ async function generateCoverPage(options) {
   const qrY = qrImage ? beforeLayout.bottom + qrGapTop : beforeLayout.bottom;
 
   const afterLayout = layoutTextLines(
+    ctx,
     textGroups.after,
     textX,
     qrY + (qrImage ? qrSize + qrGapBottom : 0)
@@ -378,22 +454,59 @@ async function generateCoverPage(options) {
 
   // Calculate blur box dimensions
   const blurPaddingX = width * 0.03;
-  const internalPadding = 80;
+  let blurX = Math.max(0, textX - blurPaddingX);
+  const baseMaxLineWidth = Math.max(
+    textMaxWidth,
+    beforeLayout.lines.reduce((max, line) => Math.max(max, line.width || 0), 0)
+  );
 
-  const textContentTop = beforeLayout.top - 10;
-  let textContentBottom = beforeLayout.bottom;
-  if (afterLayout.lines.length > 0) {
-    textContentBottom = afterLayout.bottom;
-  }
-  if (qrImage) {
-    textContentBottom = Math.max(textContentBottom, qrY + qrSize);
-  }
+  const computeBlurMetrics = () => {
+    const textContentTop = beforeLayout.top - 10;
+    let textContentBottom = beforeLayout.bottom;
+    if (afterLayout.lines.length > 0) {
+      textContentBottom = afterLayout.bottom;
+    }
+    if (qrImage) {
+      textContentBottom = Math.max(textContentBottom, qrY + qrSize);
+    }
 
-  const blurHeight = (textContentBottom - textContentTop) + (internalPadding * 2);
-  const verticalCenter = height / 2;
-  const blurY = verticalCenter - (blurHeight / 2);
-  const blurX = Math.max(0, textX - blurPaddingX);
-  const blurWidth = Math.min(width - blurX, textMaxWidth + blurPaddingX * 2);
+    const lastLineGroup = afterLayout.lines.length ? afterLayout.lines : beforeLayout.lines;
+    const lastLine = lastLineGroup[lastLineGroup.length - 1];
+    const lastFontSize = lastLine ? getFontSize(lastLine.font) : 0;
+    const dynamicPadding = Math.max(40, Math.round(lastFontSize * 0.6));
+    const topPadding = 70;
+    const bottomPadding = Math.max(100, dynamicPadding);
+    const blurHeight = (textContentBottom - textContentTop) + topPadding + bottomPadding;
+    let blurY = textContentTop - topPadding;
+    if (blurY < 0) blurY = 0;
+    if (blurY + blurHeight > height) {
+      blurY = Math.max(0, height - blurHeight);
+    }
+
+    const afterMaxWidth = afterLayout.lines.reduce(
+      (max, line) => Math.max(max, line.width || 0),
+      0
+    );
+    const maxLineWidth = Math.max(baseMaxLineWidth, afterMaxWidth, qrImage ? qrSize : 0);
+    const desiredWidth = maxLineWidth + blurPaddingX * 2;
+    let effectiveBlurX = blurX;
+    let blurWidth = desiredWidth;
+
+    if (effectiveBlurX + blurWidth > width) {
+      if (desiredWidth >= width) {
+        effectiveBlurX = 0;
+        blurWidth = width;
+      } else {
+        effectiveBlurX = Math.max(0, width - desiredWidth);
+        blurWidth = desiredWidth;
+      }
+    }
+
+    return { blurHeight, blurY, blurWidth, blurX: effectiveBlurX };
+  };
+
+  const { blurHeight, blurY, blurWidth, blurX: effectiveBlurX } = computeBlurMetrics();
+  blurX = effectiveBlurX;
 
   const overlayRadius = 20;
 
@@ -432,21 +545,9 @@ async function generateCoverPage(options) {
     ctx.clip();
     ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
 
-    // Add subtle dark overlay for better text readability on bright backgrounds
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.fillRect(blurX, blurY, blurWidth, blurHeight);
-
-    // TEMPORARY: Add thick red border for testing
-    ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(blurX, blurY, blurWidth, blurHeight);
-
-    const edgeFade = 20;
-    const fadeGradient = ctx.createLinearGradient(blurX, 0, blurX + edgeFade, 0);
-    fadeGradient.addColorStop(0, "rgba(255, 255, 255, 0.05)");
-    fadeGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = fadeGradient;
-    ctx.fillRect(blurX, blurY, edgeFade, blurHeight);
+    drawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fill();
 
     ctx.restore();
   }
@@ -463,7 +564,7 @@ async function generateCoverPage(options) {
     ctx.font = line.font;
     ctx.fillStyle = line.color || '#ffffff';
 
-    if (line.text.includes(leftSide.bottomText)) {
+    if (line.text.includes('Shop more books')) {
       ctx.textAlign = 'center';
       const centerX = blurX + blurWidth / 2;
       ctx.fillText(line.text, centerX, line.y);
@@ -493,49 +594,7 @@ async function generateCoverPage(options) {
     ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
   }
 
-  // Draw right side title
-  if (rightSide.mainTitle) {
-    const mainTitleText = (rightSide.mainTitle || '').toUpperCase();
-    const textXRight = width * 0.75 - 40; // Shifted 40px left
-    const bottomMargin = 250;
-    const topY = height - bottomMargin - 280;
-    const bottomY = topY + 280;
-
-    ctx.lineJoin = 'round';
-    ctx.miterLimit = 2;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-
-    // Draw main title
-    const topGradient = ctx.createLinearGradient(0, topY - 280, 0, topY);
-    topGradient.addColorStop(0, '#FFE082');
-    topGradient.addColorStop(0.3, '#FFD54F');
-    topGradient.addColorStop(0.7, '#FFB300');
-    topGradient.addColorStop(1, '#FF9800');
-
-    ctx.font = 'bold 280px Arial';
-    ctx.strokeStyle = '#1565C0';
-    ctx.lineWidth = 35;
-    ctx.strokeText(mainTitleText, textXRight, topY);
-    ctx.fillStyle = topGradient;
-    ctx.fillText(mainTitleText, textXRight, topY);
-
-    // Draw subtitle if provided
-    if (rightSide.subtitle) {
-      const bottomGradient = ctx.createLinearGradient(0, bottomY - 200, 0, bottomY);
-      bottomGradient.addColorStop(0, '#FFE082');
-      bottomGradient.addColorStop(0.3, '#FFD54F');
-      bottomGradient.addColorStop(0.7, '#FFB300');
-      bottomGradient.addColorStop(1, '#FF9800');
-
-      ctx.font = 'bold 200px Arial';
-      ctx.strokeStyle = '#1565C0';
-      ctx.lineWidth = 28;
-      ctx.strokeText(rightSide.subtitle, textXRight, bottomY);
-      ctx.fillStyle = bottomGradient;
-      ctx.fillText(rightSide.subtitle, textXRight, bottomY);
-    }
-  }
+  drawHeroTitle(ctx, childName, width, height, rightSide);
 
   return canvas.toBuffer('image/png');
 }
