@@ -613,9 +613,19 @@ async function generateStorybookPdf({ title, pages }) {
   let accentFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   let hebrewFont = bodyFont;
 
-  const bodyFontPath = optionalFontPath('STORYBOOK_BODY_FONT', 'fonts/CanvaSans-Regular.otf');
-  const accentFontPath = optionalFontPath('STORYBOOK_ACCENT_FONT', 'fonts/CanvaSans-Bold.otf');
-  const hebrewFontPath = optionalFontPath('STORYBOOK_HEBREW_FONT', null);
+  const fontsDir = path.join(__dirname, '..', '..', 'fonts');
+  const bodyFontPath = optionalFontPath(
+    'STORYBOOK_BODY_FONT',
+    path.join(fontsDir, 'CanvaSans-Regular.otf')
+  );
+  const accentFontPath = optionalFontPath(
+    'STORYBOOK_ACCENT_FONT',
+    path.join(fontsDir, 'CanvaSans-Bold.otf')
+  );
+  const hebrewFontPath = optionalFontPath(
+    'STORYBOOK_HEBREW_FONT',
+    path.join(fontsDir, 'nehama.ttf')
+  );
 
   const customBodyFont = await tryEmbedCustomFont(pdfDoc, bodyFontPath);
   if (customBodyFont) {
@@ -667,6 +677,7 @@ async function generateStorybookPdf({ title, pages }) {
               subtitle: replaceChildPlaceholders(coverPage.rightSide?.subtitle, childName),
             },
             qrCode: await resolveGeneratorSource(coverPage.qrCode),
+            childName,
           });
 
           if (coverBuffer) {

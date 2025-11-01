@@ -48,6 +48,48 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 const JOB_HISTORY_LIMIT = 10;
 
+const getCoverAssetsBaseUrl = () => {
+  const apiUrl = API_BASE_URL;
+  return apiUrl.replace(/\/?api\/?$/, '');
+};
+
+const ensureCoverFonts = (() => {
+  let loadingPromise = null;
+  return () => {
+    if (typeof window === 'undefined' || !('FontFace' in window)) {
+      return Promise.resolve();
+    }
+    if (loadingPromise) return loadingPromise;
+
+    const baseUrl = getCoverAssetsBaseUrl();
+    const fontDefs = [
+      { file: 'CanvaSans-Regular.otf', weight: '400', style: 'normal' },
+      { file: 'CanvaSans-Medium.otf', weight: '500', style: 'normal' },
+      { file: 'CanvaSans-Bold.otf', weight: '700', style: 'normal' },
+      { file: 'CanvaSans-RegularItalic.otf', weight: '400', style: 'italic' },
+      { file: 'CanvaSans-MediumItalic.otf', weight: '500', style: 'italic' },
+      { file: 'CanvaSans-BoldItalic.otf', weight: '700', style: 'italic' },
+    ];
+
+    loadingPromise = Promise.all(
+      fontDefs.map(async ({ file, weight, style }) => {
+        try {
+          const font = new FontFace('CanvaSans', `url(${baseUrl}/fonts/${file})`, {
+            weight,
+            style,
+          });
+          const loaded = await font.load();
+          document.fonts.add(loaded);
+        } catch (error) {
+          console.warn('[coverPreview] Font load failed:', file, error?.message || error);
+        }
+      })
+    ).catch(() => {}).then(() => undefined);
+
+    return loadingPromise;
+  };
+})();
+
 const JOB_STATUS_META = {
   queued: { label: 'Queued', variant: 'outline' },
   generating: { label: 'Generating', variant: 'default' },
@@ -324,34 +366,46 @@ const coverFitImage = (ctx, image, width, height) => {
   ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
 };
 
-const coverCreateSegments = ({ headline, bodyText, footer }) => {
+const coverCreateSegments = ({ childName, headline, bodyText, footer }) => {
+  const safeChildName =
+    childName && childName.trim() ? childName.trim() : 'Your child';
+
+  const defaultHeadline = `Join ${safeChildName} on an Unforgettable Adventure Across Israel!`;
+  const defaultBody = `From the sparkling shores of the Kinneret to the ancient stones of the Kotel, ${safeChildName} is on a journey like no other! With his trusty backpack and endless curiosity, he explores Israel's most treasured landmarks - floating in the Dead Sea, climbing Masada at sunrise, and dancing through the colorful streets of Jerusalem.
+Packed with wonder, learning, and heart, ${safeChildName}'s Trip to Israel is the perfect introduction to the Land of Israel for young explorers everywhere.`;
+  const defaultFooter = 'Shop more books at Mytorahtales.com';
+
+  const resolvedHeadline = headline && headline.trim() ? headline : defaultHeadline;
+  const resolvedBody = bodyText && bodyText.trim() ? bodyText : defaultBody;
+  const resolvedFooter = footer && footer.trim() ? footer : defaultFooter;
+
   const segments = [];
-  if (headline) {
+  if (resolvedHeadline) {
     segments.push({
       type: 'text',
-      text: headline,
-      font: '600 100px Arial',
+      text: resolvedHeadline,
+      font: '600 100px "CanvaSans"',
       lineHeight: 1.08,
       color: 'rgba(255,255,255,0.96)',
     });
     segments.push({ type: 'spacer', size: 28 });
   }
-  if (bodyText) {
+  if (resolvedBody) {
     segments.push({
       type: 'text',
-      text: bodyText,
-      font: '70px Arial',
+      text: resolvedBody,
+      font: '400 70px "CanvaSans"',
       lineHeight: 1.45,
       color: 'rgba(255,255,255,0.92)',
     });
   }
   segments.push({ type: 'qrBreak' });
   segments.push({ type: 'spacer', size: 28 });
-  if (footer) {
+  if (resolvedFooter) {
     segments.push({
       type: 'text',
-      text: footer,
-      font: 'bold 60px Arial',
+      text: resolvedFooter,
+      font: '700 60px "CanvaSans"',
       lineHeight: 1.1,
       color: 'rgba(255,255,255,0.94)',
     });
@@ -378,30 +432,15 @@ const coverLayoutText = (ctx, segments, startX, startY, maxWidth) => {
       return;
     }
     if (segment.type === 'text') {
-      const font = segment.font || '30px Arial';
+      const font = segment.font || '30px "CanvaSans"';
       const lineHeight = segment.lineHeight || 1.3;
       const color = segment.color;
-      segment.text.split('\n').forEach((rawLine) => {
+      segment.text.split(/\r?\n/).forEach((rawLine) => {
         if (!rawLine.trim()) {
           currentGroup.push({ type: 'spacer', size: coverGetFontSize(font) * (lineHeight + 0.2) });
           return;
         }
-        ctx.font = font;
-        const words = rawLine.split(' ');
-        let currentLine = '';
-        words.forEach((word) => {
-          const candidate = currentLine ? `${currentLine} ${word}` : word;
-          const width = ctx.measureText(candidate).width;
-          if (width > maxWidth && currentLine) {
-            currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
-            currentLine = word;
-          } else {
-            currentLine = candidate;
-          }
-        });
-        if (currentLine) {
-          currentGroup.push({ type: 'text', text: currentLine, font, lineHeight, color });
-        }
+        currentGroup.push({ type: 'text', text: rawLine, font, lineHeight, color });
       });
     }
   });
@@ -409,7 +448,7 @@ const coverLayoutText = (ctx, segments, startX, startY, maxWidth) => {
   return groups;
 };
 
-const coverLayoutLines = (lines, startX, startY) => {
+const coverLayoutLines = (ctx, lines, startX, startY) => {
   const positioned = [];
   let cursorY = startY;
   let top = Infinity;
@@ -423,8 +462,10 @@ const coverLayoutLines = (lines, startX, startY) => {
     if (line.type === 'text') {
       const fontSize = coverGetFontSize(line.font);
       const leading = line.lineHeight || 1.3;
+      ctx.font = line.font || '30px "CanvaSans"';
+      const measuredWidth = ctx.measureText(line.text).width;
       cursorY += fontSize;
-      positioned.push({ ...line, x: startX, y: cursorY });
+      positioned.push({ ...line, x: startX, y: cursorY, width: measuredWidth });
       top = Math.min(top, cursorY - fontSize * 1.05);
       bottom = Math.max(bottom, cursorY);
       cursorY += Math.round(fontSize * Math.max(leading - 1, 0.25));
@@ -439,10 +480,16 @@ const coverLayoutLines = (lines, startX, startY) => {
   return { lines: positioned, top, bottom, cursor: cursorY };
 };
 
-const coverDrawHero = (ctx, childName, width, height) => {
+const coverDrawHero = (ctx, childName, width, height, overrides = {}) => {
   const safeName = childName && childName.trim() ? childName.trim().toUpperCase() : 'YOUR CHILD';
-  const topLine = `${safeName}'S TRIP`;
-  const bottomLine = 'TO ISRAEL';
+  const topLine =
+    typeof overrides.mainTitle === 'string' && overrides.mainTitle.trim()
+      ? overrides.mainTitle.trim()
+      : `${safeName}'S TRIP`;
+  const bottomLine =
+    typeof overrides.subtitle === 'string' && overrides.subtitle.trim()
+      ? overrides.subtitle.trim()
+      : 'TO ISRAEL';
 
   const textX = width * 0.75;
   const bottomMargin = 250;
@@ -460,7 +507,7 @@ const coverDrawHero = (ctx, childName, width, height) => {
   topGradient.addColorStop(0.7, '#FFB300');
   topGradient.addColorStop(1, '#FF9800');
 
-  ctx.font = 'bold 280px Arial';
+  ctx.font = '700 280px "CanvaSans"';
   ctx.strokeStyle = '#1565C0';
   ctx.lineWidth = 35;
   ctx.strokeText(topLine, textX, topY);
@@ -473,7 +520,7 @@ const coverDrawHero = (ctx, childName, width, height) => {
   bottomGradient.addColorStop(0.7, '#FFB300');
   bottomGradient.addColorStop(1, '#FF9800');
 
-  ctx.font = 'bold 200px Arial';
+  ctx.font = '700 200px "CanvaSans"';
   ctx.strokeStyle = '#1565C0';
   ctx.lineWidth = 28;
   ctx.strokeText(bottomLine, textX, bottomY);
@@ -481,10 +528,179 @@ const coverDrawHero = (ctx, childName, width, height) => {
   ctx.fillText(bottomLine, textX, bottomY);
 };
 
+const dedicationCreateSegments = ({ title = '', secondTitle = '' }) => {
+  const segments = [];
+
+  // Title = Main heading (larger, bolder) - appears on TOP
+  if (title && title.trim()) {
+    title.split(/\r?\n/).forEach((line) => {
+      if (!line.trim()) {
+        segments.push({ type: 'spacer', size: 120 });
+      } else {
+        segments.push({
+          type: 'text',
+          text: line,
+          font: '800 280px "CanvaSans"', // Larger and bolder
+          lineHeight: 1.12,
+          color: 'white',
+          isTitle: true,
+        });
+      }
+    });
+    segments.push({ type: 'spacer', size: 90 });
+  }
+
+  // SecondTitle = Subtitle (smaller, lighter) - appears BELOW title
+  if (secondTitle && secondTitle.trim()) {
+    secondTitle.split(/\r?\n/).forEach((line) => {
+      if (!line.trim()) {
+        segments.push({ type: 'spacer', size: 100 });
+      } else {
+        segments.push({
+          type: 'text',
+          text: line,
+          font: '500 170px "CanvaSans"', // Medium weight
+          lineHeight: 1.28,
+          color: 'white',
+          isTitle: false,
+        });
+      }
+    });
+  }
+
+  return segments;
+};
+
+const dedicationLayoutLines = (ctx, segments, startX, startY, maxWidth) => {
+  // EXACT backend calculations - match dedicationGenerator.js:314-349
+  const positioned = [];
+  let cursorY = startY;
+  let top = Infinity;
+  let bottom = -Infinity;
+
+  segments.forEach((segment) => {
+    if (segment.type === 'spacer') {
+      cursorY += segment.size ?? 120;
+      return;
+    }
+    if (segment.type === 'text') {
+      const fontSize = coverGetFontSize(segment.font);
+      const leading = segment.lineHeight || 1.2;
+      ctx.font = segment.font;
+      const measuredWidth = Math.min(ctx.measureText(segment.text).width, maxWidth);
+      cursorY += fontSize;
+      positioned.push({
+        ...segment,
+        x: startX,
+        y: cursorY,
+        width: measuredWidth,
+      });
+      top = Math.min(top, cursorY - fontSize * 1.05);
+      bottom = Math.max(bottom, cursorY);
+      cursorY += Math.round(fontSize * Math.max(leading - 1, 0.25));
+    }
+  });
+
+  if (!positioned.length) {
+    top = startY;
+    bottom = startY;
+  }
+
+  return { lines: positioned, top, bottom };
+};
+
+const computeDedicationBlur = (lines, {
+  textAreaStartX,
+  textMaxWidth,
+  width,
+  height,
+  paddingX,
+}) => {
+  // EXACT backend calculations - match dedicationGenerator.js:351-388
+  if (!lines?.lines?.length) return null;
+
+  const { top, bottom } = lines;
+  const lastLine = lines.lines[lines.lines.length - 1];
+  const lastFontSize = lastLine ? coverGetFontSize(lastLine.font) : 0;
+  const dynamicPadding = Math.max(40, Math.round(lastFontSize * 0.6));
+  const topPadding = 70;
+  const bottomPadding = Math.max(100, dynamicPadding);
+  const blurHeight = bottom - top + topPadding + bottomPadding;
+  let blurY = top - topPadding;
+  if (blurY < 0) blurY = 0;
+  if (blurY + blurHeight > height) {
+    blurY = Math.max(0, height - blurHeight);
+  }
+
+  const baseMaxWidth = Math.max(
+    textMaxWidth,
+    lines.lines.reduce((max, line) => Math.max(max, line.width || 0), 0)
+  );
+  const desiredWidth = baseMaxWidth + paddingX * 2;
+  let blurX = Math.max(0, textAreaStartX - paddingX);
+  let blurWidth = desiredWidth;
+
+  if (blurX + blurWidth > width) {
+    if (desiredWidth >= width) {
+      blurX = 0;
+      blurWidth = width;
+    } else {
+      blurX = Math.max(0, width - desiredWidth);
+      blurWidth = desiredWidth;
+    }
+  }
+
+  return { blurX, blurY, blurWidth, blurHeight };
+};
+
+const drawDedicationText = (ctx, layout) => {
+  if (!layout?.lines?.length) return;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+
+  layout.lines.forEach((line) => {
+    ctx.font = line.font;
+    const fontSize = coverGetFontSize(line.font);
+
+    ctx.save();
+
+    // Stronger shadow for titles, softer for subtitles
+    if (line.isTitle) {
+      ctx.shadowColor = 'rgba(0,0,0,0.65)';
+      ctx.shadowBlur = 50;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 28;
+    } else {
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = 35;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 20;
+    }
+
+    // Create white gradient with slight variation for depth
+    const gradient = ctx.createLinearGradient(
+      line.x,
+      line.y - fontSize * 1.1,
+      line.x,
+      line.y + fontSize * 0.1
+    );
+    gradient.addColorStop(0, '#FFFFFF');
+    gradient.addColorStop(0.5, '#F8F8F8');
+    gradient.addColorStop(1, '#F0F0F0');
+
+    ctx.fillStyle = gradient;
+    ctx.fillText(line.text, line.x, line.y);
+
+    ctx.restore();
+  });
+};
+
 const renderCoverPreview = async (canvas, model, signal) => {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+
+  await ensureCoverFonts();
 
   canvas.width = PDF_PAGE_WIDTH;
   canvas.height = PDF_PAGE_HEIGHT;
@@ -526,32 +742,36 @@ const renderCoverPreview = async (canvas, model, signal) => {
   }
 
   if (characterImage) {
-    const charTargetWidth = PDF_PAGE_WIDTH * 0.5;
-    const charTargetHeight = PDF_PAGE_HEIGHT * 1.04;
-    const charX = PDF_PAGE_WIDTH * 0.5;
-    const charY = -PDF_PAGE_HEIGHT * 0.02;
+    const baseHeightRatio = 0.8 * 1.1;
+    const charAreaWidth = PDF_PAGE_WIDTH / 2;
+    const charAreaHeight = PDF_PAGE_HEIGHT * baseHeightRatio;
+    const horizontalMargin = PDF_PAGE_WIDTH * 0.02;
+    const bottomMargin = PDF_PAGE_HEIGHT * 0.02;
+    const areaX = PDF_PAGE_WIDTH - charAreaWidth - horizontalMargin;
+    const areaY = Math.max(-PDF_PAGE_HEIGHT * 0.02, PDF_PAGE_HEIGHT - charAreaHeight - bottomMargin);
+
     const charAspectRatio = characterImage.width / characterImage.height;
-    const targetAspectRatio = charTargetWidth / charTargetHeight;
+    const targetAspectRatio = charAreaWidth / charAreaHeight;
+
     let drawWidth;
     let drawHeight;
-    let drawX;
-    let drawY;
+
     if (charAspectRatio > targetAspectRatio) {
-      drawWidth = charTargetWidth;
+      drawWidth = charAreaWidth;
       drawHeight = drawWidth / charAspectRatio;
-      drawX = charX;
-      drawY = charY + (charTargetHeight - drawHeight);
     } else {
-      drawHeight = charTargetHeight;
+      drawHeight = charAreaHeight;
       drawWidth = drawHeight * charAspectRatio;
-      drawX = charX + (charTargetWidth - drawWidth) / 2;
-      drawY = charY;
     }
+
+    const drawX = areaX + (charAreaWidth - drawWidth) / 2;
+    const drawY = areaY + (charAreaHeight - drawHeight);
     ctx.drawImage(characterImage, drawX, drawY, drawWidth, drawHeight);
   }
 
   const bodyText = model.cover?.bodyOverride || model.bodyText || '';
   const segments = coverCreateSegments({
+    childName: model.cover?.childName || model.readerName || '',
     headline: model.cover?.headline || '',
     bodyText,
     footer: model.cover?.footer || '',
@@ -561,29 +781,28 @@ const renderCoverPreview = async (canvas, model, signal) => {
   const textStartY = PDF_PAGE_HEIGHT * 0.22;
   const textMaxWidth = PDF_PAGE_WIDTH * 0.32;
   const textGroups = coverLayoutText(ctx, segments, textX, textStartY, textMaxWidth);
-  const beforeLayout = coverLayoutLines(textGroups.before, textX, textStartY);
+  const beforeLayout = coverLayoutLines(ctx, textGroups.before, textX, textStartY);
 
-  const blurPaddingX = PDF_PAGE_WIDTH * 0.12;
+  const blurPaddingX = PDF_PAGE_WIDTH * 0.03;
+  const qrGapTop = qrImage ? 50 : 0;
+  const qrGapBottom = qrImage ? 50 : 0;
   const qrSize = qrImage
     ? Math.min(PDF_PAGE_HEIGHT * 0.1, Math.max(PDF_PAGE_WIDTH * 0.06, 100))
     : 0;
-  const blurX = Math.max(0, textX - blurPaddingX);
-  const blurWidth = Math.min(PDF_PAGE_WIDTH - blurX, textMaxWidth + blurPaddingX * 2);
+  let blurX = Math.max(0, textX - blurPaddingX);
+  const baseMaxLineWidth = Math.max(
+    textMaxWidth,
+    beforeLayout.lines.reduce((max, line) => Math.max(max, line.width || 0), 0)
+  );
 
   const computeLayout = (qrYPosition) => {
     const afterLayout = coverLayoutLines(
+      ctx,
       textGroups.after,
       textX,
-      qrYPosition + (qrImage ? qrSize + 36 : 0)
+      qrYPosition + (qrImage ? qrSize + qrGapBottom : 0)
     );
 
-    const textBottom = afterLayout.lines.length ? afterLayout.bottom : beforeLayout.bottom;
-    const contentBottom = Math.max(
-      textBottom,
-      qrImage ? qrYPosition + qrSize : beforeLayout.bottom
-    );
-
-    const internalPadding = 120;
     const textContentTop = beforeLayout.top - 10;
     let textContentBottom = beforeLayout.bottom;
     if (afterLayout.lines.length) {
@@ -593,14 +812,44 @@ const renderCoverPreview = async (canvas, model, signal) => {
       textContentBottom = Math.max(textContentBottom, qrYPosition + qrSize);
     }
 
-    const blurHeight = textContentBottom - textContentTop + internalPadding * 2;
-    const blurY = PDF_PAGE_HEIGHT / 2 - blurHeight / 2;
+    const lastLineGroup = afterLayout.lines.length ? afterLayout.lines : beforeLayout.lines;
+    const lastLine = lastLineGroup[lastLineGroup.length - 1];
+    const lastFontSize = lastLine ? coverGetFontSize(lastLine.font) : 0;
+    const dynamicPadding = Math.max(40, Math.round(lastFontSize * 0.6));
+    const topPadding = 70;
+    const bottomPadding = Math.max(100, dynamicPadding);
+    const blurHeight = textContentBottom - textContentTop + topPadding + bottomPadding;
+    let blurY = textContentTop - topPadding;
+    if (blurY < 0) blurY = 0;
+    if (blurY + blurHeight > PDF_PAGE_HEIGHT) {
+      blurY = Math.max(0, PDF_PAGE_HEIGHT - blurHeight);
+    }
 
-    return { afterLayout, blurY, blurHeight };
+    const afterMaxWidth = afterLayout.lines.reduce(
+      (max, line) => Math.max(max, line.width || 0),
+      0
+    );
+    const maxLineWidth = Math.max(baseMaxLineWidth, afterMaxWidth, qrImage ? qrSize : 0);
+    const desiredWidth = maxLineWidth + blurPaddingX * 2;
+    let effectiveBlurX = blurX;
+    let blurWidth = desiredWidth;
+
+    if (effectiveBlurX + blurWidth > PDF_PAGE_WIDTH) {
+      if (desiredWidth >= PDF_PAGE_WIDTH) {
+        effectiveBlurX = 0;
+        blurWidth = PDF_PAGE_WIDTH;
+      } else {
+        effectiveBlurX = Math.max(0, PDF_PAGE_WIDTH - desiredWidth);
+        blurWidth = desiredWidth;
+      }
+    }
+
+    return { afterLayout, blurY, blurHeight, blurWidth, blurX: effectiveBlurX };
   };
 
-  let qrY = qrImage ? beforeLayout.bottom + 50 : beforeLayout.bottom;
-  let { afterLayout, blurY, blurHeight } = computeLayout(qrY);
+  let qrY = qrImage ? beforeLayout.bottom + qrGapTop : beforeLayout.bottom;
+  let { afterLayout, blurY, blurHeight, blurWidth, blurX: effectiveBlurX } = computeLayout(qrY);
+  blurX = effectiveBlurX;
 
   if (blurHeight > 0 && blurWidth > 0) {
     const scale = 0.5;
@@ -635,25 +884,14 @@ const renderCoverPreview = async (canvas, model, signal) => {
     blurCtx.putImageData(imageData, 0, 0);
 
     ctx.save();
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, 60);
+    const overlayRadius = 20;
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
     ctx.clip();
     ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
 
-    // Add subtle dark overlay for better text readability on bright backgrounds
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.fillRect(blurX, blurY, blurWidth, blurHeight);
-
-    // TEMPORARY: Add thick black border for testing
-    ctx.strokeStyle = 'rgba(255, 0, 0, 1)';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(blurX, blurY, blurWidth, blurHeight);
-
-    const edgeFade = 20;
-    const fadeGradient = ctx.createLinearGradient(blurX, 0, blurX + edgeFade, 0);
-    fadeGradient.addColorStop(0, 'rgba(255, 255, 255, 0.05)');
-    fadeGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = fadeGradient;
-    ctx.fillRect(blurX, blurY, edgeFade, blurHeight);
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fill();
 
     ctx.restore();
   }
@@ -668,7 +906,7 @@ const renderCoverPreview = async (canvas, model, signal) => {
   allLines.forEach((line) => {
     ctx.font = line.font;
     ctx.fillStyle = line.color || '#ffffff';
-    if (line.text.toLowerCase().includes('shop more books')) {
+    if (line.text.includes('Shop more books')) {
       ctx.textAlign = 'center';
       const centerX = blurX + blurWidth / 2;
       ctx.fillText(line.text, centerX, line.y);
@@ -697,7 +935,193 @@ const renderCoverPreview = async (canvas, model, signal) => {
     ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
   }
 
-  coverDrawHero(ctx, model.cover?.childName || '', PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT);
+  coverDrawHero(
+    ctx,
+    model.cover?.childName || '',
+    PDF_PAGE_WIDTH,
+    PDF_PAGE_HEIGHT,
+    model.coverPage?.rightSide || {}
+  );
+};
+
+const renderDedicationPreview = async (canvas, model, signal) => {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  await ensureCoverFonts();
+
+  // Backend dimensions: 5375 x 2975
+  // Scale down for preview performance while maintaining exact proportions
+  const backendWidth = 5375;
+  const backendHeight = 2975;
+  const scale = 0.15; // Scale to ~806x446 for preview
+  const canvasWidth = Math.round(backendWidth * scale);
+  const canvasHeight = Math.round(backendHeight * scale);
+
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+
+  // Scale the context so we can use backend dimensions in all calculations
+  ctx.scale(scale, scale);
+
+  // Now use backend dimensions for all drawing
+  const width = backendWidth;
+  const height = backendHeight;
+  const halfWidth = width / 2;
+
+  ctx.fillStyle = '#0b1d3a';
+  ctx.fillRect(0, 0, width, height);
+
+  const dedicationData = model?.dedicationPage || {
+    backgroundSrc: model?.backgroundSrc || '',
+    kidSrc: model?.kidSrc || '',
+    title: model?.title || '',
+    secondTitle: model?.secondTitle || '',
+  };
+
+  let backgroundImage = null;
+  if (dedicationData.backgroundSrc) {
+    try {
+      backgroundImage = await loadImageElement(dedicationData.backgroundSrc);
+      if (signal?.cancelled) return;
+
+      // Draw background covering entire canvas
+      const bgAspect = backgroundImage.width / backgroundImage.height;
+      const canvasAspect = width / height;
+      let drawWidth = width;
+      let drawHeight = height;
+      let offsetX = 0;
+      let offsetY = 0;
+
+      if (bgAspect > canvasAspect) {
+        drawHeight = height;
+        drawWidth = drawHeight * bgAspect;
+        offsetX = -(drawWidth - width) / 2;
+      } else {
+        drawWidth = width;
+        drawHeight = drawWidth / bgAspect;
+        offsetY = -(drawHeight - height) / 2;
+      }
+
+      ctx.drawImage(backgroundImage, offsetX, offsetY, drawWidth, drawHeight);
+    } catch (error) {
+      console.warn('[dedicationPreview] background load failed:', error.message);
+      ctx.fillStyle = '#0b1d3a';
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
+  let kidImage = null;
+  if (dedicationData.kidSrc) {
+    try {
+      kidImage = await loadImageElement(dedicationData.kidSrc);
+      if (signal?.cancelled) return;
+    } catch (error) {
+      console.warn('[dedicationPreview] kid load failed:', error.message);
+    }
+  }
+
+  if (kidImage) {
+    // EXACT backend calculations - match dedicationGenerator.js:194-226
+    const kidAspectRatio = kidImage.width / kidImage.height;
+    const baseWidthRatio = 0.4 * 1.1;
+    const baseHeightRatio = 0.8 * 1.1;
+    const charAreaWidth = width * baseWidthRatio;
+    const charAreaHeight = height * baseHeightRatio;
+    const targetAspectRatio = charAreaWidth / charAreaHeight;
+
+    let drawWidth;
+    let drawHeight;
+
+    if (kidAspectRatio > targetAspectRatio) {
+      drawWidth = charAreaWidth;
+      drawHeight = drawWidth / kidAspectRatio;
+    } else {
+      drawHeight = charAreaHeight;
+      drawWidth = drawHeight * kidAspectRatio;
+    }
+
+    const drawX = (halfWidth - drawWidth) / 2;
+    const drawY = height - drawHeight - height * 0.02;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.45)';
+    ctx.shadowBlur = 55;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 25;
+    ctx.drawImage(kidImage, drawX, drawY, drawWidth, drawHeight);
+    ctx.restore();
+  }
+
+  // EXACT backend text area calculations - match dedicationGenerator.js:205-206
+  const textAreaStartX = halfWidth + width * 0.06;
+  const textMaxWidth = halfWidth - width * 0.12;
+  const textStartY = height * 0.24;
+
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+
+  const segments = dedicationCreateSegments({
+    title: dedicationData.title || '',
+    secondTitle: dedicationData.secondTitle || '',
+  });
+
+  const textLayout = dedicationLayoutLines(ctx, segments, textAreaStartX, textStartY, textMaxWidth);
+  const blurMetrics = computeDedicationBlur(textLayout, {
+    textAreaStartX,
+    textMaxWidth,
+    width,
+    height,
+    paddingX: width * 0.03,
+  });
+
+  if (blurMetrics) {
+    const { blurX, blurY, blurWidth, blurHeight } = blurMetrics;
+    const scale = 0.5;
+    const tempWidth = Math.max(1, Math.floor(blurWidth * scale));
+    const tempHeight = Math.max(1, Math.floor(blurHeight * scale));
+    const blurCanvas = document.createElement('canvas');
+    blurCanvas.width = tempWidth;
+    blurCanvas.height = tempHeight;
+    const blurCtx = blurCanvas.getContext('2d');
+
+    if (backgroundImage) {
+      blurCtx.drawImage(
+        backgroundImage,
+        blurX,
+        blurY,
+        blurWidth,
+        blurHeight,
+        0,
+        0,
+        tempWidth,
+        tempHeight
+      );
+    } else {
+      blurCtx.fillStyle = 'rgba(12, 32, 78, 0.85)';
+      blurCtx.fillRect(0, 0, tempWidth, tempHeight);
+    }
+
+    const imageData = blurCtx.getImageData(0, 0, tempWidth, tempHeight);
+    const blurRadius = 15;
+    for (let i = 0; i < 8; i += 1) {
+      coverBoxBlur(imageData, tempWidth, tempHeight, blurRadius);
+    }
+    blurCtx.putImageData(imageData, 0, 0);
+
+    ctx.save();
+    const overlayRadius = 24;
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+    ctx.clip();
+    ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
+    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawDedicationText(ctx, textLayout);
 };
 
 const CoverPagePreview = React.memo(({ model, className = '' }) => {
@@ -766,10 +1190,10 @@ const CoverPagePreview = React.memo(({ model, className = '' }) => {
 });
 
 const DedicationPagePreview = React.memo(({ model, className = '' }) => {
-  if (!model) return null;
-  const dedication = model.dedicationPage || {};
+  const canvasRef = useRef(null);
+  const [error, setError] = useState(null);
 
-  if (model.renderedImageSrc) {
+  if (model?.renderedImageSrc) {
     return (
       <div className={['h-full w-full overflow-hidden', className].filter(Boolean).join(' ')}>
         <img
@@ -781,50 +1205,49 @@ const DedicationPagePreview = React.memo(({ model, className = '' }) => {
     );
   }
 
-  return (
-    <div
-      className={[
-        'relative h-full w-full overflow-hidden',
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
-      style={{ aspectRatio: '5375 / 2975' }}
-    >
-      {dedication.backgroundSrc ? (
-        <img
-          src={dedication.backgroundSrc}
-          alt="Dedication background"
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      ) : (
-        <div className="absolute inset-0 bg-muted" />
-      )}
-      <div className="absolute inset-0 bg-gradient-to-r from-black/25 via-black/15 to-black/35" />
-      <div className="relative grid h-full w-full grid-cols-2">
-        <div className="relative flex items-end justify-center p-[6%]">
-          {dedication.kidSrc ? (
-            <img
-              src={dedication.kidSrc}
-              alt="Featured child"
-              className="max-h-[95%] w-auto object-contain drop-shadow-[0_25px_55px_rgba(0,0,0,0.45)]"
-            />
-          ) : null}
-        </div>
-        <div className="relative flex flex-col items-center justify-center px-[8%] text-center text-white">
-          {dedication.title ? (
-            <p className="text-5xl font-extrabold tracking-tight drop-shadow-[0_12px_25px_rgba(0,0,0,0.45)]">
-              {dedication.title}
-            </p>
-          ) : null}
-          {dedication.secondTitle ? (
-            <p className="mt-6 text-2xl font-medium leading-snug drop-shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
-              {dedication.secondTitle}
-            </p>
-          ) : null}
-        </div>
+  useEffect(() => {
+    let cancelled = false;
+    const signal = { cancelled: false };
+    const canvas = canvasRef.current;
+    setError(null);
+    if (!canvas) return () => {
+      cancelled = true;
+      signal.cancelled = true;
+    };
+
+    renderDedicationPreview(canvas, model, signal).catch((err) => {
+      if (!cancelled) {
+        console.warn('[dedicationPreview] rendering failed:', err.message);
+        setError(err);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      signal.cancelled = true;
+    };
+  }, [
+    model?.cacheToken,
+    model?.dedicationPage?.backgroundSrc,
+    model?.dedicationPage?.kidSrc,
+    model?.dedicationPage?.title,
+    model?.dedicationPage?.secondTitle,
+  ]);
+
+  if (error) {
+    return (
+      <div className={`flex h-full w-full items-center justify-center bg-muted text-xs ${className}`}>
+        Dedication preview unavailable
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={['h-full w-full object-contain', className].filter(Boolean).join(' ')}
+      style={{ aspectRatio: '5375 / 2975' }}
+    />
   );
 });
 
