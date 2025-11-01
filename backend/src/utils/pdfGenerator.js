@@ -15,8 +15,8 @@ const replicate = new Replicate();
 
 const PAGE_WIDTH = 842; // A4 landscape width in points
 const PAGE_HEIGHT = 421; // A4 landscape height in points
-const CHARACTER_MAX_WIDTH_RATIO = 0.4;
-const CHARACTER_MAX_HEIGHT_RATIO = 0.8;
+const CHARACTER_MAX_WIDTH_RATIO = 0.36;
+const CHARACTER_MAX_HEIGHT_RATIO = 0.72;
 const TEXT_BLOCK_WIDTH = 300;
 const TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const TEXT_MARGIN = 40;

@@ -194,9 +194,9 @@ async function generateDedicationPage({ backgroundImage, kidImage, title = '', s
         // Calculate dimensions - match cover page proportions (40% width, 80% height)
         const kidAspectRatio = kidImg.width / kidImg.height;
 
-        // Use same proportions as cover page: 0.4 * 1.1 = 0.44 for width, 0.8 * 1.1 = 0.88 for height
-        const baseWidthRatio = 0.4 * 1.1;
-        const baseHeightRatio = 0.8 * 1.1;
+        // Slightly smaller than cover page: 0.4 * 0.95 for width, 0.8 * 0.95 for height
+        const baseWidthRatio = 0.4 * 0.95;
+        const baseHeightRatio = 0.8 * 0.95;
         const charAreaWidth = width * baseWidthRatio;
         const charAreaHeight = height * baseHeightRatio;
 

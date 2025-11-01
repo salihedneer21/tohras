@@ -260,7 +260,6 @@ const loadImageElement = (src) =>
       return;
     }
     const image = new Image();
-    image.crossOrigin = 'anonymous';
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error(`Failed to load image ${src}`));
     image.src = src;
@@ -980,6 +979,15 @@ const renderDedicationPreview = async (canvas, model, signal) => {
     secondTitle: model?.secondTitle || '',
   };
 
+  console.log('[dedicationPreview] Model received:', {
+    hasModel: !!model,
+    hasDedicationPage: !!model?.dedicationPage,
+    backgroundSrc: dedicationData.backgroundSrc,
+    kidSrc: dedicationData.kidSrc,
+    title: dedicationData.title,
+    secondTitle: dedicationData.secondTitle
+  });
+
   let backgroundImage = null;
   if (dedicationData.backgroundSrc) {
     try {
@@ -1005,11 +1013,15 @@ const renderDedicationPreview = async (canvas, model, signal) => {
       }
 
       ctx.drawImage(backgroundImage, offsetX, offsetY, drawWidth, drawHeight);
+      console.log('[dedicationPreview] Background drawn successfully');
     } catch (error) {
-      console.warn('[dedicationPreview] background load failed:', error.message);
+      console.error('[dedicationPreview] Background load failed:', error);
+      console.error('[dedicationPreview] Background src was:', dedicationData.backgroundSrc);
       ctx.fillStyle = '#0b1d3a';
       ctx.fillRect(0, 0, width, height);
     }
+  } else {
+    console.warn('[dedicationPreview] No backgroundSrc provided, using fallback blue');
   }
 
   let kidImage = null;
@@ -1017,16 +1029,20 @@ const renderDedicationPreview = async (canvas, model, signal) => {
     try {
       kidImage = await loadImageElement(dedicationData.kidSrc);
       if (signal?.cancelled) return;
+      console.log('[dedicationPreview] Kid image loaded successfully');
     } catch (error) {
-      console.warn('[dedicationPreview] kid load failed:', error.message);
+      console.error('[dedicationPreview] Kid image load failed:', error);
+      console.error('[dedicationPreview] Kid src was:', dedicationData.kidSrc);
     }
+  } else {
+    console.warn('[dedicationPreview] No kidSrc provided');
   }
 
   if (kidImage) {
     // EXACT backend calculations - match dedicationGenerator.js:194-226
     const kidAspectRatio = kidImage.width / kidImage.height;
-    const baseWidthRatio = 0.4 * 1.1;
-    const baseHeightRatio = 0.8 * 1.1;
+    const baseWidthRatio = 0.4 * 0.95;
+    const baseHeightRatio = 0.8 * 0.95;
     const charAreaWidth = width * baseWidthRatio;
     const charAreaHeight = height * baseHeightRatio;
     const targetAspectRatio = charAreaWidth / charAreaHeight;
@@ -1042,8 +1058,16 @@ const renderDedicationPreview = async (canvas, model, signal) => {
       drawWidth = drawHeight * kidAspectRatio;
     }
 
+    // Position in left half - centered horizontally, aligned to bottom
     const drawX = (halfWidth - drawWidth) / 2;
     const drawY = height - drawHeight - height * 0.02;
+
+    console.log('[dedicationPreview] Kid image positioning:', {
+      kidImageSize: `${kidImage.width}x${kidImage.height}`,
+      drawSize: `${Math.round(drawWidth)}x${Math.round(drawHeight)}`,
+      drawPosition: `x=${Math.round(drawX)}, y=${Math.round(drawY)}`,
+      canvasSize: `${width}x${height}`,
+    });
 
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.45)';
@@ -1077,48 +1101,62 @@ const renderDedicationPreview = async (canvas, model, signal) => {
   });
 
   if (blurMetrics) {
-    const { blurX, blurY, blurWidth, blurHeight } = blurMetrics;
-    const scale = 0.5;
-    const tempWidth = Math.max(1, Math.floor(blurWidth * scale));
-    const tempHeight = Math.max(1, Math.floor(blurHeight * scale));
-    const blurCanvas = document.createElement('canvas');
-    blurCanvas.width = tempWidth;
-    blurCanvas.height = tempHeight;
-    const blurCtx = blurCanvas.getContext('2d');
+    try {
+      const { blurX, blurY, blurWidth, blurHeight } = blurMetrics;
+      const scale = 0.5;
+      const tempWidth = Math.max(1, Math.floor(blurWidth * scale));
+      const tempHeight = Math.max(1, Math.floor(blurHeight * scale));
+      const blurCanvas = document.createElement('canvas');
+      blurCanvas.width = tempWidth;
+      blurCanvas.height = tempHeight;
+      const blurCtx = blurCanvas.getContext('2d');
 
-    if (backgroundImage) {
-      blurCtx.drawImage(
-        backgroundImage,
-        blurX,
-        blurY,
-        blurWidth,
-        blurHeight,
-        0,
-        0,
-        tempWidth,
-        tempHeight
-      );
-    } else {
-      blurCtx.fillStyle = 'rgba(12, 32, 78, 0.85)';
-      blurCtx.fillRect(0, 0, tempWidth, tempHeight);
+      if (backgroundImage) {
+        blurCtx.drawImage(
+          backgroundImage,
+          blurX,
+          blurY,
+          blurWidth,
+          blurHeight,
+          0,
+          0,
+          tempWidth,
+          tempHeight
+        );
+      } else {
+        blurCtx.fillStyle = 'rgba(12, 32, 78, 0.85)';
+        blurCtx.fillRect(0, 0, tempWidth, tempHeight);
+      }
+
+      const imageData = blurCtx.getImageData(0, 0, tempWidth, tempHeight);
+      const blurRadius = 15;
+      for (let i = 0; i < 8; i += 1) {
+        coverBoxBlur(imageData, tempWidth, tempHeight, blurRadius);
+      }
+      blurCtx.putImageData(imageData, 0, 0);
+
+      ctx.save();
+      const overlayRadius = 24;
+      coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+      ctx.clip();
+      ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
+      coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.fill();
+      ctx.restore();
+    } catch (err) {
+      // Canvas tainted by cross-origin images - skip blur effect in preview
+      console.log('[dedicationPreview] Skipping blur effect (CORS):', err.message);
+
+      // Draw simple semi-transparent background instead
+      const { blurX, blurY, blurWidth, blurHeight } = blurMetrics;
+      ctx.save();
+      const overlayRadius = 24;
+      coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.fill();
+      ctx.restore();
     }
-
-    const imageData = blurCtx.getImageData(0, 0, tempWidth, tempHeight);
-    const blurRadius = 15;
-    for (let i = 0; i < 8; i += 1) {
-      coverBoxBlur(imageData, tempWidth, tempHeight, blurRadius);
-    }
-    blurCtx.putImageData(imageData, 0, 0);
-
-    ctx.save();
-    const overlayRadius = 24;
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
-    ctx.clip();
-    ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.fill();
-    ctx.restore();
   }
 
   drawDedicationText(ctx, textLayout);
@@ -1246,15 +1284,14 @@ const DedicationPagePreview = React.memo(({ model, className = '' }) => {
     <canvas
       ref={canvasRef}
       className={['h-full w-full object-contain', className].filter(Boolean).join(' ')}
-      style={{ aspectRatio: '5375 / 2975' }}
     />
   );
 });
 
 const PDF_PAGE_WIDTH = 842;
 const PDF_PAGE_HEIGHT = 421;
-const PDF_CHARACTER_MAX_WIDTH_RATIO = 0.4;
-const PDF_CHARACTER_MAX_HEIGHT_RATIO = 0.8;
+const PDF_CHARACTER_MAX_WIDTH_RATIO = 0.36;
+const PDF_CHARACTER_MAX_HEIGHT_RATIO = 0.72;
 const PDF_TEXT_BLOCK_WIDTH = 300;
 const PDF_TEXT_BLOCK_WIDTH_RATIO = 0.35;
 const PDF_TEXT_MARGIN = 40;
