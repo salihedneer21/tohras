@@ -136,6 +136,11 @@ async function rankGeneratedImages({ prompt, assets, childProfile }) {
   const data = await response.json();
 
   if (!response.ok) {
+    console.error('[rankingService] OpenRouter API error:', {
+      status: response.status,
+      statusText: response.statusText,
+      data: JSON.stringify(data, null, 2),
+    });
     const errMessage = data?.error?.message || data?.error || JSON.stringify(data);
     throw new Error(`Ranking model error: ${errMessage}`);
   }

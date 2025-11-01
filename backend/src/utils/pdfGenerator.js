@@ -598,6 +598,42 @@ const wrapText = (text, maxWidth, fontSize) => {
   return lines;
 };
 
+const sanitizeDedicationText = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  return String(value || '').trim();
+};
+
+const splitDedicationLines = (value) => {
+  const sanitized = sanitizeDedicationText(value);
+  if (!sanitized) return [];
+  return sanitized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+};
+
+const fitPdfFontSize = (font, lines, { target, min, maxWidth }) => {
+  if (!lines.length) return 0;
+
+  const safeMaxWidth = Math.max(1, maxWidth);
+  let size = Math.max(Math.round(target), Math.round(min));
+
+  while (size > min) {
+    const isTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
+    if (!isTooWide) {
+      return size;
+    }
+    size -= Math.max(1, Math.round(size * 0.06));
+  }
+
+  size = Math.max(Math.round(min), 20);
+  let stillTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
+  while (stillTooWide && size > 20) {
+    size -= Math.max(1, Math.round(size * 0.05));
+    stillTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
+  }
+
+  return Math.max(size, 20);
+};
+
 async function generateStorybookPdf({ title, pages }) {
   if (!Array.isArray(pages) || pages.length === 0) {
     throw new Error('At least one page is required to build the PDF');
@@ -848,56 +884,117 @@ async function generateStorybookPdf({ title, pages }) {
         }
       }
 
-      const resolvedTitle = replaceChildPlaceholders(dedication.title, childName);
-      const resolvedSecondTitle = replaceChildPlaceholders(dedication.secondTitle, childName);
-      const centerX = halfWidth + halfWidth / 2;
-      const titleFontSize = 48;
-      const subtitleFontSize = 30;
-      const maxTextWidth = halfWidth - 120;
-      const titleLines = resolvedTitle ? wrapText(resolvedTitle, maxTextWidth, titleFontSize) : [];
-      const subtitleLines = resolvedSecondTitle
-        ? wrapText(resolvedSecondTitle, maxTextWidth, subtitleFontSize)
-        : [];
-      const titleLineHeight = titleFontSize * 1.2;
-      const subtitleLineHeight = subtitleFontSize * 1.2;
-      const spacingBetween = titleLines.length && subtitleLines.length ? 30 : 0;
+      const bigLines = splitDedicationLines(
+        replaceChildPlaceholders(dedication.secondTitle, childName)
+      );
+      const smallLines = splitDedicationLines(
+        replaceChildPlaceholders(dedication.title, childName)
+      );
 
-      let totalHeight = titleLines.length * titleLineHeight + subtitleLines.length * subtitleLineHeight;
-      if (spacingBetween) {
-        totalHeight += spacingBetween;
+      if (!bigLines.length && !smallLines.length) {
+        continue;
       }
 
-      let cursorY = (PAGE_HEIGHT - totalHeight) / 2;
+      const textAreaWidth = halfWidth - 200;
+      const textAreaX = halfWidth + (halfWidth - textAreaWidth) / 2;
+      const textAreaY = PAGE_HEIGHT * 0.18;
+      const textAreaHeight = PAGE_HEIGHT * 0.64;
+      const centerX = textAreaX + textAreaWidth / 2;
 
-      if (titleLines.length) {
-        for (const line of titleLines) {
-          const textWidth = accentFont.widthOfTextAtSize(line, titleFontSize);
+      const bigFontSize = bigLines.length
+        ? fitPdfFontSize(accentFont, bigLines, {
+            target: Math.min(180, textAreaWidth * 0.35, textAreaHeight * 0.5),
+            min: 72,
+            maxWidth: textAreaWidth,
+          })
+        : 0;
+
+      let smallFontSize = 0;
+      if (smallLines.length) {
+        const smallTargetBase = bigFontSize
+          ? Math.max(Math.min(bigFontSize * 0.55, bigFontSize - 24), 48)
+          : Math.min(110, textAreaWidth * 0.28, textAreaHeight * 0.3);
+        const smallTarget = Math.max(smallTargetBase, 48);
+
+        smallFontSize = fitPdfFontSize(bodyFont, smallLines, {
+          target: smallTarget,
+          min: 48,
+          maxWidth: textAreaWidth,
+        });
+
+        if (bigFontSize && smallFontSize >= bigFontSize) {
+          smallFontSize = Math.max(bigFontSize - 24, 48);
+        }
+      }
+
+      const bigLineHeight = bigLines.length && bigFontSize ? bigFontSize * 1.08 : 0;
+      const bigIntraSpacing =
+        bigLines.length > 1 && bigFontSize ? Math.round(bigFontSize * 0.2) : 0;
+      const bigBlockHeight =
+        bigLines.length && bigFontSize
+          ? bigLines.length * bigLineHeight + (bigLines.length - 1) * bigIntraSpacing
+          : 0;
+
+      const smallLineHeight = smallLines.length && smallFontSize ? smallFontSize * 1.08 : 0;
+      const smallIntraSpacing =
+        smallLines.length > 1 && smallFontSize ? Math.round(smallFontSize * 0.18) : 0;
+      const smallBlockHeight =
+        smallLines.length && smallFontSize
+          ? smallLines.length * smallLineHeight + (smallLines.length - 1) * smallIntraSpacing
+          : 0;
+
+      const blockGap =
+        bigLines.length && smallLines.length
+          ? Math.round(Math.min(bigFontSize || 0, smallFontSize || 0) * 0.35)
+          : 0;
+
+      const totalHeight = bigBlockHeight + smallBlockHeight + blockGap;
+      let cursorY = textAreaY + (textAreaHeight - totalHeight) / 2;
+      if (!Number.isFinite(cursorY)) {
+        cursorY = textAreaY;
+      }
+
+      if (bigLines.length && bigFontSize) {
+        const bigTextHeight = accentFont.heightAtSize(bigFontSize);
+        bigLines.forEach((line, index) => {
+          const textWidth = accentFont.widthOfTextAtSize(line, bigFontSize);
           const textX = centerX - textWidth / 2;
+          const baselineY = cursorY + bigLineHeight - bigTextHeight;
           page.drawText(line, {
             x: textX,
-            y: cursorY + titleLineHeight / 2,
-            size: titleFontSize,
+            y: baselineY,
+            size: bigFontSize,
             font: accentFont,
-            color: rgb(0, 0, 0),
+            color: rgb(1, 1, 1),
           });
-          cursorY += titleLineHeight;
-        }
-        cursorY += spacingBetween;
+          cursorY += bigLineHeight;
+          if (index < bigLines.length - 1) {
+            cursorY += bigIntraSpacing;
+          }
+        });
       }
 
-      if (subtitleLines.length) {
-        for (const line of subtitleLines) {
-          const textWidth = bodyFont.widthOfTextAtSize(line, subtitleFontSize);
+      if (smallLines.length && smallFontSize) {
+        if (bigLines.length && bigFontSize) {
+          cursorY += blockGap;
+        }
+        const smallTextHeight = bodyFont.heightAtSize(smallFontSize);
+        smallLines.forEach((line, index) => {
+          const textWidth = bodyFont.widthOfTextAtSize(line, smallFontSize);
           const textX = centerX - textWidth / 2;
+          const baselineY = cursorY + smallLineHeight - smallTextHeight;
           page.drawText(line, {
             x: textX,
-            y: cursorY + subtitleLineHeight / 2,
-            size: subtitleFontSize,
+            y: baselineY,
+            size: smallFontSize,
             font: bodyFont,
-            color: rgb(0.15, 0.15, 0.15),
+            color: rgb(1, 1, 1),
           });
-          cursorY += subtitleLineHeight;
-        }
+          cursorY += smallLineHeight;
+          if (index < smallLines.length - 1) {
+            cursorY += smallIntraSpacing;
+          }
+        });
       }
 
       continue;

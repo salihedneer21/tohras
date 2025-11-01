@@ -528,171 +528,145 @@ const coverDrawHero = (ctx, childName, width, height, overrides = {}) => {
   ctx.fillText(bottomLine, textX, bottomY);
 };
 
-const dedicationCreateSegments = ({ title = '', secondTitle = '' }) => {
-  const segments = [];
+const sanitizeDedicationValue = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  return String(value || '').trim();
+};
 
-  // Title = Main heading (larger, bolder) - appears on TOP
-  if (title && title.trim()) {
-    title.split(/\r?\n/).forEach((line) => {
-      if (!line.trim()) {
-        segments.push({ type: 'spacer', size: 120 });
-      } else {
-        segments.push({
-          type: 'text',
-          text: line,
-          font: '800 280px "CanvaSans"', // Larger and bolder
-          lineHeight: 1.12,
-          color: 'white',
-          isTitle: true,
-        });
-      }
+const splitDedicationLines = (value) => {
+  const sanitized = sanitizeDedicationValue(value);
+  if (!sanitized) return [];
+  return sanitized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+};
+
+const fitDedicationFontSize = (ctx, lines, { target, min, maxWidth, weight }) => {
+  if (!lines.length) {
+    return 0;
+  }
+
+  const safeMaxWidth = Math.max(1, maxWidth);
+  let size = Math.max(Math.round(target), Math.round(min));
+
+  while (size > min) {
+    ctx.font = `${weight} ${size}px "CanvaSans"`;
+    const isTooWide = lines.some((line) => ctx.measureText(line).width > safeMaxWidth);
+    if (!isTooWide) {
+      return size;
+    }
+    size -= Math.max(2, Math.round(size * 0.06));
+  }
+
+  size = Math.max(Math.round(min), 20);
+  ctx.font = `${weight} ${size}px "CanvaSans"`;
+  let stillTooWide = lines.some((line) => ctx.measureText(line).width > safeMaxWidth);
+  while (stillTooWide && size > 20) {
+    size -= Math.max(1, Math.round(size * 0.05));
+    ctx.font = `${weight} ${size}px "CanvaSans"`;
+    stillTooWide = lines.some((line) => ctx.measureText(line).width > safeMaxWidth);
+  }
+
+  return Math.max(size, 20);
+};
+
+const renderDedicationTextBlock = (ctx, { area, bigText, smallText }) => {
+  const primaryLines = splitDedicationLines(bigText);
+  const secondaryLines = splitDedicationLines(smallText);
+
+  if (!primaryLines.length && !secondaryLines.length) {
+    return;
+  }
+
+  const maxWidth = area.width;
+  const areaHeight = area.height;
+
+  const bigTarget = Math.min(480, maxWidth * 0.6, areaHeight * 0.5);
+  const bigMin = Math.max(140, Math.round(Math.min(maxWidth, areaHeight) * 0.18));
+  const bigFontSize = primaryLines.length
+    ? fitDedicationFontSize(ctx, primaryLines, {
+        target: bigTarget,
+        min: bigMin,
+        maxWidth,
+        weight: '700',
+      })
+    : 0;
+
+  let smallFontSize = 0;
+  if (secondaryLines.length) {
+    const baseSmallTarget = bigFontSize
+      ? Math.max(Math.min(bigFontSize * 0.55, bigFontSize - 60), 0)
+      : Math.min(260, maxWidth * 0.4, areaHeight * 0.3);
+    const smallMin = Math.max(90, Math.round(Math.min(maxWidth, areaHeight) * 0.12));
+    const smallTarget = Math.max(baseSmallTarget, smallMin);
+
+    smallFontSize = fitDedicationFontSize(ctx, secondaryLines, {
+      target: smallTarget,
+      min: smallMin,
+      maxWidth,
+      weight: '500',
     });
-    segments.push({ type: 'spacer', size: 90 });
-  }
 
-  // SecondTitle = Subtitle (smaller, lighter) - appears BELOW title
-  if (secondTitle && secondTitle.trim()) {
-    secondTitle.split(/\r?\n/).forEach((line) => {
-      if (!line.trim()) {
-        segments.push({ type: 'spacer', size: 100 });
-      } else {
-        segments.push({
-          type: 'text',
-          text: line,
-          font: '500 170px "CanvaSans"', // Medium weight
-          lineHeight: 1.28,
-          color: 'white',
-          isTitle: false,
-        });
-      }
-    });
-  }
-
-  return segments;
-};
-
-const dedicationLayoutLines = (ctx, segments, startX, startY, maxWidth) => {
-  // EXACT backend calculations - match dedicationGenerator.js:314-349
-  const positioned = [];
-  let cursorY = startY;
-  let top = Infinity;
-  let bottom = -Infinity;
-
-  segments.forEach((segment) => {
-    if (segment.type === 'spacer') {
-      cursorY += segment.size ?? 120;
-      return;
-    }
-    if (segment.type === 'text') {
-      const fontSize = coverGetFontSize(segment.font);
-      const leading = segment.lineHeight || 1.2;
-      ctx.font = segment.font;
-      const measuredWidth = Math.min(ctx.measureText(segment.text).width, maxWidth);
-      cursorY += fontSize;
-      positioned.push({
-        ...segment,
-        x: startX,
-        y: cursorY,
-        width: measuredWidth,
-      });
-      top = Math.min(top, cursorY - fontSize * 1.05);
-      bottom = Math.max(bottom, cursorY);
-      cursorY += Math.round(fontSize * Math.max(leading - 1, 0.25));
-    }
-  });
-
-  if (!positioned.length) {
-    top = startY;
-    bottom = startY;
-  }
-
-  return { lines: positioned, top, bottom };
-};
-
-const computeDedicationBlur = (lines, {
-  textAreaStartX,
-  textMaxWidth,
-  width,
-  height,
-  paddingX,
-}) => {
-  // EXACT backend calculations - match dedicationGenerator.js:351-388
-  if (!lines?.lines?.length) return null;
-
-  const { top, bottom } = lines;
-  const lastLine = lines.lines[lines.lines.length - 1];
-  const lastFontSize = lastLine ? coverGetFontSize(lastLine.font) : 0;
-  const dynamicPadding = Math.max(40, Math.round(lastFontSize * 0.6));
-  const topPadding = 70;
-  const bottomPadding = Math.max(100, dynamicPadding);
-  const blurHeight = bottom - top + topPadding + bottomPadding;
-  let blurY = top - topPadding;
-  if (blurY < 0) blurY = 0;
-  if (blurY + blurHeight > height) {
-    blurY = Math.max(0, height - blurHeight);
-  }
-
-  const baseMaxWidth = Math.max(
-    textMaxWidth,
-    lines.lines.reduce((max, line) => Math.max(max, line.width || 0), 0)
-  );
-  const desiredWidth = baseMaxWidth + paddingX * 2;
-  let blurX = Math.max(0, textAreaStartX - paddingX);
-  let blurWidth = desiredWidth;
-
-  if (blurX + blurWidth > width) {
-    if (desiredWidth >= width) {
-      blurX = 0;
-      blurWidth = width;
-    } else {
-      blurX = Math.max(0, width - desiredWidth);
-      blurWidth = desiredWidth;
+    if (bigFontSize && smallFontSize >= bigFontSize) {
+      smallFontSize = Math.max(bigFontSize - 60, smallMin);
     }
   }
 
-  return { blurX, blurY, blurWidth, blurHeight };
-};
+  const bigLineHeight = primaryLines.length && bigFontSize ? bigFontSize * 1.05 : 0;
+  const bigIntraSpacing =
+    primaryLines.length > 1 && bigFontSize ? Math.round(bigFontSize * 0.2) : 0;
+  const bigBlockHeight =
+    primaryLines.length && bigFontSize
+      ? primaryLines.length * bigLineHeight + (primaryLines.length - 1) * bigIntraSpacing
+      : 0;
 
-const drawDedicationText = (ctx, layout) => {
-  if (!layout?.lines?.length) return;
+  const smallLineHeight = secondaryLines.length && smallFontSize ? smallFontSize * 1.05 : 0;
+  const smallIntraSpacing =
+    secondaryLines.length > 1 && smallFontSize ? Math.round(smallFontSize * 0.18) : 0;
+  const smallBlockHeight =
+    secondaryLines.length && smallFontSize
+      ? secondaryLines.length * smallLineHeight + (secondaryLines.length - 1) * smallIntraSpacing
+      : 0;
+
+  const blockGap =
+    primaryLines.length && secondaryLines.length
+      ? Math.round(Math.min(bigFontSize || 0, smallFontSize || 0) * 0.4)
+      : 0;
+
+  const totalHeight = bigBlockHeight + smallBlockHeight + blockGap;
+  const centerX = area.x + area.width / 2;
+  let cursorY = area.y + (area.height - totalHeight) / 2;
+
+  ctx.save();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
 
-  layout.lines.forEach((line) => {
-    ctx.font = line.font;
-    const fontSize = coverGetFontSize(line.font);
+  if (primaryLines.length && bigFontSize) {
+    ctx.font = `700 ${Math.round(bigFontSize)}px "CanvaSans"`;
+    primaryLines.forEach((line, index) => {
+      cursorY += bigLineHeight;
+      ctx.fillText(line, centerX, cursorY);
+      if (index < primaryLines.length - 1) {
+        cursorY += bigIntraSpacing;
+      }
+    });
+  }
 
-    ctx.save();
-
-    // Stronger shadow for titles, softer for subtitles
-    if (line.isTitle) {
-      ctx.shadowColor = 'rgba(0,0,0,0.65)';
-      ctx.shadowBlur = 50;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 28;
-    } else {
-      ctx.shadowColor = 'rgba(0,0,0,0.55)';
-      ctx.shadowBlur = 35;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 20;
+  if (secondaryLines.length && smallFontSize) {
+    if (primaryLines.length && bigFontSize) {
+      cursorY += blockGap;
     }
+    ctx.font = `500 ${Math.round(smallFontSize)}px "CanvaSans"`;
+    secondaryLines.forEach((line, index) => {
+      cursorY += smallLineHeight;
+      ctx.fillText(line, centerX, cursorY);
+      if (index < secondaryLines.length - 1) {
+        cursorY += smallIntraSpacing;
+      }
+    });
+  }
 
-    // Create white gradient with slight variation for depth
-    const gradient = ctx.createLinearGradient(
-      line.x,
-      line.y - fontSize * 1.1,
-      line.x,
-      line.y + fontSize * 0.1
-    );
-    gradient.addColorStop(0, '#FFFFFF');
-    gradient.addColorStop(0.5, '#F8F8F8');
-    gradient.addColorStop(1, '#F0F0F0');
-
-    ctx.fillStyle = gradient;
-    ctx.fillText(line.text, line.x, line.y);
-
-    ctx.restore();
-  });
+  ctx.restore();
 };
 
 const renderCoverPreview = async (canvas, model, signal) => {
@@ -1054,74 +1028,21 @@ const renderDedicationPreview = async (canvas, model, signal) => {
     ctx.restore();
   }
 
-  // EXACT backend text area calculations - match dedicationGenerator.js:205-206
-  const textAreaStartX = halfWidth + width * 0.06;
-  const textMaxWidth = halfWidth - width * 0.12;
-  const textStartY = height * 0.24;
+  const textAreaX = halfWidth + width * 0.08;
+  const textAreaWidth = halfWidth - width * 0.16;
+  const textAreaY = height * 0.18;
+  const textAreaHeight = height * 0.64;
 
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-
-  const segments = dedicationCreateSegments({
-    title: dedicationData.title || '',
-    secondTitle: dedicationData.secondTitle || '',
+  renderDedicationTextBlock(ctx, {
+    area: {
+      x: textAreaX,
+      y: textAreaY,
+      width: textAreaWidth,
+      height: textAreaHeight,
+    },
+    bigText: dedicationData.secondTitle || '',
+    smallText: dedicationData.title || '',
   });
-
-  const textLayout = dedicationLayoutLines(ctx, segments, textAreaStartX, textStartY, textMaxWidth);
-  const blurMetrics = computeDedicationBlur(textLayout, {
-    textAreaStartX,
-    textMaxWidth,
-    width,
-    height,
-    paddingX: width * 0.03,
-  });
-
-  if (blurMetrics) {
-    const { blurX, blurY, blurWidth, blurHeight } = blurMetrics;
-    const scale = 0.5;
-    const tempWidth = Math.max(1, Math.floor(blurWidth * scale));
-    const tempHeight = Math.max(1, Math.floor(blurHeight * scale));
-    const blurCanvas = document.createElement('canvas');
-    blurCanvas.width = tempWidth;
-    blurCanvas.height = tempHeight;
-    const blurCtx = blurCanvas.getContext('2d');
-
-    if (backgroundImage) {
-      blurCtx.drawImage(
-        backgroundImage,
-        blurX,
-        blurY,
-        blurWidth,
-        blurHeight,
-        0,
-        0,
-        tempWidth,
-        tempHeight
-      );
-    } else {
-      blurCtx.fillStyle = 'rgba(12, 32, 78, 0.85)';
-      blurCtx.fillRect(0, 0, tempWidth, tempHeight);
-    }
-
-    const imageData = blurCtx.getImageData(0, 0, tempWidth, tempHeight);
-    const blurRadius = 15;
-    for (let i = 0; i < 8; i += 1) {
-      coverBoxBlur(imageData, tempWidth, tempHeight, blurRadius);
-    }
-    blurCtx.putImageData(imageData, 0, 0);
-
-    ctx.save();
-    const overlayRadius = 24;
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
-    ctx.clip();
-    ctx.drawImage(blurCanvas, blurX, blurY, blurWidth, blurHeight);
-    coverDrawRoundedRect(ctx, blurX, blurY, blurWidth, blurHeight, overlayRadius);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.fill();
-    ctx.restore();
-  }
-
-  drawDedicationText(ctx, textLayout);
 };
 
 const CoverPagePreview = React.memo(({ model, className = '' }) => {
