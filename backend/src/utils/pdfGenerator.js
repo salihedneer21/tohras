@@ -259,6 +259,32 @@ const resolveGeneratorSource = async (asset) => {
   return null;
 };
 
+const buildGeneratorCandidates = async (asset, resolvedSource, label) => {
+  const candidates = [];
+
+  if (asset) {
+    try {
+      const buffer = await getImageBuffer(asset);
+      if (buffer && buffer.length) {
+        candidates.push(buffer);
+      }
+    } catch (error) {
+      console.warn(
+        `[pdf] failed to obtain ${label} buffer for dedication generator:`,
+        error.message
+      );
+    }
+  }
+
+  if (Buffer.isBuffer(resolvedSource)) {
+    candidates.push(resolvedSource);
+  } else if (resolvedSource) {
+    candidates.push(resolvedSource);
+  }
+
+  return candidates;
+};
+
 const replaceChildPlaceholders = (value, childName) => {
   if (!value || typeof value !== 'string') return value || '';
   if (!childName) return value;
@@ -598,42 +624,6 @@ const wrapText = (text, maxWidth, fontSize) => {
   return lines;
 };
 
-const sanitizeDedicationText = (value) => {
-  if (!value) return '';
-  if (typeof value === 'string') return value.trim();
-  return String(value || '').trim();
-};
-
-const splitDedicationLines = (value) => {
-  const sanitized = sanitizeDedicationText(value);
-  if (!sanitized) return [];
-  return sanitized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-};
-
-const fitPdfFontSize = (font, lines, { target, min, maxWidth }) => {
-  if (!lines.length) return 0;
-
-  const safeMaxWidth = Math.max(1, maxWidth);
-  let size = Math.max(Math.round(target), Math.round(min));
-
-  while (size > min) {
-    const isTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
-    if (!isTooWide) {
-      return size;
-    }
-    size -= Math.max(1, Math.round(size * 0.06));
-  }
-
-  size = Math.max(Math.round(min), 20);
-  let stillTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
-  while (stillTooWide && size > 20) {
-    size -= Math.max(1, Math.round(size * 0.05));
-    stillTooWide = lines.some((line) => font.widthOfTextAtSize(line, size) > safeMaxWidth);
-  }
-
-  return Math.max(size, 20);
-};
-
 async function generateStorybookPdf({ title, pages }) {
   if (!Array.isArray(pages) || pages.length === 0) {
     throw new Error('At least one page is required to build the PDF');
@@ -808,16 +798,43 @@ async function generateStorybookPdf({ title, pages }) {
       const backgroundSource = await resolveGeneratorSource(backgroundAsset);
       const heroSource = await resolveGeneratorSource(heroAsset);
 
-      if (backgroundSource) {
-        try {
-          const dedicationBuffer = await generateDedicationPage({
-            backgroundImage: backgroundSource,
-            kidImage: heroSource,
-            title: replaceChildPlaceholders(dedication.title, childName),
-            secondTitle: replaceChildPlaceholders(dedication.secondTitle, childName),
-          });
+      const backgroundCandidates = await buildGeneratorCandidates(
+        backgroundAsset,
+        backgroundSource,
+        'background'
+      );
+      if (!backgroundCandidates.some(Boolean)) {
+        throw new Error('Dedication page is missing a background image');
+      }
 
-          if (dedicationBuffer) {
+      const heroCandidatesRaw = await buildGeneratorCandidates(heroAsset, heroSource, 'hero');
+      const heroCandidates = heroCandidatesRaw.length ? heroCandidatesRaw : [];
+      if (!heroCandidates.some((candidate) => candidate === null)) {
+        heroCandidates.push(null);
+      }
+
+      const primaryTitle = replaceChildPlaceholders(dedication.title, childName);
+      const secondaryTitle = replaceChildPlaceholders(dedication.secondTitle, childName);
+
+      let dedicationBuffer = null;
+      let lastError = null;
+      let dedicationHandled = false;
+
+      backgroundLoop: for (const backgroundCandidate of backgroundCandidates) {
+        if (!backgroundCandidate) continue;
+        for (const heroCandidate of heroCandidates) {
+          try {
+            dedicationBuffer = await generateDedicationPage({
+              backgroundImage: backgroundCandidate,
+              kidImage: heroCandidate,
+              title: primaryTitle,
+              secondTitle: secondaryTitle,
+            });
+
+            if (!dedicationBuffer || !dedicationBuffer.length) {
+              throw new Error('generateDedicationPage returned empty buffer');
+            }
+
             const dedicationImage = await pdfDoc.embedPng(dedicationBuffer);
             page.drawImage(dedicationImage, {
               x: 0,
@@ -826,178 +843,30 @@ async function generateStorybookPdf({ title, pages }) {
               height: PAGE_HEIGHT,
             });
             renderedPageBuffers.push({ index, type: 'dedication', buffer: dedicationBuffer });
-            continue;
+            dedicationHandled = true;
+            break backgroundLoop;
+          } catch (error) {
+            lastError = error;
+            const bgType = Buffer.isBuffer(backgroundCandidate) ? 'buffer' : 'url';
+            const heroType = heroCandidate
+              ? Buffer.isBuffer(heroCandidate)
+                ? 'buffer'
+                : 'url'
+              : 'none';
+            console.warn(
+              `[pdf] generateDedicationPage attempt failed (${bgType} background, ${heroType} hero):`,
+              error.message
+            );
           }
-        } catch (error) {
-          console.warn(
-            '[pdf] generateDedicationPage failed, falling back to simple renderer:',
-            error.message
-          );
         }
       }
 
-      const backgroundBuffer =
-        Buffer.isBuffer(backgroundSource) ? backgroundSource : await getImageBuffer(backgroundAsset);
-      if (backgroundBuffer) {
-        const backgroundImage = await embedImage(pdfDoc, backgroundBuffer);
-        if (backgroundImage) {
-          page.drawImage(backgroundImage, {
-            x: 0,
-            y: 0,
-            width: PAGE_WIDTH,
-            height: PAGE_HEIGHT,
-          });
-        }
-      } else {
-        page.drawRectangle({
-          x: 0,
-          y: 0,
-          width: PAGE_WIDTH,
-          height: PAGE_HEIGHT,
-          color: rgb(1, 1, 1),
-        });
-      }
-
-      const heroBuffer =
-        Buffer.isBuffer(heroSource) && heroSource.length
-          ? heroSource
-          : await getImageBuffer(heroAsset);
-      const halfWidth = PAGE_WIDTH / 2;
-      if (heroBuffer) {
-        const heroImage = await embedImage(pdfDoc, heroBuffer);
-        if (heroImage) {
-          const heroAspect = heroImage.width / heroImage.height;
-          let drawHeight = PAGE_HEIGHT * 1.15;
-          let drawWidth = drawHeight * heroAspect;
-          if (drawWidth > halfWidth) {
-            drawWidth = halfWidth;
-            drawHeight = drawWidth / heroAspect;
-          }
-          const drawX = (halfWidth - drawWidth) / 2;
-          const drawY = PAGE_HEIGHT - drawHeight;
-          page.drawImage(heroImage, {
-            x: drawX,
-            y: drawY,
-            width: drawWidth,
-            height: drawHeight,
-          });
-        }
-      }
-
-      const bigLines = splitDedicationLines(
-        replaceChildPlaceholders(dedication.secondTitle, childName)
-      );
-      const smallLines = splitDedicationLines(
-        replaceChildPlaceholders(dedication.title, childName)
-      );
-
-      if (!bigLines.length && !smallLines.length) {
+      if (dedicationHandled) {
         continue;
       }
 
-      const textAreaWidth = halfWidth - 200;
-      const textAreaX = halfWidth + (halfWidth - textAreaWidth) / 2;
-      const textAreaY = PAGE_HEIGHT * 0.18;
-      const textAreaHeight = PAGE_HEIGHT * 0.64;
-      const centerX = textAreaX + textAreaWidth / 2;
-
-      const bigFontSize = bigLines.length
-        ? fitPdfFontSize(accentFont, bigLines, {
-            target: Math.min(180, textAreaWidth * 0.35, textAreaHeight * 0.5),
-            min: 72,
-            maxWidth: textAreaWidth,
-          })
-        : 0;
-
-      let smallFontSize = 0;
-      if (smallLines.length) {
-        const smallTargetBase = bigFontSize
-          ? Math.max(Math.min(bigFontSize * 0.55, bigFontSize - 24), 48)
-          : Math.min(110, textAreaWidth * 0.28, textAreaHeight * 0.3);
-        const smallTarget = Math.max(smallTargetBase, 48);
-
-        smallFontSize = fitPdfFontSize(bodyFont, smallLines, {
-          target: smallTarget,
-          min: 48,
-          maxWidth: textAreaWidth,
-        });
-
-        if (bigFontSize && smallFontSize >= bigFontSize) {
-          smallFontSize = Math.max(bigFontSize - 24, 48);
-        }
-      }
-
-      const bigLineHeight = bigLines.length && bigFontSize ? bigFontSize * 1.08 : 0;
-      const bigIntraSpacing =
-        bigLines.length > 1 && bigFontSize ? Math.round(bigFontSize * 0.2) : 0;
-      const bigBlockHeight =
-        bigLines.length && bigFontSize
-          ? bigLines.length * bigLineHeight + (bigLines.length - 1) * bigIntraSpacing
-          : 0;
-
-      const smallLineHeight = smallLines.length && smallFontSize ? smallFontSize * 1.08 : 0;
-      const smallIntraSpacing =
-        smallLines.length > 1 && smallFontSize ? Math.round(smallFontSize * 0.18) : 0;
-      const smallBlockHeight =
-        smallLines.length && smallFontSize
-          ? smallLines.length * smallLineHeight + (smallLines.length - 1) * smallIntraSpacing
-          : 0;
-
-      const blockGap =
-        bigLines.length && smallLines.length
-          ? Math.round(Math.min(bigFontSize || 0, smallFontSize || 0) * 0.35)
-          : 0;
-
-      const totalHeight = bigBlockHeight + smallBlockHeight + blockGap;
-      let cursorY = textAreaY + (textAreaHeight - totalHeight) / 2;
-      if (!Number.isFinite(cursorY)) {
-        cursorY = textAreaY;
-      }
-
-      if (bigLines.length && bigFontSize) {
-        const bigTextHeight = accentFont.heightAtSize(bigFontSize);
-        bigLines.forEach((line, index) => {
-          const textWidth = accentFont.widthOfTextAtSize(line, bigFontSize);
-          const textX = centerX - textWidth / 2;
-          const baselineY = cursorY + bigLineHeight - bigTextHeight;
-          page.drawText(line, {
-            x: textX,
-            y: baselineY,
-            size: bigFontSize,
-            font: accentFont,
-            color: rgb(1, 1, 1),
-          });
-          cursorY += bigLineHeight;
-          if (index < bigLines.length - 1) {
-            cursorY += bigIntraSpacing;
-          }
-        });
-      }
-
-      if (smallLines.length && smallFontSize) {
-        if (bigLines.length && bigFontSize) {
-          cursorY += blockGap;
-        }
-        const smallTextHeight = bodyFont.heightAtSize(smallFontSize);
-        smallLines.forEach((line, index) => {
-          const textWidth = bodyFont.widthOfTextAtSize(line, smallFontSize);
-          const textX = centerX - textWidth / 2;
-          const baselineY = cursorY + smallLineHeight - smallTextHeight;
-          page.drawText(line, {
-            x: textX,
-            y: baselineY,
-            size: smallFontSize,
-            font: bodyFont,
-            color: rgb(1, 1, 1),
-          });
-          cursorY += smallLineHeight;
-          if (index < smallLines.length - 1) {
-            cursorY += smallIntraSpacing;
-          }
-        });
-      }
-
-      continue;
+      const errorMessage = lastError ? lastError.message : 'generateDedicationPage produced no output';
+      throw new Error(`Failed to render dedication page: ${errorMessage}`);
     }
 
     const backgroundBuffer = await getImageBuffer(pageData.background);
