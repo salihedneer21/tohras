@@ -1969,14 +1969,15 @@ const handleRemovePageImage = (index) => {
 
                         <div className="space-y-2">
                           <Label htmlFor="dedicationSecondTitle">Second Title</Label>
-                          <Input
+                          <Textarea
                             id="dedicationSecondTitle"
-                            placeholder="Enter second title"
+                            minRows={4}
+                            placeholder="Enter second title (use line breaks to control spacing)"
                             value={formState.dedicationPage.secondTitle}
                             onChange={(e) => handleDedicationFieldChange('secondTitle', e.target.value)}
                           />
                           <p className="text-xs text-foreground/50">
-                            Secondary title displayed below the main title.
+                            Secondary title displayed below the main title. Use the Enter key to add new lines.
                           </p>
                         </div>
                       </div>

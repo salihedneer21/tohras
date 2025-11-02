@@ -259,11 +259,29 @@ const loadImageElement = (src) =>
       reject(new Error('Missing image source'));
       return;
     }
-    const image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Failed to load image ${src}`));
-    image.src = src;
+
+    let attemptedWithoutCors = false;
+
+    const attemptLoad = () => {
+      const image = new Image();
+      if (!attemptedWithoutCors) {
+        image.crossOrigin = 'anonymous';
+      }
+
+      image.onload = () => resolve(image);
+      image.onerror = () => {
+        if (!attemptedWithoutCors) {
+          attemptedWithoutCors = true;
+          console.warn(`[loadImageElement] Cross-origin load failed for ${src}, retrying without CORS`);
+          attemptLoad();
+          return;
+        }
+        reject(new Error(`Failed to load image ${src}`));
+      };
+      image.src = src;
+    };
+
+    attemptLoad();
   });
 
 const coverDrawRoundedRect = (ctx, x, y, width, height, radius) => {
@@ -580,88 +598,93 @@ const renderDedicationTextBlock = (ctx, { area, bigText, smallText }) => {
   const maxWidth = area.width;
   const areaHeight = area.height;
 
-  const bigTarget = Math.min(480, maxWidth * 0.6, areaHeight * 0.5);
-  const bigMin = Math.max(140, Math.round(Math.min(maxWidth, areaHeight) * 0.18));
-  const bigFontSize = primaryLines.length
+  const titleTarget = Math.min(480, maxWidth * 0.6, areaHeight * 0.5);
+  const titleMin = Math.max(140, Math.round(Math.min(maxWidth, areaHeight) * 0.18));
+  const titleFontSize = primaryLines.length
     ? fitDedicationFontSize(ctx, primaryLines, {
-        target: bigTarget,
-        min: bigMin,
+        target: titleTarget,
+        min: titleMin,
         maxWidth,
         weight: '700',
       })
     : 0;
 
-  let smallFontSize = 0;
+  let subtitleFontSize = 0;
   if (secondaryLines.length) {
-    const baseSmallTarget = bigFontSize
-      ? Math.max(Math.min(bigFontSize * 0.55, bigFontSize - 60), 0)
-      : Math.min(260, maxWidth * 0.4, areaHeight * 0.3);
-    const smallMin = Math.max(90, Math.round(Math.min(maxWidth, areaHeight) * 0.12));
-    const smallTarget = Math.max(baseSmallTarget, smallMin);
+    const subtitleBase = titleFontSize
+      ? Math.max(Math.min(titleFontSize * 0.95, titleFontSize - 5), 0)
+      : Math.min(420, maxWidth * 0.55, areaHeight * 0.45);
+    const subtitleMin = Math.max(170, Math.round(Math.min(maxWidth, areaHeight) * 0.2));
+    const subtitleTarget = Math.max(subtitleBase, subtitleMin);
 
-    smallFontSize = fitDedicationFontSize(ctx, secondaryLines, {
-      target: smallTarget,
-      min: smallMin,
-      maxWidth,
-      weight: '500',
+    subtitleFontSize = fitDedicationFontSize(ctx, secondaryLines, {
+      target: subtitleTarget,
+      min: subtitleMin,
+      maxWidth: maxWidth * 1.2,
+      weight: '400',
     });
 
-    if (bigFontSize && smallFontSize >= bigFontSize) {
-      smallFontSize = Math.max(bigFontSize - 60, smallMin);
+    if (titleFontSize && subtitleFontSize >= titleFontSize * 0.98) {
+      subtitleFontSize = Math.max(titleFontSize * 0.95, subtitleMin);
     }
   }
 
-  const bigLineHeight = primaryLines.length && bigFontSize ? bigFontSize * 1.05 : 0;
-  const bigIntraSpacing =
-    primaryLines.length > 1 && bigFontSize ? Math.round(bigFontSize * 0.2) : 0;
-  const bigBlockHeight =
-    primaryLines.length && bigFontSize
-      ? primaryLines.length * bigLineHeight + (primaryLines.length - 1) * bigIntraSpacing
+  const titleLineHeight = primaryLines.length && titleFontSize ? titleFontSize * 1.05 : 0;
+  const titleSpacing =
+    primaryLines.length > 1 && titleFontSize ? Math.round(titleFontSize * 0.2) : 0;
+  const titleBlockHeight =
+    primaryLines.length && titleFontSize
+      ? primaryLines.length * titleLineHeight + (primaryLines.length - 1) * titleSpacing
       : 0;
 
-  const smallLineHeight = secondaryLines.length && smallFontSize ? smallFontSize * 1.05 : 0;
-  const smallIntraSpacing =
-    secondaryLines.length > 1 && smallFontSize ? Math.round(smallFontSize * 0.18) : 0;
-  const smallBlockHeight =
-    secondaryLines.length && smallFontSize
-      ? secondaryLines.length * smallLineHeight + (secondaryLines.length - 1) * smallIntraSpacing
+  const subtitleLineHeight =
+    secondaryLines.length && subtitleFontSize ? subtitleFontSize * 1.08 : 0;
+  const subtitleSpacing =
+    secondaryLines.length > 1 && subtitleFontSize ? Math.round(subtitleFontSize * 0.22) : 0;
+  const subtitleBlockHeight =
+    secondaryLines.length && subtitleFontSize
+      ? secondaryLines.length * subtitleLineHeight +
+        (secondaryLines.length - 1) * subtitleSpacing
       : 0;
 
   const blockGap =
     primaryLines.length && secondaryLines.length
-      ? Math.round(Math.min(bigFontSize || 0, smallFontSize || 0) * 0.4)
+      ? Math.max(Math.round(Math.min(titleFontSize || 0, subtitleFontSize || 0) * 0.9), 70)
       : 0;
 
-  const totalHeight = bigBlockHeight + smallBlockHeight + blockGap;
+  const totalHeight = titleBlockHeight + subtitleBlockHeight + blockGap;
   const centerX = area.x + area.width / 2;
+  const leftX = area.x + area.width * 0.02;
   let cursorY = area.y + (area.height - totalHeight) / 2;
 
   ctx.save();
   ctx.fillStyle = '#FFFFFF';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
 
-  if (primaryLines.length && bigFontSize) {
-    ctx.font = `700 ${Math.round(bigFontSize)}px "CanvaSans"`;
+  if (primaryLines.length && titleFontSize) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `700 ${Math.round(titleFontSize)}px "CanvaSans"`;
     primaryLines.forEach((line, index) => {
-      cursorY += bigLineHeight;
+      cursorY += titleLineHeight;
       ctx.fillText(line, centerX, cursorY);
       if (index < primaryLines.length - 1) {
-        cursorY += bigIntraSpacing;
+        cursorY += titleSpacing;
       }
     });
   }
 
-  if (secondaryLines.length && smallFontSize) {
-    if (primaryLines.length && bigFontSize) {
+  if (secondaryLines.length && subtitleFontSize) {
+    if (primaryLines.length && titleFontSize) {
       cursorY += blockGap;
     }
-    ctx.font = `500 ${Math.round(smallFontSize)}px "CanvaSans"`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `400 ${Math.round(subtitleFontSize)}px "CanvaSans"`;
     secondaryLines.forEach((line, index) => {
-      cursorY += smallLineHeight;
-      ctx.fillText(line, centerX, cursorY);
+      cursorY += subtitleLineHeight;
+      ctx.fillText(line, leftX, cursorY);
       if (index < secondaryLines.length - 1) {
-        cursorY += smallIntraSpacing;
+        cursorY += subtitleSpacing;
       }
     });
   }
@@ -999,10 +1022,8 @@ const renderDedicationPreview = async (canvas, model, signal) => {
   if (kidImage) {
     // EXACT backend calculations - match dedicationGenerator.js:194-226
     const kidAspectRatio = kidImage.width / kidImage.height;
-    const baseWidthRatio = 0.4 * 1.1;
-    const baseHeightRatio = 0.8 * 1.1;
-    const charAreaWidth = width * baseWidthRatio;
-    const charAreaHeight = height * baseHeightRatio;
+    const charAreaWidth = width * 0.44;
+    const charAreaHeight = height * 0.88;
     const targetAspectRatio = charAreaWidth / charAreaHeight;
 
     let drawWidth;
@@ -1017,7 +1038,7 @@ const renderDedicationPreview = async (canvas, model, signal) => {
     }
 
     const drawX = (halfWidth - drawWidth) / 2;
-    const drawY = height - drawHeight - height * 0.02;
+    const drawY = height - drawHeight;
 
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.45)';
@@ -1040,8 +1061,8 @@ const renderDedicationPreview = async (canvas, model, signal) => {
       width: textAreaWidth,
       height: textAreaHeight,
     },
-    bigText: dedicationData.secondTitle || '',
-    smallText: dedicationData.title || '',
+    bigText: dedicationData.title || '',
+    smallText: dedicationData.secondTitle || '',
   });
 };
 
