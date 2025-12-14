@@ -2023,12 +2023,42 @@ const getStorybookJobById = async (jobId) => {
   return emitJob(job);
 };
 
-const listStorybookJobsForBook = async (bookId, limit = 10, options = {}) => {
-  const { minimal = false } = options;
-  const jobs = await StorybookJob.find({ bookId })
+const listStorybookJobsForBook = async (bookId, options = {}) => {
+  const {
+    minimal = false,
+    page = 1,
+    limit = 10,
+    status,
+    hasPdf,
+  } = options;
+
+  const numericLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
+  const rawPage = parseInt(page, 10) || 1;
+  const effectivePage = rawPage < 1 ? 1 : rawPage;
+
+  const filter = { bookId };
+
+  if (status && status !== 'all') {
+    if (Array.isArray(status) && status.length) {
+      filter.status = { $in: status };
+    } else if (typeof status === 'string') {
+      filter.status = status;
+    }
+  }
+
+  if (hasPdf === true) {
+    filter.pdfAsset = { $ne: null };
+  }
+
+  const total = await StorybookJob.countDocuments(filter);
+  const skip = (effectivePage - 1) * numericLimit;
+
+  const jobs = await StorybookJob.find(filter)
     .sort({ createdAt: -1 })
-    .limit(limit);
-  return jobs.map((job) => {
+    .skip(skip)
+    .limit(numericLimit);
+
+  const snapshots = jobs.map((job) => {
     const base = job.toObject({ depopulate: true });
     base.progress = computeJobProgress(base);
     const snapshot = sanitizeJobSnapshot(base);
@@ -2053,6 +2083,13 @@ const listStorybookJobsForBook = async (bookId, limit = 10, options = {}) => {
 
     return snapshot;
   });
+
+  return {
+    jobs: snapshots,
+    total,
+    page: effectivePage,
+    limit: numericLimit,
+  };
 };
 
 module.exports = {

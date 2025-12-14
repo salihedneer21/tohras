@@ -175,14 +175,29 @@ exports.listJobs = async (req, res) => {
       });
     }
 
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+    const rawLimit = parseInt(req.query.limit, 10);
+    const rawPage = parseInt(req.query.page, 10);
+    const limit = Math.min(Math.max(rawLimit || 10, 1), 50);
+    const page = rawPage && rawPage > 0 ? rawPage : 1;
     const minimal = req.query.minimal === 'true';
-    const jobs = await listStorybookJobsForBook(bookId, limit, { minimal });
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const hasPdf = req.query.hasPdf === 'true';
+
+    const result = await listStorybookJobsForBook(bookId, {
+      minimal,
+      page,
+      limit,
+      status,
+      hasPdf,
+    });
 
     return res.status(200).json({
       success: true,
-      count: jobs.length,
-      data: jobs,
+      count: Array.isArray(result.jobs) ? result.jobs.length : 0,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      data: result.jobs,
     });
   } catch (error) {
     console.error('Error listing storybook jobs:', error);

@@ -45,7 +45,8 @@ import {
 } from '@/components/ui/select';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
-const JOB_HISTORY_LIMIT = 10;
+const JOB_HISTORY_LIMIT = 200;
+const RUNS_PAGE_SIZE = 10;
 const DEFAULT_LIBRARY_PAGE_SIZE = 6;
 const LIBRARY_PAGE_SIZE_OPTIONS = [6, 12, 24];
 const READY_STATUS_OPTIONS = [
@@ -2120,6 +2121,8 @@ function Storybooks() {
   const [libraryStatusFilter, setLibraryStatusFilter] = useState('all');
   const [libraryPageSize, setLibraryPageSize] = useState(DEFAULT_LIBRARY_PAGE_SIZE);
   const [libraryPage, setLibraryPage] = useState(1);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runsPage, setRunsPage] = useState(1);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
   const eventSourceRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -2134,6 +2137,8 @@ function Storybooks() {
   const [applyingCandidateKey, setApplyingCandidateKey] = useState('');
   const [confirmingAssetId, setConfirmingAssetId] = useState('');
   const [confirmedStorybooks, setConfirmedStorybooks] = useState([]);
+  const [generatedJobs, setGeneratedJobs] = useState([]);
+  const [totalStorybooks, setTotalStorybooks] = useState(0);
   const [removingJobId, setRemovingJobId] = useState('');
   const [removingConfirmedId, setRemovingConfirmedId] = useState('');
   const preloadRefs = useRef([]);
@@ -2174,13 +2179,6 @@ function Storybooks() {
   }, [selectedReader?.gender]);
 
   useEffect(() => {
-    setLibrarySearchTerm('');
-    setLibraryStatusFilter('all');
-    setLibraryPageSize(DEFAULT_LIBRARY_PAGE_SIZE);
-    setLibraryPage(1);
-  }, [selectedBookId]);
-
-  useEffect(() => {
     if (hasLoadedInitialDataRef.current) {
       return;
     }
@@ -2210,6 +2208,14 @@ function Storybooks() {
 
     fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    setLibrarySearchTerm('');
+    setLibraryStatusFilter('all');
+    setLibraryPageSize(DEFAULT_LIBRARY_PAGE_SIZE);
+    setLibraryPage(1);
+    setRunsPage(1);
+  }, [selectedBookId]);
 
   const fetchBookDetails = useCallback(
     async (bookId, { preserveTitle = false } = {}) => {
@@ -2270,6 +2276,42 @@ function Storybooks() {
     []
   );
 
+  const fetchGeneratedStorybooks = useCallback(
+    async (bookId, page, pageSize) => {
+      if (!bookId) {
+        setGeneratedJobs([]);
+        setTotalStorybooks(0);
+        return;
+      }
+      try {
+        const response = await bookAPI.getStorybookJobs(bookId, {
+          page,
+          limit: pageSize,
+          status: 'succeeded',
+          hasPdf: true,
+          minimal: true,
+        });
+        if (response?.success === false) {
+          throw new Error(response?.message || 'Failed to load generated storybooks');
+        }
+        const jobs = Array.isArray(response?.data) ? response.data : [];
+        setGeneratedJobs(jobs);
+        const total =
+          typeof response?.total === 'number' && Number.isFinite(response.total)
+            ? response.total
+            : jobs.length;
+        setTotalStorybooks(total);
+      } catch (error) {
+        toast.error(`Failed to load generated storybooks: ${error.message}`);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!selectedBookId) return;
+    fetchGeneratedStorybooks(selectedBookId, libraryPage, libraryPageSize);
+  }, [selectedBookId, libraryPage, libraryPageSize, fetchGeneratedStorybooks]);
 
   const disconnectJobStream = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -2294,14 +2336,30 @@ function Storybooks() {
       handledJobCompletionsRef.current.add(job._id);
 
       toast.success('Storybook automation completed');
+      // Refresh generated storybooks for the current page so the new PDF appears
+      fetchGeneratedStorybooks(selectedBookId, libraryPage, libraryPageSize);
     },
-    [fetchBookDetails, selectedBookId]
+    [selectedBookId, fetchGeneratedStorybooks, libraryPage, libraryPageSize]
   );
 
   const applyJobUpdate = useCallback(
     (payload) => {
       if (!payload?._id) return;
-      setStorybookJobs((previous) => upsertJobList(previous, payload));
+      setStorybookJobs((previous) => {
+        if (!previous || !previous.length) {
+          return runsPage === 1 ? upsertJobList(previous, payload) : previous;
+        }
+        if (runsPage !== 1) {
+          const index = previous.findIndex((item) => item._id === payload._id);
+          if (index === -1) {
+            return previous;
+          }
+          const next = [...previous];
+          next[index] = mergeJobPayload(previous[index], payload);
+          return next.sort(sortByCreatedAtDesc);
+        }
+        return upsertJobList(previous, payload);
+      });
       // Keep expanded job details in sync with live SSE updates
       setLoadedJobDetails((previous) => {
         if (!previous.size || !previous.has(payload._id)) {
@@ -2316,25 +2374,33 @@ function Storybooks() {
         handleJobCompletion(payload);
       }
     },
-    [handleJobCompletion]
+    [handleJobCompletion, runsPage]
   );
 
   const fetchStorybookJobs = useCallback(
-    async (bookId) => {
+    async (bookId, page = 1) => {
       if (!bookId) {
         setStorybookJobs([]);
+        setRunsTotal(0);
         handledJobCompletionsRef.current = new Set();
         return;
       }
       try {
         const response = await bookAPI.getStorybookJobs(bookId, {
-          limit: JOB_HISTORY_LIMIT,
+          page,
+          limit: RUNS_PAGE_SIZE,
+          minimal: true,
         });
         if (response?.success === false) {
           throw new Error(response?.message || 'Failed to load storybook runs');
         }
         const jobs = Array.isArray(response?.data) ? response.data : [];
         setStorybookJobs(jobs.sort(sortByCreatedAtDesc));
+        const total =
+          typeof response?.total === 'number' && Number.isFinite(response.total)
+            ? response.total
+            : jobs.length;
+        setRunsTotal(total);
         handledJobCompletionsRef.current = new Set(
           jobs.filter((job) => job.status === 'succeeded').map((job) => job._id)
         );
@@ -2506,7 +2572,6 @@ function Storybooks() {
     }
 
     fetchBookDetails(selectedBookId);
-    fetchStorybookJobs(selectedBookId);
     connectJobStream(selectedBookId);
 
     bookAPI
@@ -2525,13 +2590,12 @@ function Storybooks() {
     return () => {
       disconnectJobStream();
     };
-  }, [
-    selectedBookId,
-    fetchBookDetails,
-    fetchStorybookJobs,
-    connectJobStream,
-    disconnectJobStream,
-  ]);
+  }, [selectedBookId, fetchBookDetails, connectJobStream, disconnectJobStream]);
+
+  useEffect(() => {
+    if (!selectedBookId) return;
+    fetchStorybookJobs(selectedBookId, runsPage);
+  }, [selectedBookId, runsPage, fetchStorybookJobs]);
 
   useEffect(() => {
     if (!activeAsset) {
@@ -2598,7 +2662,7 @@ function Storybooks() {
   }, [activeAsset, storybookJobs]);
 
   const standardAssets = useMemo(() => {
-    return storybookJobs
+    return generatedJobs
       .filter((job) => job.status === 'succeeded' && job.pdfAsset)
       .map((job) => ({
         ...job.pdfAsset,
@@ -2606,7 +2670,7 @@ function Storybooks() {
       }))
       .slice()
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  }, [storybookJobs]);
+  }, [generatedJobs]);
 
   const splitLookup = useMemo(() => {
     const map = new Map();
@@ -2672,7 +2736,7 @@ function Storybooks() {
     setLibraryPage(1);
   }, [libraryStatusFilter, librarySearchTerm, libraryPageSize]);
 
-  const totalReadyItems = filteredReadyLibrary.length;
+  const totalReadyItems = totalStorybooks;
   const totalReadyPages = Math.max(1, Math.ceil(totalReadyItems / libraryPageSize));
 
   useEffect(() => {
@@ -2682,9 +2746,9 @@ function Storybooks() {
   }, [libraryPage, totalReadyPages]);
 
   const paginatedReadyLibrary = useMemo(() => {
-    const startIndex = (libraryPage - 1) * libraryPageSize;
-    return filteredReadyLibrary.slice(startIndex, startIndex + libraryPageSize);
-  }, [filteredReadyLibrary, libraryPage, libraryPageSize]);
+    // Backend already paginates by libraryPage/libraryPageSize; we only filter locally
+    return filteredReadyLibrary;
+  }, [filteredReadyLibrary]);
 
   const readyRangeStart =
     totalReadyItems === 0 ? 0 : (libraryPage - 1) * libraryPageSize + 1;
@@ -2693,8 +2757,23 @@ function Storybooks() {
       ? 0
       : Math.min(totalReadyItems, readyRangeStart + libraryPageSize - 1);
 
+  const totalRuns = runsTotal;
+  const totalRunPages = Math.max(1, Math.ceil(totalRuns / RUNS_PAGE_SIZE));
+
+  useEffect(() => {
+    if (runsPage > totalRunPages) {
+      setRunsPage(totalRunPages);
+    }
+  }, [runsPage, totalRunPages]);
+
+  const runsRangeStart =
+    totalRuns === 0 ? 0 : (runsPage - 1) * RUNS_PAGE_SIZE + 1;
+  const runsRangeEnd =
+    totalRuns === 0
+      ? 0
+      : Math.min(totalRuns, runsRangeStart + RUNS_PAGE_SIZE - 1);
+
   const totalPages = useMemo(() => pages.length, [pages.length]);
-  const totalStorybooks = useMemo(() => standardAssets.length, [standardAssets.length]);
   const totalConfirmedStorybooks = useMemo(
     () => confirmedStorybooks.length,
     [confirmedStorybooks.length]
@@ -2765,19 +2844,44 @@ function Storybooks() {
       setSelectedUserId(String(asset.readerId));
     }
 
-    const pdfPages = Array.isArray(assetSnapshot.pages) ? assetSnapshot.pages : [];
-    const jobForAsset = storybookJobs.find(
-      (job) =>
-        job._id === assetSnapshot.jobId ||
-        job._id === assetSnapshot.storybookJobId ||
-        job._id === assetSnapshot.storybookJobID
-    );
-    const jobPages = jobForAsset && Array.isArray(jobForAsset.pages) ? jobForAsset.pages : [];
-    const mergedPages = mergePdfAndJobPages(pdfPages, jobPages);
-
+    // Show the viewer immediately with a loading skeleton
     setActiveAsset(assetSnapshot);
-    setActiveAssetPages(normaliseAssetPages(mergedPages));
+    setActiveAssetPages([]);
     setActivePageIndex(0);
+
+    const jobId =
+      assetSnapshot.jobId || assetSnapshot.storybookJobId || assetSnapshot.storybookJobID || null;
+    if (!selectedBookId || !jobId) {
+      // Fallback: use any embedded pages on the asset itself
+      const pdfPagesFallback = Array.isArray(assetSnapshot.pages) ? assetSnapshot.pages : [];
+      if (pdfPagesFallback.length) {
+        setActiveAssetPages(normaliseAssetPages(pdfPagesFallback));
+      }
+      return;
+    }
+
+    try {
+      const response = await bookAPI.getStorybookJob(selectedBookId, jobId);
+      if (!response?.success || !response.data) {
+        throw new Error(response?.message || 'Failed to load storybook job for preview');
+      }
+      const jobSnapshot = response.data;
+
+      const pdfPages = Array.isArray(jobSnapshot.pdfAsset?.pages)
+        ? jobSnapshot.pdfAsset.pages
+        : Array.isArray(assetSnapshot.pages)
+        ? assetSnapshot.pages
+        : [];
+      const jobPages = Array.isArray(jobSnapshot.pages) ? jobSnapshot.pages : [];
+      const mergedPages = mergePdfAndJobPages(pdfPages, jobPages);
+
+      if (mergedPages.length) {
+        setActiveAssetPages(normaliseAssetPages(mergedPages));
+      }
+    } catch (error) {
+      console.error('Failed to load storybook job for preview:', error);
+      toast.error(error.message || 'Failed to load storybook preview');
+    }
   };
 
   const handleConfirmStorybook = async (asset) => {
@@ -4315,8 +4419,8 @@ function Storybooks() {
             </Card>
 
             {selectedBook && storybookJobs.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <Card>
+                <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <h3 className="text-lg font-semibold text-foreground">
                       Recent automation runs
@@ -4326,10 +4430,13 @@ function Storybooks() {
                     </p>
                   </div>
                   <p className="text-xs text-foreground/45">
-                    Showing up to {JOB_HISTORY_LIMIT} runs
+                    {totalRuns
+                      ? `Total ${totalRuns} run${totalRuns === 1 ? '' : 's'}`
+                      : 'No runs yet.'}
                   </p>
-                </div>
-                <div className="grid gap-4">
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4">
                   {storybookJobs.map((job) => {
                 const statusMeta = getJobStatusMeta(job.status);
                 const progressValue = Math.max(0, Math.min(100, job.progress || 0));
@@ -4516,7 +4623,7 @@ function Storybooks() {
                             <span>{job.error}</span>
                           </div>
                         )}
-                        {job.status === 'succeeded' && job.pdfAsset && (
+                    {job.status === 'succeeded' && job.pdfAsset && (
                           <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
                             Completed • {job.pdfAsset.pageCount} pages • Added to storybook library
                           </div>
@@ -4526,9 +4633,48 @@ function Storybooks() {
                   </Card>
                 );
               })}
-            </div>
-          </div>
-        )}
+                  </div>
+                </CardContent>
+                <CardFooter className="flex flex-col gap-3 border-t border-border/60 bg-card/60 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-foreground/55">
+                    {totalRuns
+                      ? `Showing ${runsRangeStart}-${runsRangeEnd} of ${totalRuns}`
+                      : 'No runs yet.'}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => {
+                        setRunsPage((prev) => Math.max(1, prev - 1));
+                      }}
+                      disabled={runsPage <= 1 || totalRuns === 0}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      Prev
+                    </Button>
+                    <span className="text-xs text-foreground/55">
+                      Page {Math.min(runsPage, totalRunPages)} of {totalRunPages}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => {
+                        setRunsPage((prev) => Math.min(totalRunPages, prev + 1));
+                      }}
+                      disabled={runsPage >= totalRunPages || totalRuns === 0}
+                    >
+                      Next
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardFooter>
+              </Card>
+          )}
           </div>
         )}
       </div>
