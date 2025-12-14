@@ -2053,6 +2053,63 @@ const listStorybookJobsForBook = async (bookId, options = {}) => {
   const total = await StorybookJob.countDocuments(filter);
   const skip = (effectivePage - 1) * numericLimit;
 
+  const isPdfSummaryMinimal =
+    minimal &&
+    hasPdf === true &&
+    ((Array.isArray(status) && status.length && status.every((value) => value === 'succeeded')) ||
+      status === 'succeeded');
+
+  // Fast‑path: minimal summary for generated storybooks (succeeded + hasPdf)
+  // Only return the fields needed for the "Generated storybooks" library to avoid
+  // sending large nested documents like pages, logs, and metadata.
+  if (isPdfSummaryMinimal) {
+    const projection = {
+      bookId: 1,
+      trainingId: 1,
+      userId: 1,
+      readerId: 1,
+      readerName: 1,
+      readerGender: 1,
+      title: 1,
+      status: 1,
+      progress: 1,
+      createdAt: 1,
+      updatedAt: 1,
+      'pdfAsset.key': 1,
+      'pdfAsset.url': 1,
+      'pdfAsset.size': 1,
+      'pdfAsset.pageCount': 1,
+      'pdfAsset.title': 1,
+      'pdfAsset.createdAt': 1,
+      'pdfAsset.updatedAt': 1,
+    };
+
+    const docs = await StorybookJob.find(filter)
+      .select(projection)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(numericLimit)
+      .lean();
+
+    const snapshots = docs.map((doc) => {
+      const snapshot = { ...doc };
+      const rawProgress = Number.isFinite(snapshot.progress) ? snapshot.progress : 0;
+      snapshot.progress =
+        snapshot.status === 'succeeded' ? 100 : clamp(rawProgress, 0, 100);
+      if (snapshot.pdfAsset && !Number.isFinite(snapshot.pdfAsset.pageCount)) {
+        snapshot.pdfAsset.pageCount = 0;
+      }
+      return snapshot;
+    });
+
+    return {
+      jobs: snapshots,
+      total,
+      page: effectivePage,
+      limit: numericLimit,
+    };
+  }
+
   const jobs = await StorybookJob.find(filter)
     .sort({ createdAt: -1 })
     .skip(skip)

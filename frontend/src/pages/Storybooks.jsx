@@ -2664,10 +2664,20 @@ function Storybooks() {
   const standardAssets = useMemo(() => {
     return generatedJobs
       .filter((job) => job.status === 'succeeded' && job.pdfAsset)
-      .map((job) => ({
-        ...job.pdfAsset,
-        jobId: job._id,
-      }))
+      .map((job) => {
+        const asset = job.pdfAsset || {};
+        const readerId = asset.readerId || job.readerId || null;
+        const readerName = asset.readerName || job.readerName || '';
+        const readerGender = asset.readerGender || job.readerGender || '';
+
+        return {
+          ...asset,
+          jobId: job._id,
+          readerId,
+          readerName,
+          readerGender,
+        };
+      })
       .slice()
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   }, [generatedJobs]);
