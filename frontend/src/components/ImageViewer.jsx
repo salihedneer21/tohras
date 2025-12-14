@@ -148,7 +148,7 @@ export function ImageViewer({
           <img
             src={src}
             alt={title}
-            className="max-h-full max-w-full object-contain rounded-lg"
+            className="max-h-[90vh] max-w-[95vw] object-contain rounded-lg"
             loading="eager"
           />
         </div>

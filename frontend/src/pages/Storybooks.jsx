@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { bookAPI, trainingAPI, userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
+import UserImagesPreview from '@/components/UserImagesPreview';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
@@ -3399,6 +3400,9 @@ function Storybooks() {
               </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+              {readerLookupId ? (
+                <UserImagesPreview userId={readerLookupId} userName={resolvedReaderName} />
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
