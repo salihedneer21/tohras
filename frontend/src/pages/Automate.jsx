@@ -46,8 +46,6 @@ const createEmptyForm = () => ({
   age: '',
   gender: 'male',
   email: '',
-  countryCode: '+1',
-  phoneNumber: '',
 });
 
 const RUN_STATUS_META = {
@@ -413,8 +411,6 @@ function Automate() {
       payload.append('age', formData.age);
       payload.append('gender', formData.gender);
       payload.append('email', formData.email);
-      payload.append('countryCode', formData.countryCode);
-      payload.append('phoneNumber', formData.phoneNumber);
 
       imagesToUpload.forEach((item) => {
         payload.append('images', item.file, item.file.name);
@@ -632,7 +628,7 @@ function Automate() {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="email">Email *</Label>
                 <Input
@@ -643,28 +639,6 @@ function Automate() {
                   onChange={handleInputChange}
                   required
                   placeholder="reader@example.com"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="countryCode">Country code *</Label>
-                <Input
-                  id="countryCode"
-                  name="countryCode"
-                  value={formData.countryCode}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="+1"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="phoneNumber">Phone number *</Label>
-                <Input
-                  id="phoneNumber"
-                  name="phoneNumber"
-                  value={formData.phoneNumber}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="1234567890"
                 />
               </div>
             </div>

@@ -558,8 +558,6 @@ const createAutomationRun = async ({ bookId, userInput, files, overrides = [] })
       age: userInput.age,
       gender: userInput.gender,
       email: userInput.email,
-      countryCode: userInput.countryCode,
-      phoneNumber: userInput.phoneNumber,
       imageAssets: [],
     });
 

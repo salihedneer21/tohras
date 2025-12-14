@@ -6,7 +6,7 @@ const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
 
 exports.startAutomation = async (req, res) => {
   try {
-    const { bookId, name, age, gender, email, countryCode, phoneNumber } = req.body;
+    const { bookId, name, age, gender, email } = req.body;
 
     if (!isValidObjectId(bookId)) {
       return res.status(400).json({
@@ -15,7 +15,7 @@ exports.startAutomation = async (req, res) => {
       });
     }
 
-    if (!name || !age || !gender || !email || !countryCode || !phoneNumber) {
+    if (!name || !age || !gender || !email) {
       return res.status(400).json({
         success: false,
         message: 'Missing required user fields',
@@ -47,7 +47,7 @@ exports.startAutomation = async (req, res) => {
 
     const run = await createAutomationRun({
       bookId,
-      userInput: { name, age, gender, email, countryCode, phoneNumber },
+      userInput: { name, age, gender, email },
       files,
       overrides,
     });

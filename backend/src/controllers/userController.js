@@ -54,20 +54,6 @@ const sanitiseUserPayload = (source = {}) => {
     }
   }
 
-  if (typeof source.countryCode === 'string') {
-    const trimmed = source.countryCode.trim();
-    if (trimmed) {
-      payload.countryCode = trimmed;
-    }
-  }
-
-  if (typeof source.phoneNumber === 'string') {
-    const trimmed = source.phoneNumber.trim();
-    if (trimmed) {
-      payload.phoneNumber = trimmed;
-    }
-  }
-
   if (typeof source.status === 'string') {
     const trimmed = source.status.trim();
     if (trimmed) {
@@ -117,8 +103,6 @@ exports.getAllUsers = async (req, res) => {
       filter.$or = [
         { name: expression },
         { email: expression },
-        { phoneNumber: expression },
-        { countryCode: expression },
       ];
     }
 
@@ -241,6 +225,45 @@ exports.getUserById = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Get single user by Shopify order ID
+ * @route GET /api/users/shopify/:shopifyOrderId
+ */
+exports.getUserByShopifyOrderId = async (req, res) => {
+  try {
+    const { shopifyOrderId } = req.params;
+    const key = typeof shopifyOrderId === 'string' ? shopifyOrderId.trim() : '';
+
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing Shopify order ID',
+      });
+    }
+
+    const user = await User.findOne({ shopifyOrderId: key });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found for this Shopify order',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    console.error('Error fetching user by Shopify order ID:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch user',

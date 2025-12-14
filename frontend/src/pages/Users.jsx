@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   Users as UsersIcon,
@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  Share2,
 } from 'lucide-react';
 import { userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -45,8 +46,6 @@ const createEmptyForm = () => ({
   age: '',
   gender: 'male',
   email: '',
-  countryCode: '+1',
-  phoneNumber: '',
 });
 
 const buildUserPayload = (formValues) => {
@@ -55,8 +54,6 @@ const buildUserPayload = (formValues) => {
     secondTitle: formValues.secondTitle?.trim() || '',
     gender: formValues.gender || undefined,
     email: formValues.email?.trim(),
-    countryCode: formValues.countryCode?.trim(),
-    phoneNumber: formValues.phoneNumber?.trim(),
   };
 
   if (formValues.age !== undefined && formValues.age !== null && `${formValues.age}`.trim() !== '') {
@@ -103,6 +100,7 @@ function Users() {
     totalUsers: 0,
     totalImages: 0,
   });
+  const formRef = useRef(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -361,11 +359,15 @@ function Users() {
       age: user.age ?? '',
       gender: user.gender || 'male',
       email: user.email || '',
-      countryCode: user.countryCode || '+1',
-      phoneNumber: user.phoneNumber || '',
     });
     setEditingId(user._id);
     setShowForm(true);
+    // Scroll to the edit form for better visibility
+    window.requestAnimationFrame(() => {
+      if (formRef.current) {
+        formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   };
 
   const handleDelete = async (id) => {
@@ -411,12 +413,25 @@ function Users() {
     if (!window.confirm('Remove this image?')) return;
     try {
       await userAPI.deleteImage(userId, assetId);
+       setUsers((prev) =>
+        prev.map((user) =>
+          user._id === userId
+            ? {
+                ...user,
+                imageAssets: (user.imageAssets || []).filter(
+                  (asset) => asset._id !== assetId
+                ),
+              }
+            : user
+        )
+      );
       toast.success('Image removed');
-      fetchUsers();
     } catch (error) {
       toast.error(`Failed to remove image: ${error.message}`);
     }
   };
+
+  const editingUser = editingId ? users.find((user) => user._id === editingId) : null;
 
   if (loading) {
     return (
@@ -579,8 +594,9 @@ function Users() {
       </div>
 
       {showForm && (
-        <Card className="border-border/60 bg-card/95">
-          <CardHeader>
+        <div ref={formRef}>
+          <Card className="border-border/60 bg-card/95">
+            <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg font-semibold">
               <UserCircle2 className="h-5 w-5 text-primary" />
               {editingId ? 'Edit user' : 'Add new user'}
@@ -589,8 +605,8 @@ function Users() {
               Store the child’s details and optional reference photos. Images are compressed
               automatically on upload.
             </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </CardHeader>
+            <CardContent>
             <form className="space-y-6" onSubmit={handleSubmit}>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -653,28 +669,6 @@ function Users() {
                     onChange={handleInputChange}
                     placeholder="parent@example.com"
                   />
-                </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="countryCode">Country code</Label>
-                    <Input
-                      id="countryCode"
-                      name="countryCode"
-                      value={formData.countryCode}
-                      onChange={handleInputChange}
-                      placeholder="+1"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="phoneNumber">Phone number</Label>
-                    <Input
-                      id="phoneNumber"
-                      name="phoneNumber"
-                      value={formData.phoneNumber}
-                      onChange={handleInputChange}
-                      placeholder="5551234567"
-                    />
-                  </div>
                 </div>
               </div>
 
@@ -772,6 +766,108 @@ function Users() {
                 </div>
               )}
 
+              {editingId && editingUser && (
+                <div className="space-y-4 rounded-xl border border-border/60 bg-muted p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <Label>Reference photos</Label>
+                      <p className="text-xs text-foreground/50">
+                        View, add, or remove photos for this user.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">
+                        {editingUser.imageAssets?.length || 0} images
+                      </Badge>
+                      <label
+                        htmlFor={`edit-upload-${editingUser._id}`}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border/60 bg-card px-3 py-2 text-xs font-semibold text-foreground/70 hover:bg-card/80"
+                      >
+                        <UploadCloud className="h-4 w-4" />
+                        Upload
+                      </label>
+                      <input
+                        id={`edit-upload-${editingUser._id}`}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          handleUploadImages(editingUser._id, event.target.files);
+                          event.target.value = '';
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {editingUser.imageAssets?.length ? (
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {editingUser.imageAssets.map((asset) => (
+                        <div
+                          key={asset._id || asset.key}
+                          className="group relative overflow-hidden rounded-md border border-border/40 bg-card"
+                        >
+                          <button
+                            type="button"
+                            className="group relative block h-24 w-full overflow-hidden"
+                            onClick={() =>
+                              setViewerAsset({
+                                src: asset.url,
+                                title: asset.originalName || asset.key || 'Reference photo',
+                                downloadUrl: asset.url,
+                                sizeLabel:
+                                  typeof asset.size === 'number'
+                                    ? formatFileSize(asset.size)
+                                    : undefined,
+                              })
+                            }
+                          >
+                            <img
+                              src={asset.url}
+                              alt={asset.originalName || asset.key}
+                              className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                            />
+                            <span className="absolute inset-0 bg-black/25 opacity-0 transition group-hover:opacity-100" />
+                          </button>
+                          <div className="pointer-events-none absolute inset-0 flex items-end justify-end gap-2 p-2 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="pointer-events-auto h-8 w-8 rounded-full bg-black/60 text-white shadow-sm hover:bg-black/80"
+                              onClick={() =>
+                                setViewerAsset({
+                                  src: asset.url,
+                                  title: asset.originalName || asset.key || 'Reference photo',
+                                  downloadUrl: asset.url,
+                                  sizeLabel:
+                                    typeof asset.size === 'number'
+                                      ? formatFileSize(asset.size)
+                                      : undefined,
+                                })
+                              }
+                            >
+                              <Maximize2 className="h-4 w-4" />
+                            </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="destructive"
+                                className="pointer-events-auto h-8 w-8 rounded-full bg-red-500 text-white shadow-lg hover:bg-red-600"
+                                onClick={() => handleDeleteImage(editingUser._id, asset._id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-foreground/50">No images uploaded yet.</p>
+                  )}
+                </div>
+              )}
+
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
                 <Button
                   type="button"
@@ -797,8 +893,9 @@ function Users() {
                 </Button>
               </div>
             </form>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -806,8 +903,9 @@ function Users() {
           const displayGender = user.gender || '—';
           const displayAge = typeof user.age === 'number' ? user.age : '—';
           const displayEmail = user.email || '—';
-          const displayPhone =
-            [user.countryCode, user.phoneNumber].filter(Boolean).join(' ').trim() || '—';
+          const displayOrder =
+            user.shopifyOrderName || user.shopifyOrderId || null;
+          const displayBookName = user.shopifyBookName || null;
 
           return (
             <Card key={user._id} className="flex flex-col justify-between">
@@ -817,6 +915,14 @@ function Users() {
                   {user.secondTitle && (
                     <p className="whitespace-pre-wrap text-sm text-foreground/70">
                       {user.secondTitle}
+                    </p>
+                  )}
+                  {(displayOrder || displayBookName) && (
+                    <p className="text-xs text-foreground/60">
+                      {displayOrder && <span className="font-mono mr-1">{displayOrder}</span>}
+                      {displayBookName && (
+                        <span>{displayOrder ? '· ' : ''}{displayBookName}</span>
+                      )}
                     </p>
                   )}
                   <CardDescription className="flex items-center gap-2 text-xs uppercase text-foreground/40">
@@ -837,7 +943,6 @@ function Users() {
                     </span>
                   </p>
                   <p className="truncate text-foreground/60">{displayEmail}</p>
-                  <p className="text-foreground/60">{displayPhone}</p>
                 </div>
 
                 <div className="space-y-4">
@@ -887,26 +992,25 @@ function Users() {
                                       : undefined,
                                 })
                               }
-                            >
-                              <img
-                                src={asset.url}
-                                alt={asset.originalName || asset.key}
-                                className="h-full w-full object-cover transition group-hover:scale-[1.03]"
-                              />
-                              <span className="absolute inset-0 bg-black/25 opacity-0 transition group-hover:opacity-100" />
-                              <Maximize2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white opacity-0 transition group-hover:opacity-100" />
-                            </button>
-                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
-                              <Button
-                                type="button"
-                                size="icon"
-                                variant="ghost"
-                                className="pointer-events-auto h-7 w-7 text-foreground hover:text-accent"
-                                onClick={() =>
-                                  setViewerAsset({
-                                    src: asset.url,
-                                    title: asset.originalName || asset.key || 'Reference photo',
-                                    downloadUrl: asset.url,
+                          >
+                            <img
+                              src={asset.url}
+                              alt={asset.originalName || asset.key}
+                              className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                            />
+                            <span className="absolute inset-0 bg-black/25 opacity-0 transition group-hover:opacity-100" />
+                          </button>
+                            <div className="pointer-events-none absolute inset-0 flex items-end justify-end gap-2 p-2 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="pointer-events-auto h-8 w-8 rounded-full bg-black/60 text-white shadow-sm hover:bg-black/80"
+                              onClick={() =>
+                                setViewerAsset({
+                                  src: asset.url,
+                                  title: asset.originalName || asset.key || 'Reference photo',
+                                  downloadUrl: asset.url,
                                     sizeLabel:
                                       typeof asset.size === 'number'
                                         ? formatFileSize(asset.size)
@@ -919,8 +1023,8 @@ function Users() {
                               <Button
                                 type="button"
                                 size="icon"
-                                variant="ghost"
-                                className="pointer-events-auto h-7 w-7 text-red-300 hover:text-red-200"
+                                variant="destructive"
+                                className="pointer-events-auto h-8 w-8 rounded-full bg-red-500 text-white shadow-lg hover:bg-red-600"
                                 onClick={() => handleDeleteImage(user._id, asset._id)}
                               >
                                 <Trash2 className="h-4 w-4" />
@@ -936,6 +1040,16 @@ function Users() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    onClick={() => handleShare(user)}
+                  >
+                    <Share2 className="h-4 w-4" />
+                    Share
+                  </Button>
                   <Button
                     type="button"
                     variant="outline"
@@ -1039,3 +1153,26 @@ function Users() {
 }
 
 export default Users;
+  const handleShare = async (user) => {
+    if (!user.shopifyOrderId) {
+      toast.error('Share link is only available for Shopify orders.');
+      return;
+    }
+
+    const origin =
+      typeof window !== 'undefined' && window.location
+        ? window.location.origin
+        : '';
+    const shareUrl = `${origin}/share/${encodeURIComponent(user.shopifyOrderId)}`;
+
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast.success('Share link copied to clipboard');
+      } else {
+        toast.success(`Share link: ${shareUrl}`);
+      }
+    } catch {
+      toast.success(`Share link: ${shareUrl}`);
+    }
+  };

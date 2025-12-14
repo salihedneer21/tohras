@@ -19,6 +19,13 @@ const upload = multer({
 router.get('/', userController.getAllUsers);
 
 /**
+ * @route   GET /api/users/shopify/:shopifyOrderId
+ * @desc    Get user by Shopify order ID
+ * @access  Public
+ */
+router.get('/shopify/:shopifyOrderId', userController.getUserByShopifyOrderId);
+
+/**
  * @route   GET /api/users/:id
  * @desc    Get user by ID
  * @access  Public

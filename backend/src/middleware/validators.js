@@ -20,25 +20,6 @@ exports.validateUser = [
     .optional({ checkFalsy: true })
     .isIn(['male', 'female', 'other'])
     .withMessage('Gender must be male, female, or other'),
-
-  body('email')
-    .optional({ checkFalsy: true })
-    .trim()
-    .isEmail()
-    .withMessage('Please provide a valid email address')
-    .normalizeEmail(),
-
-  body('countryCode')
-    .optional({ checkFalsy: true })
-    .trim()
-    .matches(/^\+\d{1,4}$/)
-    .withMessage('Country code must be in format +XX'),
-
-  body('phoneNumber')
-    .optional({ checkFalsy: true })
-    .trim()
-    .matches(/^\d{6,15}$/)
-    .withMessage('Phone number must be 6-15 digits'),
 ];
 
 const BOOK_GENDERS = ['male', 'female', 'both'];

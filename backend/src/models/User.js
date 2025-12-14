@@ -67,17 +67,20 @@ const userSchema = new mongoose.Schema(
       ],
       set: toOptionalLowercaseString,
     },
-    countryCode: {
+    shopifyOrderName: {
       type: String,
       trim: true,
-      match: [/^\+\d{1,4}$/, 'Please enter a valid country code (e.g., +1, +91)'],
-      set: toOptionalTrimmedString,
+      default: null,
     },
-    phoneNumber: {
+    shopifyBookName: {
       type: String,
       trim: true,
-      match: [/^\d{6,15}$/, 'Please enter a valid phone number'],
-      set: toOptionalTrimmedString,
+      default: null,
+    },
+    shopifyOrderId: {
+      type: String,
+      trim: true,
+      default: null,
     },
     imageAssets: {
       type: [imageAssetSchema],
@@ -96,12 +99,7 @@ const userSchema = new mongoose.Schema(
 
 // Index for faster queries
 userSchema.index({ status: 1 });
-
-// Virtual for full phone number
-userSchema.virtual('fullPhoneNumber').get(function () {
-  const parts = [this.countryCode, this.phoneNumber].filter(Boolean);
-  return parts.join(' ');
-});
+userSchema.index({ shopifyOrderId: 1 }, { unique: true, sparse: true });
 
 userSchema.methods.removeImageAsset = function (assetId) {
   this.imageAssets = this.imageAssets.filter((asset) => asset._id.toString() !== assetId.toString());
