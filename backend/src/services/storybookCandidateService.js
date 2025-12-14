@@ -1,5 +1,6 @@
 const Book = require('../models/Book');
 const StorybookJob = require('../models/StorybookJob');
+const StorybookGeneratedLog = require('../models/StorybookGeneratedLog');
 const { getStorybookJobById, copyAssetToBookCharacterSlot } = require('./storybookWorkflow');
 
 const createEvent = (type, message, metadata = null) => ({
@@ -8,6 +9,28 @@ const createEvent = (type, message, metadata = null) => ({
   metadata,
   timestamp: new Date(),
 });
+
+const recordStorybookLogEvent = ({ jobId, bookId, event }) => {
+  if (!jobId || !event) return;
+
+  StorybookGeneratedLog.updateOne(
+    { storybookJobId: jobId },
+    {
+      $setOnInsert: {
+        storybookJobId: jobId,
+        bookId: bookId || null,
+      },
+      $push: {
+        events: event,
+      },
+    },
+    { upsert: true }
+  ).catch((error) => {
+    console.warn(
+      `[storybook] Failed to record candidate selection log for job ${jobId}: ${error.message}`
+    );
+  });
+};
 
 async function applyCandidateSelection({ jobId, pageToken, candidateIndex }) {
   if (!jobId || candidateIndex == null) {
@@ -76,12 +99,17 @@ async function applyCandidateSelection({ jobId, pageToken, candidateIndex }) {
     backgroundRemoved: Boolean(candidate.backgroundRemoved),
   };
   page.selectedCandidateIndex = candidateIndex;
-  page.events = page.events || [];
-  page.events.push(
-    createEvent('candidate-selected', 'User selected a candidate image for this page', {
-      candidateIndex,
-    })
+
+  const event = createEvent(
+    'candidate-selected',
+    'User selected a candidate image for this page',
+    { candidateIndex }
   );
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event,
+  });
 
   await job.save();
 

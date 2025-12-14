@@ -58,6 +58,7 @@ router.post('/dedication-preview', dedicationPreviewFields, bookController.gener
 router.get('/storybooks/stream/live', storybookAutomationController.streamJobs);
 router.get('/:id/storybooks/jobs', storybookAutomationController.listJobs);
 router.get('/:id/storybooks/jobs/:jobId', storybookAutomationController.getJob);
+router.get('/:id/storybooks/jobs/:jobId/logs', storybookAutomationController.getJobLogs);
 router.post('/:id/storybooks/jobs/:jobId/candidates', storybookAutomationController.applyCandidate);
 router.post(
   '/:id/storybooks/jobs/:jobId/pages/:pageOrder/regenerate',

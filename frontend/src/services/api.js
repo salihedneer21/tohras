@@ -62,6 +62,8 @@ export const bookAPI = {
   startAutoStorybook: (id, data) => api.post(`/books/${id}/storybooks/auto`, data),
   getStorybookJobs: (id, params) => api.get(`/books/${id}/storybooks/jobs`, { params }),
   getStorybookJob: (bookId, jobId) => api.get(`/books/${bookId}/storybooks/jobs/${jobId}`),
+  getStorybookJobLogs: (bookId, jobId) =>
+    api.get(`/books/${bookId}/storybooks/jobs/${jobId}/logs`),
   applyStorybookCandidate: (bookId, jobId, pageOrder, body) =>
     api.post(`/books/${bookId}/storybooks/jobs/${jobId}/candidates`, {
       pageOrder,

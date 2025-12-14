@@ -160,7 +160,7 @@ function ShareUser() {
   const displayBookName = user.shopifyBookName || null;
 
   return (
-    <div className="space-y-6 px-4 pb-10 pt-6 sm:px-6 lg:px-8">
+    <div className="min-h-screen space-y-6 px-4 pb-10 pt-6 sm:px-6 lg:px-8 bg-card">
       <div className="max-w-3xl mx-auto">
         <Card className="border-border/60 bg-card/95">
           <CardHeader>

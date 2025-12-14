@@ -10,6 +10,7 @@ const { subscribeToStorybookUpdates } = require('../services/storybookEvents');
 const { applyCandidateSelection } = require('../services/storybookCandidateService');
 const StorybookJob = require('../models/StorybookJob');
 const ConfirmedStorybook = require('../models/ConfirmedStorybook');
+const StorybookGeneratedLog = require('../models/StorybookGeneratedLog');
 const { downloadFromS3, uploadBufferToS3, deleteFromS3 } = require('../config/s3');
 const Generation = require('../models/Generation');
 const { splitStorybookPdf } = require('../utils/pdfGenerator');
@@ -107,6 +108,58 @@ exports.getJob = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch storybook job',
+      error: error.message,
+    });
+  }
+};
+
+exports.getJobLogs = async (req, res) => {
+  try {
+    const { id: bookId, jobId } = req.params;
+
+    if (!isValidObjectId(bookId) || !isValidObjectId(jobId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid book or job ID',
+      });
+    }
+
+    const job = await StorybookJob.findById(jobId).select('bookId');
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Storybook job not found',
+      });
+    }
+
+    if (String(job.bookId) !== String(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Storybook job does not belong to this book',
+      });
+    }
+
+    const logDoc = await StorybookGeneratedLog.findOne({
+      storybookJobId: jobId,
+    }).lean();
+
+    const events = Array.isArray(logDoc?.events) ? logDoc.events.slice() : [];
+    events.sort((a, b) => {
+      const aTime = a?.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b?.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return aTime - bTime;
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: events.length,
+      data: events,
+    });
+  } catch (error) {
+    console.error('Error fetching storybook job logs:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch storybook job logs',
       error: error.message,
     });
   }

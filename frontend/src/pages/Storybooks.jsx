@@ -2114,6 +2114,7 @@ function Storybooks() {
   const [storybookJobs, setStorybookJobs] = useState([]);
   const [expandedJobIds, setExpandedJobIds] = useState(new Set());
   const [loadedJobDetails, setLoadedJobDetails] = useState(new Map());
+  const [loadedJobLogs, setLoadedJobLogs] = useState(new Map());
   const [loadingJobIds, setLoadingJobIds] = useState(new Set());
   const [librarySearchTerm, setLibrarySearchTerm] = useState('');
   const [libraryStatusFilter, setLibraryStatusFilter] = useState('all');
@@ -2349,20 +2350,33 @@ function Storybooks() {
         return next;
       });
 
-      // If expanding and we don't have details yet, fetch them
-      if (!isExpanded && !loadedJobDetails.has(jobId)) {
+      // If expanding, lazily load the full job details and logs
+      if (!isExpanded) {
         setLoadingJobIds((prev) => new Set(prev).add(jobId));
         try {
-          const response = await bookAPI.getStorybookJob(selectedBookId, jobId);
-          if (response?.success && response.data) {
-            setLoadedJobDetails((prev) => {
-              const next = new Map(prev);
-              next.set(jobId, response.data);
-              return next;
-            });
+          if (!loadedJobDetails.has(jobId)) {
+            const response = await bookAPI.getStorybookJob(selectedBookId, jobId);
+            if (response?.success && response.data) {
+              setLoadedJobDetails((prev) => {
+                const next = new Map(prev);
+                next.set(jobId, response.data);
+                return next;
+              });
+            }
+          }
+
+          if (!loadedJobLogs.has(jobId)) {
+            const logsResponse = await bookAPI.getStorybookJobLogs(selectedBookId, jobId);
+            if (logsResponse?.success && Array.isArray(logsResponse.data)) {
+              setLoadedJobLogs((prev) => {
+                const next = new Map(prev);
+                next.set(jobId, logsResponse.data);
+                return next;
+              });
+            }
           }
         } catch (error) {
-          console.error('Failed to load job details:', error);
+          console.error('Failed to load job details or logs:', error);
           toast.error('Failed to load job details');
         } finally {
           setLoadingJobIds((prev) => {
@@ -2373,7 +2387,7 @@ function Storybooks() {
         }
       }
     },
-    [expandedJobIds, loadedJobDetails, selectedBookId]
+    [expandedJobIds, loadedJobDetails, loadedJobLogs, selectedBookId]
   );
 
   const connectJobStream = useCallback(
@@ -4312,7 +4326,26 @@ function Storybooks() {
                 const isExpanded = expandedJobIds.has(job._id);
                 const isLoading = loadingJobIds.has(job._id);
                 const fullJobDetails = loadedJobDetails.get(job._id);
+                const jobLogEvents =
+                  loadedJobLogs.get(job._id) ||
+                  (Array.isArray(fullJobDetails?.events) ? fullJobDetails.events : []);
                 const pageCount = job.pageCount ?? (Array.isArray(job.pages) ? job.pages.length : 0);
+
+                const readerProfile = job.readerId
+                  ? users.find((user) => user._id === String(job.readerId))
+                  : job.userId
+                  ? users.find((user) => user._id === String(job.userId))
+                  : null;
+                const readerDisplayName =
+                  job.readerName || readerProfile?.name || '—';
+                const readerDisplayEmail = readerProfile?.email || '—';
+                const readerGenderRaw =
+                  job.readerGender || readerProfile?.gender || '';
+                const readerDisplayGender = normaliseGenderValue(readerGenderRaw);
+                const readerGenderText = readerDisplayGender
+                  ? readerDisplayGender.charAt(0).toUpperCase() +
+                    readerDisplayGender.slice(1)
+                  : '—';
 
                 return (
                   <Card key={job._id}>
@@ -4333,6 +4366,10 @@ function Storybooks() {
                           <CardDescription>
                             Started {formatTimestamp(job.createdAt)} &middot; {pageCount} pages
                           </CardDescription>
+                          <p className="text-xs text-foreground/60">
+                            Reader: {readerDisplayName} &middot; {readerDisplayEmail} &middot; Gender:{' '}
+                            {readerGenderText}
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -4429,21 +4466,24 @@ function Storybooks() {
                             </div>
                             <div>
                               <h4 className="text-sm font-semibold text-foreground">Recent activity</h4>
-                              <div className="mt-2 space-y-2">
-                                {Array.isArray(fullJobDetails.events) && fullJobDetails.events.length ? (
-                                  fullJobDetails.events.slice(-4).reverse().map((event, idx) => (
-                                    <div
-                                      key={`${job._id}-event-${idx}`}
-                                      className="rounded border border-border/50 bg-card/40 px-3 py-2 text-sm text-foreground/70"
-                                    >
-                                      <p className="font-medium text-foreground">
-                                        {event.message || event.type}
-                                      </p>
-                                      <p className="text-xs text-foreground/55">
-                                        {formatTimestamp(event.timestamp)}
-                                      </p>
-                                    </div>
-                                  ))
+                              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-2">
+                                {Array.isArray(jobLogEvents) && jobLogEvents.length ? (
+                                  jobLogEvents
+                                    .slice()
+                                    .reverse()
+                                    .map((event, idx) => (
+                                      <div
+                                        key={`${job._id}-event-${idx}`}
+                                        className="rounded border border-border/50 bg-card/40 px-3 py-2 text-sm text-foreground/70"
+                                      >
+                                        <p className="font-medium text-foreground">
+                                          {event.message || event.type}
+                                        </p>
+                                        <p className="text-xs text-foreground/55">
+                                          {formatTimestamp(event.timestamp)}
+                                        </p>
+                                      </div>
+                                    ))
                                 ) : (
                                   <div className="rounded border border-dashed border-border/60 px-3 py-2 text-sm text-foreground/55">
                                     Waiting for webhook updates

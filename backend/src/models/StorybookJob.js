@@ -324,10 +324,6 @@ const storybookJobSchema = new mongoose.Schema(
       type: [storybookEventSchema],
       default: [],
     },
-    logs: {
-      type: [storybookEventSchema],
-      default: [],
-    },
     pdfAsset: {
       type: pdfAssetSchema,
       default: null,

@@ -5,6 +5,7 @@ const User = require('../models/User');
 const Training = require('../models/Training');
 const Generation = require('../models/Generation');
 const StorybookJob = require('../models/StorybookJob');
+const StorybookGeneratedLog = require('../models/StorybookGeneratedLog');
 const {
   uploadBufferToS3,
   deleteFromS3,
@@ -344,15 +345,57 @@ const computeJobProgress = (job) => {
   if (job.status === 'failed') return clamp(job.progress || 0, 0, 100);
 
   const average = computeAveragePageProgress(job.pages);
-  if (job.status === 'assembling') {
-    const assemblyProgress =
-      (job.metadata && typeof job.metadata.assemblyProgress === 'number'
-        ? clamp(job.metadata.assemblyProgress, 0, 10)
-        : 0) || 0;
-    return clamp(90 + assemblyProgress, 0, 100);
+  return Math.floor((average * 0.9) / 1);
+};
+
+const sanitizeJobSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+
+  const clean = { ...snapshot };
+
+  // Drop top-level log arrays from the job snapshot
+  if (Array.isArray(clean.events)) {
+    delete clean.events;
+  }
+  if (Array.isArray(clean.logs)) {
+    delete clean.logs;
   }
 
-  return Math.floor((average * 0.9) / 1);
+  // Drop nested page event arrays to keep payloads compact
+  if (Array.isArray(clean.pages)) {
+    clean.pages = clean.pages.map((page) => {
+      if (!page || typeof page !== 'object') return page;
+      const next = { ...page };
+      if (Array.isArray(next.events)) {
+        delete next.events;
+      }
+      return next;
+    });
+  }
+
+  return clean;
+};
+
+const recordStorybookLogEvent = ({ jobId, bookId, event }) => {
+  if (!jobId || !event) return;
+
+  StorybookGeneratedLog.updateOne(
+    { storybookJobId: jobId },
+    {
+      $setOnInsert: {
+        storybookJobId: jobId,
+        bookId: bookId || null,
+      },
+      $push: {
+        events: event,
+      },
+    },
+    { upsert: true }
+  ).catch((error) => {
+    console.warn(
+      `[storybook] Failed to record log event for job ${jobId}: ${error.message}`
+    );
+  });
 };
 
 const syncComputedFields = async (jobDoc) => {
@@ -372,7 +415,7 @@ const syncComputedFields = async (jobDoc) => {
 
   const snapshot = jobDoc.toObject({ depopulate: true });
   snapshot.progress = progress;
-  return snapshot;
+  return sanitizeJobSnapshot(snapshot);
 };
 
 const emitJob = (jobDoc) => {
@@ -381,8 +424,9 @@ const emitJob = (jobDoc) => {
     typeof jobDoc.toObject === 'function' ? jobDoc.toObject({ depopulate: true }) : jobDoc;
   const progress = computeJobProgress(snapshot);
   snapshot.progress = progress;
-  emitStorybookUpdate(snapshot);
-  return snapshot;
+  const clean = sanitizeJobSnapshot(snapshot);
+  emitStorybookUpdate(clean);
+  return clean;
 };
 
 const updateJobAndEmit = async ({ jobId, update, arrayFilters }) => {
@@ -501,39 +545,22 @@ const handleGenerationUpdate = async ({ payload, jobId, pageId, pageOrder }) => 
     update.$set['pages.$[page].error'] = payload.error || 'Generation failed';
   }
 
-  update.$push = {
-    'pages.$[page].events': createEvent('generation-update', `Generation ${payload.status}`, {
-      generationId: payload._id,
-      status: payload.status,
-      progress,
-    }),
-  };
+  const event = createEvent('generation-update', `Generation ${payload.status}`, {
+    generationId: payload._id,
+    status: payload.status,
+    progress,
+  });
+
+  recordStorybookLogEvent({
+    jobId,
+    bookId: payload.storybookContext?.bookId || null,
+    event,
+  });
 
   await updateJobAndEmit({
     jobId,
     update,
     arrayFilters,
-  });
-};
-
-const attachJobEvent = async (jobId, event) => {
-  await updateJobAndEmit({
-    jobId,
-    update: {
-      $push: { events: event },
-    },
-  });
-};
-
-const attachPageEvent = async (jobId, pageFilter, event) => {
-  await updateJobAndEmit({
-    jobId,
-    update: {
-      $push: {
-        'pages.$[page].events': event,
-      },
-    },
-    arrayFilters: [pageFilter],
   });
 };
 
@@ -1036,28 +1063,43 @@ const recordGenerationAttemptFailure = async ({
         ? 0
         : Math.min(95, Math.max(10, attempt * 10)),
     },
-    $push: {
-      'pages.$[page].events': createEvent(
-        isFinalAttempt ? 'generation-failed' : 'generation-retry-scheduled',
-        retryMessage,
-        baseMetadata
-      ),
-    },
   };
+
+  const pageEvent = createEvent(
+    isFinalAttempt ? 'generation-failed' : 'generation-retry-scheduled',
+    retryMessage,
+    baseMetadata
+  );
+
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: pageEvent,
+  });
 
   if (isFinalAttempt) {
     update.$set['pages.$[page].completedAt'] = timestamp;
-    update.$push.events = createEvent(
+    const jobEvent = createEvent(
       'generation-failed',
       `Generation failed for page ${page.order}: ${safeMessage}`,
       baseMetadata
     );
+    recordStorybookLogEvent({
+      jobId: job._id,
+      bookId: job.bookId,
+      event: jobEvent,
+    });
   } else {
-    update.$push.events = createEvent(
+    const jobEvent = createEvent(
       'generation-retry-scheduled',
       `Scheduled retry for page ${page.order} (attempt ${attempt + 1} of ${maxAttempts})`,
       baseMetadata
     );
+    recordStorybookLogEvent({
+      jobId: job._id,
+      bookId: job.bookId,
+      event: jobEvent,
+    });
   }
 
   await updateJobAndEmit({
@@ -1087,15 +1129,20 @@ const processJobPage = async ({ job, page, book, training, readerName, readerGen
           'pages.$[page].completedAt': new Date(),
           'pages.$[page].progress': 100,
         },
-        $push: {
-          'pages.$[page].events': createEvent(
-            'page-completed',
-            `Page ${page.order} completed (background-only, no character generation needed)`
-          ),
-        },
       },
       arrayFilters: [pageFilter],
     });
+
+    const event = createEvent(
+      'page-completed',
+      `Page ${page.order} completed (background-only, no character generation needed)`
+    );
+    recordStorybookLogEvent({
+      jobId: job._id,
+      bookId: job.bookId,
+      event,
+    });
+
     return null;
   }
 
@@ -1113,15 +1160,19 @@ const processJobPage = async ({ job, page, book, training, readerName, readerGen
         'pages.$[page].startedAt': new Date(),
         'pages.$[page].progress': 5,
       },
-      $push: {
-        'pages.$[page].events': createEvent(
-          'page-started',
-          `Started generation for page ${page.order}`,
-          { prompt: generationPrompt }
-        ),
-      },
     },
     arrayFilters: [pageFilter],
+  });
+
+  const startedEvent = createEvent(
+    'page-started',
+    `Started generation for page ${page.order}`,
+    { prompt: generationPrompt }
+  );
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: startedEvent,
   });
 
   const generationInput = {
@@ -1217,24 +1268,34 @@ const processJobPage = async ({ job, page, book, training, readerName, readerGen
             'pages.$[page].status': 'generating',
             'pages.$[page].progress': attempt === 1 ? 5 : Math.min(95, 5 + attempt * 10),
           },
-          $push: {
-            events: createEvent(
-              isRetry ? 'page-generation-retry' : 'page-generation-created',
-              isRetry
-                ? `Retrying generation for page ${page.order} (attempt ${attempt} of ${maxAttempts})`
-                : `Generation created for page ${page.order}`,
-              attemptMetadata
-            ),
-            'pages.$[page].events': createEvent(
-              isRetry ? 'generation-retry' : 'generation-created',
-              isRetry
-                ? `Retrying generation (attempt ${attempt} of ${maxAttempts})`
-                : 'Generation created',
-              attemptMetadata
-            ),
-          },
         },
         arrayFilters: [pageFilter],
+      });
+
+      const jobEvent = createEvent(
+        isRetry ? 'page-generation-retry' : 'page-generation-created',
+        isRetry
+          ? `Retrying generation for page ${page.order} (attempt ${attempt} of ${maxAttempts})`
+          : `Generation created for page ${page.order}`,
+        attemptMetadata
+      );
+      const pageEvent = createEvent(
+        isRetry ? 'generation-retry' : 'generation-created',
+        isRetry
+          ? `Retrying generation (attempt ${attempt} of ${maxAttempts})`
+          : 'Generation created',
+        attemptMetadata
+      );
+
+      recordStorybookLogEvent({
+        jobId: job._id,
+        bookId: job.bookId,
+        event: jobEvent,
+      });
+      recordStorybookLogEvent({
+        jobId: job._id,
+        bookId: job.bookId,
+        event: pageEvent,
       });
 
       await broadcastGeneration(generation._id);
@@ -1314,15 +1375,20 @@ const processJobPage = async ({ job, page, book, training, readerName, readerGen
           'pages.$[page].error': 'Asset file not found in S3',
           'pages.$[page].completedAt': new Date(),
         },
-        $push: {
-          'pages.$[page].events': createEvent(
-            'page-skipped',
-            'Page skipped due to missing S3 asset'
-          ),
-        },
       },
       arrayFilters: [pageFilter],
     });
+
+    const event = createEvent(
+      'page-skipped',
+      'Page skipped due to missing S3 asset'
+    );
+    recordStorybookLogEvent({
+      jobId: job._id,
+      bookId: job.bookId,
+      event,
+    });
+
     return;
   }
 
@@ -1349,14 +1415,22 @@ const processJobPage = async ({ job, page, book, training, readerName, readerGen
         'pages.$[page].selectedCandidateIndex': winner.winner ? winner.winner - 1 : 0,
         'pages.$[page].error': null,
       },
-      $push: {
-        'pages.$[page].events': createEvent('page-completed', 'Page generation completed', {
-          generationId: generationIdForPage,
-          winner: winner.winner,
-        }),
-      },
     },
     arrayFilters: [pageFilter],
+  });
+
+  const completedEvent = createEvent(
+    'page-completed',
+    'Page generation completed',
+    {
+      generationId: generationIdForPage,
+      winner: winner.winner,
+    }
+  );
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: completedEvent,
   });
 };
 
@@ -1453,14 +1527,21 @@ const rebuildPdfForJob = async (jobId) => {
       $set: {
         pdfAsset,
         completedAt: new Date(),
-        metadata: { ...(job.metadata || {}), assemblyProgress: 10 },
-      },
-      $push: {
-        events: createEvent('job-pdf-updated', 'Storybook PDF rebuilt after candidate selection', {
-          pdfKey: pdfAsset.key,
-        }),
       },
     },
+  });
+
+  const event = createEvent(
+    'job-pdf-updated',
+    'Storybook PDF rebuilt after candidate selection',
+    {
+      pdfKey: pdfAsset.key,
+    }
+  );
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event,
   });
 
   return pdfAsset;
@@ -1586,10 +1667,14 @@ const processStorybookJob = async (jobId) => {
       $set: {
         status: 'generating',
       },
-      $push: {
-        events: createEvent('job-started', 'Storybook automation started'),
-      },
     },
+  });
+
+  const startedEvent = createEvent('job-started', 'Storybook automation started');
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: startedEvent,
   });
 
   const errors = [];
@@ -1630,13 +1715,18 @@ const processStorybookJob = async (jobId) => {
           error: failure.error.message,
           completedAt: new Date(),
         },
-        $push: {
-          events: createEvent('job-failed', failure.error.message, {
-            pageOrder: failure.page?.order,
-          }),
-        },
       },
     });
+
+    const failedEvent = createEvent('job-failed', failure.error.message, {
+      pageOrder: failure.page?.order,
+    });
+    recordStorybookLogEvent({
+      jobId: job._id,
+      bookId: job.bookId,
+      event: failedEvent,
+    });
+
     throw failure.error;
   }
 
@@ -1645,12 +1735,15 @@ const processStorybookJob = async (jobId) => {
     update: {
       $set: {
         status: 'assembling',
-        metadata: { assemblyProgress: 0 },
-      },
-      $push: {
-        events: createEvent('job-assembling', 'Generating final PDF'),
       },
     },
+  });
+
+  const assemblingEvent = createEvent('job-assembling', 'Generating final PDF');
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: assemblingEvent,
   });
 
   const refreshedJob = await StorybookJob.findById(job._id);
@@ -1735,14 +1828,21 @@ const processStorybookJob = async (jobId) => {
         status: 'succeeded',
         pdfAsset,
         completedAt: new Date(),
-        metadata: { assemblyProgress: 10 },
-      },
-      $push: {
-        events: createEvent('job-completed', 'Storybook automation completed successfully', {
-          pdfKey: pdfAsset.key,
-        }),
       },
     },
+  });
+
+  const completedEvent = createEvent(
+    'job-completed',
+    'Storybook automation completed successfully',
+    {
+      pdfKey: pdfAsset.key,
+    }
+  );
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId: job.bookId,
+    event: completedEvent,
   });
 };
 
@@ -1764,7 +1864,6 @@ const formatBookPagesForJob = (book, { readerGender = '' } = {}) => {
       pageType: 'cover',
       status: 'queued',
       progress: 0,
-      events: [createEvent('page-queued', 'Cover page queued for generation')],
     });
     nextOrder += 1;
   }
@@ -1781,7 +1880,6 @@ const formatBookPagesForJob = (book, { readerGender = '' } = {}) => {
       pageType: 'dedication',
       status: 'queued',
       progress: 0,
-      events: [createEvent('page-queued', 'Dedication page queued for generation')],
     });
     nextOrder += 1;
   }
@@ -1819,7 +1917,6 @@ const formatBookPagesForJob = (book, { readerGender = '' } = {}) => {
         characterPosition: normalizeCharacterPosition(page.characterPosition, null),
         status: 'queued',
         progress: 0,
-        events: [createEvent('page-queued', 'Page queued for generation')],
       };
     })
     .filter(Boolean);
@@ -1899,7 +1996,13 @@ const startStorybookAutomation = async ({
     status: 'queued',
     progress: 0,
     pages: jobPages,
-    events: [createEvent('job-queued', 'Storybook automation queued')],
+  });
+
+  const queuedEvent = createEvent('job-queued', 'Storybook automation queued');
+  recordStorybookLogEvent({
+    jobId: job._id,
+    bookId,
+    event: queuedEvent,
   });
 
   process.nextTick(() => {
@@ -1926,8 +2029,9 @@ const listStorybookJobsForBook = async (bookId, limit = 10, options = {}) => {
     .sort({ createdAt: -1 })
     .limit(limit);
   return jobs.map((job) => {
-    const snapshot = job.toObject({ depopulate: true });
-    snapshot.progress = computeJobProgress(snapshot);
+    const base = job.toObject({ depopulate: true });
+    base.progress = computeJobProgress(base);
+    const snapshot = sanitizeJobSnapshot(base);
 
     // In minimal mode, exclude large arrays to reduce payload size
     if (minimal) {
