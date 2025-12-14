@@ -1521,6 +1521,13 @@ const rebuildPdfForJob = async (jobId) => {
     pages: pdfPages,
   });
 
+  // Preserve the original creation time so the "Generated" date in the admin
+  // always reflects when the storybook was first created, not when the PDF
+  // was last rebuilt.
+  if (job.pdfAsset && job.pdfAsset.createdAt) {
+    pdfAsset.createdAt = job.pdfAsset.createdAt;
+  }
+
   await updateJobAndEmit({
     jobId: job._id,
     update: {
