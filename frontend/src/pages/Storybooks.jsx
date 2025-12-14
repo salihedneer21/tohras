@@ -2302,6 +2302,16 @@ function Storybooks() {
     (payload) => {
       if (!payload?._id) return;
       setStorybookJobs((previous) => upsertJobList(previous, payload));
+      // Keep expanded job details in sync with live SSE updates
+      setLoadedJobDetails((previous) => {
+        if (!previous.size || !previous.has(payload._id)) {
+          return previous;
+        }
+        const next = new Map(previous);
+        const current = next.get(payload._id) || {};
+        next.set(payload._id, mergeJobPayload(current, payload));
+        return next;
+      });
       if (payload.status === 'succeeded') {
         handleJobCompletion(payload);
       }
@@ -4329,6 +4339,12 @@ function Storybooks() {
                 const jobLogEvents =
                   loadedJobLogs.get(job._id) ||
                   (Array.isArray(fullJobDetails?.events) ? fullJobDetails.events : []);
+                const jobPages =
+                  Array.isArray(job.pages) && job.pages.length
+                    ? job.pages
+                    : Array.isArray(fullJobDetails?.pages) && fullJobDetails.pages.length
+                    ? fullJobDetails.pages
+                    : [];
                 const pageCount = job.pageCount ?? (Array.isArray(job.pages) ? job.pages.length : 0);
 
                 const readerProfile = job.readerId
@@ -4418,9 +4434,9 @@ function Storybooks() {
                           <div className="grid gap-4 lg:grid-cols-2">
                             <div>
                               <h4 className="text-sm font-semibold text-foreground">Pages</h4>
-                              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-2">
-                                {Array.isArray(fullJobDetails.pages) && fullJobDetails.pages.length ? (
-                                  fullJobDetails.pages.map((page, pageIndex) => {
+                              <div className="mt-2 h-48 space-y-2 overflow-y-auto pr-2">
+                                {Array.isArray(jobPages) && jobPages.length ? (
+                                  jobPages.map((page, pageIndex) => {
                                     const meta = getPageStatusMeta(page.status);
                                     const displayNumber = getDisplayPageNumber(
                                       page.pageType,
@@ -4466,7 +4482,7 @@ function Storybooks() {
                             </div>
                             <div>
                               <h4 className="text-sm font-semibold text-foreground">Recent activity</h4>
-                              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-2">
+                              <div className="mt-2 h-48 space-y-2 overflow-y-auto pr-2">
                                 {Array.isArray(jobLogEvents) && jobLogEvents.length ? (
                                   jobLogEvents
                                     .slice()
