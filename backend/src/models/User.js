@@ -24,6 +24,73 @@ const imageAssetSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const shippingAddressSchema = new mongoose.Schema(
+  {
+    country: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    firstName: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    lastName: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    addressLine1: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    addressLine2: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    city: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    postCode: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    state: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: null,
+      set: toOptionalLowercaseString,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
+    },
+  },
+  { _id: false }
+);
+
 /**
  * User Schema for storing student/child information
  */
@@ -80,11 +147,14 @@ const userSchema = new mongoose.Schema(
     shopifyOrderId: {
       type: String,
       trim: true,
-      default: null,
     },
     imageAssets: {
       type: [imageAssetSchema],
       default: [],
+    },
+    shippingAddress: {
+      type: shippingAddressSchema,
+      default: null,
     },
     status: {
       type: String,

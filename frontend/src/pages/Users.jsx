@@ -13,6 +13,7 @@ import {
   ChevronRight,
   RefreshCw,
   Share2,
+  Info,
 } from 'lucide-react';
 import { userAPI } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
 import { formatFileSize } from '@/utils/file';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
@@ -906,6 +908,7 @@ function Users() {
           const displayOrder =
             user.shopifyOrderName || user.shopifyOrderId || null;
           const displayBookName = user.shopifyBookName || null;
+          const shipping = user.shippingAddress || null;
 
           return (
             <Card key={user._id} className="flex flex-col justify-between">
@@ -917,13 +920,75 @@ function Users() {
                       {user.secondTitle}
                     </p>
                   )}
-                  {(displayOrder || displayBookName) && (
-                    <p className="text-xs text-foreground/60">
-                      {displayOrder && <span className="font-mono mr-1">{displayOrder}</span>}
-                      {displayBookName && (
-                        <span>{displayOrder ? '· ' : ''}{displayBookName}</span>
+                  {(displayOrder || displayBookName || shipping) && (
+                    <div className="flex items-center gap-1 text-xs text-foreground/60">
+                      {(displayOrder || displayBookName) && (
+                        <p className="flex-1">
+                          {displayOrder && (
+                            <span className="mr-1 font-mono">{displayOrder}</span>
+                          )}
+                          {displayBookName && (
+                            <span>{displayOrder ? '· ' : ''}{displayBookName}</span>
+                          )}
+                        </p>
                       )}
-                    </p>
+                      {shipping && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/60 bg-card text-foreground/60 transition hover:bg-card/80 hover:text-foreground"
+                              aria-label="View Shopify shipping details"
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="end" className="w-72 text-xs">
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-foreground">
+                                Shipping address
+                              </p>
+                              <div className="space-y-0.5 text-foreground/80">
+                                {(shipping.firstName || shipping.lastName) && (
+                                  <p className="font-medium">
+                                    {[shipping.firstName, shipping.lastName]
+                                      .filter(Boolean)
+                                      .join(' ')}
+                                  </p>
+                                )}
+                                {shipping.addressLine1 && <p>{shipping.addressLine1}</p>}
+                                {shipping.addressLine2 && <p>{shipping.addressLine2}</p>}
+                                {(shipping.postCode || shipping.city || shipping.state) && (
+                                  <p>
+                                    {shipping.postCode && <span>{shipping.postCode} </span>}
+                                    {shipping.city && <span>{shipping.city}</span>}
+                                    {shipping.state && (
+                                      <span>
+                                        {shipping.city ? ', ' : ''}
+                                        {shipping.state}
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                                {shipping.country && <p>{shipping.country}</p>}
+                                {shipping.email && (
+                                  <p>
+                                    <span className="font-medium">Email: </span>
+                                    <span>{shipping.email}</span>
+                                  </p>
+                                )}
+                                {shipping.phone && (
+                                  <p>
+                                    <span className="font-medium">Phone: </span>
+                                    <span>{shipping.phone}</span>
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
                   )}
                   <CardDescription className="flex items-center gap-2 text-xs uppercase text-foreground/40">
                     <UsersIcon className="h-3.5 w-3.5" />

@@ -45,6 +45,60 @@ const filterImageUrls = (urls) =>
     return false;
   });
 
+const buildShippingAddressFromOrder = (order, emailFromWebhook) => {
+  if (!order || typeof order !== 'object') return null;
+
+  const shipping =
+    order.shipping_address ||
+    order.default_address ||
+    (order.customer && order.customer.default_address) ||
+    null;
+
+  if (!shipping) return null;
+
+  const billing = order.billing_address || null;
+
+  const resolvedEmail =
+    emailFromWebhook ||
+    order.email ||
+    order.contact_email ||
+    (order.customer && order.customer.email) ||
+    null;
+
+  const resolvedPhone =
+    (shipping && shipping.phone) ||
+    (billing && billing.phone) ||
+    order.phone ||
+    (order.customer && order.customer.phone) ||
+    (order.customer &&
+      order.customer.default_address &&
+      order.customer.default_address.phone) ||
+    null;
+
+  const address = {
+    country: shipping.country_code || shipping.country || null,
+    firstName: shipping.first_name || null,
+    lastName: shipping.last_name || null,
+    addressLine1: shipping.address1 || null,
+    addressLine2: shipping.address2 || null,
+    city: shipping.city || null,
+    postCode: shipping.zip || null,
+    state: shipping.province_code || shipping.province || null,
+    email: resolvedEmail,
+    phone: resolvedPhone,
+  };
+
+  const cleaned = {};
+  Object.keys(address).forEach((key) => {
+    const value = address[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      cleaned[key] = String(value).trim();
+    }
+  });
+
+  return Object.keys(cleaned).length > 0 ? cleaned : null;
+};
+
 const resolveShopifyOrderKey = (order, summary = {}) => {
   const candidates = [];
 
@@ -370,6 +424,8 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       (order.note && String(order.note)) ||
       '';
 
+    const shippingAddress = buildShippingAddressFromOrder(order, emailFromWebhook);
+
     const userPayload = {
       name: baseName,
       secondTitle,
@@ -381,6 +437,7 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       shopifyOrderId: shopifyOrderKey,
       shopifyOrderName: fullSummary.orderName || (order.name && String(order.name)) || null,
       shopifyBookName: fullSummary.bookName || null,
+      shippingAddress: shippingAddress || undefined,
     };
 
     Object.keys(userPayload).forEach((key) => {
@@ -400,6 +457,9 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       user.email = userPayload.email || user.email;
       user.shopifyOrderName = userPayload.shopifyOrderName || user.shopifyOrderName;
       user.shopifyBookName = userPayload.shopifyBookName || user.shopifyBookName;
+      if (userPayload.shippingAddress) {
+        user.shippingAddress = userPayload.shippingAddress;
+      }
       if (typeof age === 'number') user.age = age;
       if (gender) user.gender = gender;
       await user.save();
