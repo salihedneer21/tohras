@@ -156,6 +156,10 @@ const userSchema = new mongoose.Schema(
       type: shippingAddressSchema,
       default: null,
     },
+    printOrderPayload: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
     status: {
       type: String,
       enum: ['active', 'inactive'],

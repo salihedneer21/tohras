@@ -7,6 +7,22 @@ const { getOrderCustomerImageUrls } = require('../scripts/shopifyOrderImages');
 const URL_REGEX = /(https?:\/\/[^\s"')]+)/gi;
 const IMAGE_EXTENSION_REGEX = /\.(png|jpe?g|webp|gif|heic|heif|bmp|tiff?)(\?.*)?$/i;
 
+const withNotProvided = (value) => {
+  if (value === undefined || value === null) return 'Not Provided';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed === '' ? 'Not Provided' : trimmed;
+  }
+  return value;
+};
+
+const toNumberOrNotProvided = (value) => {
+  if (value === undefined || value === null) return 'Not Provided';
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return 'Not Provided';
+  return numeric;
+};
+
 const normaliseGender = (value) => {
   if (!value || typeof value !== 'string') return undefined;
   const lower = value.trim().toLowerCase();
@@ -97,6 +113,129 @@ const buildShippingAddressFromOrder = (order, emailFromWebhook) => {
   });
 
   return Object.keys(cleaned).length > 0 ? cleaned : null;
+};
+
+const buildPrintOrderPayload = (
+  order,
+  emailFromWebhook,
+  shopifyOrderKey,
+  shippingAddressFromWebhook
+) => {
+  const baseShipping =
+    shippingAddressFromWebhook || buildShippingAddressFromOrder(order, emailFromWebhook) || {};
+
+  const shippingAddress = {
+    country: withNotProvided(baseShipping.country),
+    firstName: withNotProvided(baseShipping.firstName),
+    lastName: withNotProvided(baseShipping.lastName),
+    addressLine1: withNotProvided(baseShipping.addressLine1),
+    addressLine2: withNotProvided(baseShipping.addressLine2),
+    city: withNotProvided(baseShipping.city),
+    postCode: withNotProvided(baseShipping.postCode),
+    state: withNotProvided(baseShipping.state),
+    email: withNotProvided(baseShipping.email),
+    phone: withNotProvided(baseShipping.phone),
+    companyName: 'My Torah Tales',
+  };
+
+  const shippingLines = Array.isArray(order && order.shipping_lines)
+    ? order.shipping_lines
+    : [];
+  const firstShippingLine = shippingLines[0] || null;
+
+  // Prefer the order's total price if available, otherwise fall back to shipping line price.
+  let shippingPrice =
+    (order && (order.total_price || order.current_total_price)) || null;
+  if (!shippingPrice && firstShippingLine) {
+    if (firstShippingLine.price != null) {
+      shippingPrice = firstShippingLine.price;
+    } else if (firstShippingLine.discounted_price != null) {
+      shippingPrice = firstShippingLine.discounted_price;
+    } else if (
+      firstShippingLine.price_set &&
+      firstShippingLine.price_set.shop_money &&
+      firstShippingLine.price_set.shop_money.amount != null
+    ) {
+      shippingPrice = firstShippingLine.price_set.shop_money.amount;
+    }
+  }
+
+  const lineItems = Array.isArray(order && order.line_items) ? order.line_items : [];
+
+  const items =
+    lineItems.length > 0
+      ? lineItems.map((item, index) => {
+          if (!item) {
+            return {
+              itemReferenceId: 'Not Provided',
+              productUid: 'Not Provided',
+              quantity: 'Not Provided',
+              files: [
+                {
+                  type: 'default',
+                  url: 'Not Provided',
+                },
+              ],
+            };
+          }
+
+          const referenceId =
+            item.id ||
+            item.variant_id ||
+            item.sku ||
+            `line-${index + 1}`;
+
+          const productUidCandidate =
+            item.sku ||
+            item.variant_id ||
+            item.product_id;
+
+          const quantity = item.quantity != null ? item.quantity : null;
+
+          return {
+            itemReferenceId: withNotProvided(referenceId),
+            productUid: withNotProvided(productUidCandidate),
+            quantity: toNumberOrNotProvided(quantity),
+            files: [
+              {
+                type: 'default',
+                url: 'Not Provided',
+              },
+            ],
+          };
+        })
+      : [
+          {
+            itemReferenceId: 'Not Provided',
+            productUid: 'Not Provided',
+            quantity: 'Not Provided',
+            files: [
+              {
+                type: 'default',
+                url: 'Not Provided',
+              },
+            ],
+          },
+        ];
+
+  const orderReferenceId =
+    shopifyOrderKey ||
+    resolveShopifyOrderKey(order) ||
+    (order && order.id) ||
+    (order && order.name) ||
+    'Not Provided';
+
+  const currencyCode = (order && order.currency) || 'Not Provided';
+
+  return {
+    orderReferenceId,
+    orderType: 'order',
+    currency: withNotProvided(currencyCode),
+    retailCurrency: withNotProvided(currencyCode),
+    retailShippingPriceInclVat: toNumberOrNotProvided(shippingPrice),
+    shippingAddress,
+    items,
+  };
 };
 
 const resolveShopifyOrderKey = (order, summary = {}) => {
@@ -425,6 +564,12 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       '';
 
     const shippingAddress = buildShippingAddressFromOrder(order, emailFromWebhook);
+    const printOrderPayload = buildPrintOrderPayload(
+      order,
+      emailFromWebhook,
+      shopifyOrderKey,
+      shippingAddress
+    );
 
     const userPayload = {
       name: baseName,
@@ -438,6 +583,7 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       shopifyOrderName: fullSummary.orderName || (order.name && String(order.name)) || null,
       shopifyBookName: fullSummary.bookName || null,
       shippingAddress: shippingAddress || undefined,
+      printOrderPayload,
     };
 
     Object.keys(userPayload).forEach((key) => {
@@ -460,6 +606,7 @@ exports.handleShopifyOrderCreated = async (req, res) => {
       if (userPayload.shippingAddress) {
         user.shippingAddress = userPayload.shippingAddress;
       }
+      user.printOrderPayload = printOrderPayload;
       if (typeof age === 'number') user.age = age;
       if (gender) user.gender = gender;
       await user.save();

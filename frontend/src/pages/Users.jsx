@@ -909,6 +909,7 @@ function Users() {
             user.shopifyOrderName || user.shopifyOrderId || null;
           const displayBookName = user.shopifyBookName || null;
           const shipping = user.shippingAddress || null;
+          const hasPrintPayload = Boolean(user.printOrderPayload);
 
           return (
             <Card key={user._id} className="flex flex-col justify-between">
@@ -920,7 +921,7 @@ function Users() {
                       {user.secondTitle}
                     </p>
                   )}
-                  {(displayOrder || displayBookName || shipping) && (
+                  {(displayOrder || displayBookName || shipping || hasPrintPayload) && (
                     <div className="flex items-center gap-1 text-xs text-foreground/60">
                       {(displayOrder || displayBookName) && (
                         <p className="flex-1">
@@ -984,6 +985,29 @@ function Users() {
                                   </p>
                                 )}
                               </div>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                      {hasPrintPayload && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/60 bg-card text-foreground/60 transition hover:bg-card/80 hover:text-foreground"
+                              aria-label="View printing press order payload"
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="end" className="w-[420px] text-xs">
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-foreground">
+                                Printing press payload
+                              </p>
+                              <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-[10px] leading-relaxed text-foreground/80">
+                                {JSON.stringify(user.printOrderPayload, null, 2)}
+                              </pre>
                             </div>
                           </PopoverContent>
                         </Popover>
