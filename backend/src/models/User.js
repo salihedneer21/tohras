@@ -110,6 +110,13 @@ const userSchema = new mongoose.Schema(
       set: toOptionalTrimmedString,
       default: '',
     },
+    shareMessage: {
+      type: String,
+      trim: true,
+      maxlength: [2000, 'Share message cannot exceed 2000 characters'],
+      set: toOptionalTrimmedString,
+      default: null,
+    },
     age: {
       type: Number,
       min: [0, 'Age must be at least 0'],
@@ -133,6 +140,12 @@ const userSchema = new mongoose.Schema(
         'Please enter a valid email address',
       ],
       set: toOptionalLowercaseString,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      default: null,
+      set: toOptionalTrimmedString,
     },
     shopifyOrderName: {
       type: String,

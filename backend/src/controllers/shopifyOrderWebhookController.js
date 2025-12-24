@@ -141,22 +141,33 @@ const buildPrintOrderPayload = (
   const shippingLines = Array.isArray(order && order.shipping_lines)
     ? order.shipping_lines
     : [];
-  const firstShippingLine = shippingLines[0] || null;
 
-  // Prefer the order's total price if available, otherwise fall back to shipping line price.
-  let shippingPrice =
-    (order && (order.total_price || order.current_total_price)) || null;
-  if (!shippingPrice && firstShippingLine) {
-    if (firstShippingLine.price != null) {
-      shippingPrice = firstShippingLine.price;
-    } else if (firstShippingLine.discounted_price != null) {
-      shippingPrice = firstShippingLine.discounted_price;
-    } else if (
-      firstShippingLine.price_set &&
-      firstShippingLine.price_set.shop_money &&
-      firstShippingLine.price_set.shop_money.amount != null
-    ) {
-      shippingPrice = firstShippingLine.price_set.shop_money.amount;
+  // Calculate shipping separately from product subtotal.
+  // This will be used as retailShippingPriceInclVat in the payload.
+  let shippingPrice = null;
+  if (shippingLines.length > 0) {
+    let totalShipping = 0;
+    shippingLines.forEach((line) => {
+      if (!line) return;
+      let linePrice = null;
+      if (line.price != null) {
+        linePrice = line.price;
+      } else if (line.discounted_price != null) {
+        linePrice = line.discounted_price;
+      } else if (
+        line.price_set &&
+        line.price_set.shop_money &&
+        line.price_set.shop_money.amount != null
+      ) {
+        linePrice = line.price_set.shop_money.amount;
+      }
+      const numeric = Number(linePrice);
+      if (!Number.isNaN(numeric)) {
+        totalShipping += numeric;
+      }
+    });
+    if (totalShipping > 0) {
+      shippingPrice = totalShipping;
     }
   }
 
@@ -192,10 +203,34 @@ const buildPrintOrderPayload = (
 
           const quantity = item.quantity != null ? item.quantity : null;
 
+          // Derive total product price (subtotal) for this line.
+          let retailPrice = null;
+          if (item.line_price != null) {
+            retailPrice = item.line_price;
+          } else if (item.price != null && quantity != null) {
+            const unit = Number(item.price);
+            const qty = Number(quantity);
+            if (!Number.isNaN(unit) && !Number.isNaN(qty)) {
+              retailPrice = unit * qty;
+            }
+          } else if (
+            item.price_set &&
+            item.price_set.shop_money &&
+            item.price_set.shop_money.amount != null &&
+            quantity != null
+          ) {
+            const unit = Number(item.price_set.shop_money.amount);
+            const qty = Number(quantity);
+            if (!Number.isNaN(unit) && !Number.isNaN(qty)) {
+              retailPrice = unit * qty;
+            }
+          }
+
           return {
             itemReferenceId: withNotProvided(referenceId),
             productUid: withNotProvided(productUidCandidate),
             quantity: toNumberOrNotProvided(quantity),
+            retailPriceInclVat: toNumberOrNotProvided(retailPrice),
             files: [
               {
                 type: 'default',
@@ -209,6 +244,7 @@ const buildPrintOrderPayload = (
             itemReferenceId: 'Not Provided',
             productUid: 'Not Provided',
             quantity: 'Not Provided',
+            retailPriceInclVat: 'Not Provided',
             files: [
               {
                 type: 'default',

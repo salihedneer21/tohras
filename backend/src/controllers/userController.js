@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Message = require('../models/Message');
 const { validationResult } = require('express-validator');
 const { uploadBufferToS3, deleteFromS3, generateImageKey } = require('../config/s3');
 
@@ -16,7 +17,7 @@ const toPositiveInteger = (value, fallback) => {
   return parsed;
 };
 
-const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'name', 'age', 'email']);
+const VALID_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'name', 'age', 'email', 'phone']);
 
 const sanitiseUserPayload = (source = {}) => {
   const payload = {};
@@ -52,6 +53,18 @@ const sanitiseUserPayload = (source = {}) => {
     if (trimmed) {
       payload.email = trimmed;
     }
+  }
+
+  if (typeof source.phone === 'string') {
+    const trimmed = source.phone.trim();
+    if (trimmed) {
+      payload.phone = trimmed;
+    }
+  }
+
+  if (typeof source.shareMessage === 'string') {
+    const trimmed = source.shareMessage.trim();
+    payload.shareMessage = trimmed;
   }
 
   if (typeof source.status === 'string') {
@@ -103,6 +116,7 @@ exports.getAllUsers = async (req, res) => {
       filter.$or = [
         { name: expression },
         { email: expression },
+        { phone: expression },
       ];
     }
 
@@ -148,6 +162,7 @@ exports.getAllUsers = async (req, res) => {
       ? {
           name: 1,
           email: 1,
+          phone: 1,
           gender: 1,
           status: 1,
           createdAt: 1,
@@ -394,6 +409,81 @@ exports.deleteUser = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete user',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Get all messages for a user
+ * @route GET /api/users/:id/messages
+ */
+exports.getUserMessages = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const messages = await Message.find({ userId: id })
+      .sort({ createdAt: 1, _id: 1 })
+      .lean()
+      .exec();
+
+    res.status(200).json({
+      success: true,
+      data: messages,
+    });
+  } catch (error) {
+    console.error('Error fetching user messages:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch messages',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Create a new message for a user
+ * @route POST /api/users/:id/messages
+ */
+exports.createUserMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rawContent = typeof req.body.content === 'string' ? req.body.content : '';
+    const content = rawContent.trim();
+
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message content is required',
+      });
+    }
+
+    const rawRole = typeof req.body.role === 'string' ? req.body.role.trim() : '';
+    const role = rawRole === 'admin' ? 'admin' : 'guest';
+
+    const user = await User.findById(id).select('_id').lean();
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const message = await Message.create({
+      userId: user._id,
+      role,
+      content,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: message,
+    });
+  } catch (error) {
+    console.error('Error creating user message:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create message',
       error: error.message,
     });
   }

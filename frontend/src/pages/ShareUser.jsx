@@ -19,6 +19,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import ImageViewer from '@/components/ImageViewer';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { formatFileSize } from '@/utils/file';
 
 function ShareUser() {
@@ -28,6 +30,9 @@ function ShareUser() {
   const [viewerAsset, setViewerAsset] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [deletingIds, setDeletingIds] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [replyText, setReplyText] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -35,6 +40,17 @@ function ShareUser() {
       const response = await userAPI.getByShopifyOrderId(shopifyOrderId);
       const data = response?.data || response;
       setUser(data);
+      if (data?._id) {
+        try {
+          const messagesResponse = await userAPI.getMessages(data._id);
+          const list = Array.isArray(messagesResponse?.data)
+            ? messagesResponse.data
+            : messagesResponse || [];
+          setMessages(list);
+        } catch (error) {
+          console.warn('Failed to load messages for shared user:', error);
+        }
+      }
     } catch (error) {
       toast.error(`Failed to load booking: ${error.message}`);
       setUser(null);
@@ -112,6 +128,27 @@ function ShareUser() {
     }
     setViewerAsset(null);
   }, [viewerAsset]);
+
+  const handleSendReply = async () => {
+    if (!user?._id) return;
+    const content = replyText.trim();
+    if (!content) return;
+
+    setIsSendingReply(true);
+    try {
+      const response = await userAPI.addMessage(user._id, {
+        content,
+        role: 'guest',
+      });
+      const created = response?.data || response;
+      setMessages((prev) => [...prev, created]);
+      setReplyText('');
+    } catch (error) {
+      toast.error(`Failed to send reply: ${error.message}`);
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -200,6 +237,60 @@ function ShareUser() {
                 <span>
                   <span className="font-medium">Email:</span> {displayEmail}
                 </span>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-border/60 bg-muted/30 p-4">
+              <p className="text-sm font-semibold text-foreground/80">
+                Messages
+              </p>
+              {messages.length > 0 ? (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {messages.map((message) => (
+                    <div
+                      key={message._id}
+                      className="flex flex-col gap-0.5 rounded-md bg-background/80 px-2 py-1.5 text-xs"
+                    >
+                      <p className="text-[10px] font-semibold text-foreground/70">
+                        {message.role === 'admin' ? 'From My Torah Tales' : 'Your reply'}
+                      </p>
+                      <p className="whitespace-pre-wrap text-foreground/80">
+                        {message.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-foreground/50">
+                  There are no messages yet. You can send a reply below.
+                </p>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="reply-text">Reply (optional)</Label>
+                <Textarea
+                  id="reply-text"
+                  rows={3}
+                  value={replyText}
+                  onChange={(event) => setReplyText(event.target.value)}
+                  placeholder="Write your message here…"
+                  disabled={isSendingReply}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="gap-2"
+                    onClick={handleSendReply}
+                    disabled={isSendingReply || !replyText.trim()}
+                  >
+                    {isSendingReply && (
+                      <span className="flex items-center gap-1">
+                        Sending…
+                      </span>
+                    )}
+                    {!isSendingReply && 'Send reply'}
+                  </Button>
+                </div>
               </div>
             </div>
 

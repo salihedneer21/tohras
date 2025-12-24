@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const userController = require('../controllers/userController');
-const { validateUser } = require('../middleware/validators');
+const { validateUserCreate, validateUserUpdate } = require('../middleware/validators');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -26,6 +26,20 @@ router.get('/', userController.getAllUsers);
 router.get('/shopify/:shopifyOrderId', userController.getUserByShopifyOrderId);
 
 /**
+ * @route   GET /api/users/:id/messages
+ * @desc    Get messages for a user
+ * @access  Public
+ */
+router.get('/:id/messages', userController.getUserMessages);
+
+/**
+ * @route   POST /api/users/:id/messages
+ * @desc    Create message for a user
+ * @access  Public
+ */
+router.post('/:id/messages', userController.createUserMessage);
+
+/**
  * @route   GET /api/users/:id
  * @desc    Get user by ID
  * @access  Public
@@ -37,14 +51,14 @@ router.get('/:id', userController.getUserById);
  * @desc    Create new user
  * @access  Public
  */
-router.post('/', validateUser, userController.createUser);
+router.post('/', validateUserCreate, userController.createUser);
 
 /**
  * @route   PUT /api/users/:id
  * @desc    Update user
  * @access  Public
  */
-router.put('/:id', validateUser, userController.updateUser);
+router.put('/:id', validateUserUpdate, userController.updateUser);
 
 /**
  * @route   DELETE /api/users/:id

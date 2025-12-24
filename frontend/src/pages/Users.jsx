@@ -48,6 +48,7 @@ const createEmptyForm = () => ({
   age: '',
   gender: 'male',
   email: '',
+  phone: '',
 });
 
 const buildUserPayload = (formValues) => {
@@ -56,6 +57,7 @@ const buildUserPayload = (formValues) => {
     secondTitle: formValues.secondTitle?.trim() || '',
     gender: formValues.gender || undefined,
     email: formValues.email?.trim(),
+    phone: formValues.phone?.trim(),
   };
 
   if (formValues.age !== undefined && formValues.age !== null && `${formValues.age}`.trim() !== '') {
@@ -83,6 +85,11 @@ function Users() {
   const [viewerAsset, setViewerAsset] = useState(null);
   const [formImages, setFormImages] = useState([]);
   const [isSavingUser, setIsSavingUser] = useState(false);
+  const [shareUser, setShareUser] = useState(null);
+  const [shareMessage, setShareMessage] = useState('');
+  const [shareLink, setShareLink] = useState('');
+  const [shareMessages, setShareMessages] = useState([]);
+  const [isSavingShare, setIsSavingShare] = useState(false);
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(PAGE_SIZE_OPTIONS[0]);
@@ -361,6 +368,7 @@ function Users() {
       age: user.age ?? '',
       gender: user.gender || 'male',
       email: user.email || '',
+      phone: user.phone || '',
     });
     setEditingId(user._id);
     setShowForm(true);
@@ -430,6 +438,85 @@ function Users() {
       toast.success('Image removed');
     } catch (error) {
       toast.error(`Failed to remove image: ${error.message}`);
+    }
+  };
+
+  const handleOpenShare = (user) => {
+    if (!user.shopifyOrderId) {
+      toast.error('Share link is only available for Shopify orders.');
+      return;
+    }
+    setShareUser(user);
+    setShareMessage('');
+    setShareLink('');
+    setShareMessages([]);
+
+    userAPI
+      .getMessages(user._id)
+      .then((response) => {
+        const messages = Array.isArray(response?.data) ? response.data : response || [];
+        setShareMessages(messages);
+      })
+      .catch((error) => {
+        console.warn('Failed to load messages for user:', error);
+      });
+  };
+
+  const handleCloseShare = () => {
+    setShareUser(null);
+    setShareMessage('');
+    setShareLink('');
+    setShareMessages([]);
+    setIsSavingShare(false);
+  };
+
+  const handleConfirmShare = async () => {
+    if (!shareUser) return;
+    if (!shareUser.shopifyOrderId) {
+      toast.error('Share link is only available for Shopify orders.');
+      return;
+    }
+
+    setIsSavingShare(true);
+    try {
+      let updatedMessages = shareMessages;
+
+      if (shareMessage.trim()) {
+        try {
+          const response = await userAPI.addMessage(shareUser._id, {
+            content: shareMessage.trim(),
+            role: 'admin',
+          });
+          const created = response?.data || response;
+          updatedMessages = [...shareMessages, created];
+          setShareMessages(updatedMessages);
+          setShareMessage('');
+        } catch (error) {
+          toast.error(`Failed to save message: ${error.message}`);
+          setIsSavingShare(false);
+          return;
+        }
+      }
+
+      const origin =
+        typeof window !== 'undefined' && window.location
+          ? window.location.origin
+          : '';
+      const url = `${origin}/share/${encodeURIComponent(shareUser.shopifyOrderId)}`;
+      setShareLink(url);
+
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+          toast.success('Share link copied to clipboard');
+        } else {
+          toast.success(`Share link: ${url}`);
+        }
+      } catch {
+        toast.success(`Share link: ${url}`);
+      }
+    } finally {
+      setIsSavingShare(false);
     }
   };
 
@@ -662,7 +749,7 @@ function Users() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="email">Email (optional)</Label>
                   <Input
                     id="email"
                     name="email"
@@ -670,6 +757,17 @@ function Users() {
                     value={formData.email}
                     onChange={handleInputChange}
                     placeholder="parent@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Mobile (US only, optional)</Label>
+                  <Input
+                    id="phone"
+                    name="phone"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={handleInputChange}
+                    placeholder="+1 555 123 4567"
                   />
                 </div>
               </div>
@@ -905,6 +1003,7 @@ function Users() {
           const displayGender = user.gender || '—';
           const displayAge = typeof user.age === 'number' ? user.age : '—';
           const displayEmail = user.email || '—';
+          const displayPhone = user.phone || '—';
           const displayOrder =
             user.shopifyOrderName || user.shopifyOrderId || null;
           const displayBookName = user.shopifyBookName || null;
@@ -933,81 +1032,72 @@ function Users() {
                           )}
                         </p>
                       )}
-                      {shipping && (
+                      {(shipping || hasPrintPayload) && (
                         <Popover>
                           <PopoverTrigger asChild>
                             <button
                               type="button"
                               className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/60 bg-card text-foreground/60 transition hover:bg-card/80 hover:text-foreground"
-                              aria-label="View Shopify shipping details"
-                            >
-                              <Info className="h-3.5 w-3.5" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent align="end" className="w-72 text-xs">
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold text-foreground">
-                                Shipping address
-                              </p>
-                              <div className="space-y-0.5 text-foreground/80">
-                                {(shipping.firstName || shipping.lastName) && (
-                                  <p className="font-medium">
-                                    {[shipping.firstName, shipping.lastName]
-                                      .filter(Boolean)
-                                      .join(' ')}
-                                  </p>
-                                )}
-                                {shipping.addressLine1 && <p>{shipping.addressLine1}</p>}
-                                {shipping.addressLine2 && <p>{shipping.addressLine2}</p>}
-                                {(shipping.postCode || shipping.city || shipping.state) && (
-                                  <p>
-                                    {shipping.postCode && <span>{shipping.postCode} </span>}
-                                    {shipping.city && <span>{shipping.city}</span>}
-                                    {shipping.state && (
-                                      <span>
-                                        {shipping.city ? ', ' : ''}
-                                        {shipping.state}
-                                      </span>
-                                    )}
-                                  </p>
-                                )}
-                                {shipping.country && <p>{shipping.country}</p>}
-                                {shipping.email && (
-                                  <p>
-                                    <span className="font-medium">Email: </span>
-                                    <span>{shipping.email}</span>
-                                  </p>
-                                )}
-                                {shipping.phone && (
-                                  <p>
-                                    <span className="font-medium">Phone: </span>
-                                    <span>{shipping.phone}</span>
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </PopoverContent>
-                        </Popover>
-                      )}
-                      {hasPrintPayload && (
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <button
-                              type="button"
-                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/60 bg-card text-foreground/60 transition hover:bg-card/80 hover:text-foreground"
-                              aria-label="View printing press order payload"
+                              aria-label="View order details"
                             >
                               <Info className="h-3.5 w-3.5" />
                             </button>
                           </PopoverTrigger>
                           <PopoverContent align="end" className="w-[420px] text-xs">
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold text-foreground">
-                                Printing press payload
-                              </p>
-                              <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-[10px] leading-relaxed text-foreground/80">
-                                {JSON.stringify(user.printOrderPayload, null, 2)}
-                              </pre>
+                            <div className="space-y-4">
+                              {shipping && (
+                                <div className="space-y-2">
+                                  <p className="text-xs font-semibold text-foreground">
+                                    Shipping address
+                                  </p>
+                                  <div className="space-y-0.5 text-foreground/80">
+                                    {(shipping.firstName || shipping.lastName) && (
+                                      <p className="font-medium">
+                                        {[shipping.firstName, shipping.lastName]
+                                          .filter(Boolean)
+                                          .join(' ')}
+                                      </p>
+                                    )}
+                                    {shipping.addressLine1 && <p>{shipping.addressLine1}</p>}
+                                    {shipping.addressLine2 && <p>{shipping.addressLine2}</p>}
+                                    {(shipping.postCode || shipping.city || shipping.state) && (
+                                      <p>
+                                        {shipping.postCode && <span>{shipping.postCode} </span>}
+                                        {shipping.city && <span>{shipping.city}</span>}
+                                        {shipping.state && (
+                                          <span>
+                                            {shipping.city ? ', ' : ''}
+                                            {shipping.state}
+                                          </span>
+                                        )}
+                                      </p>
+                                    )}
+                                    {shipping.country && <p>{shipping.country}</p>}
+                                    {shipping.email && (
+                                      <p>
+                                        <span className="font-medium">Email: </span>
+                                        <span>{shipping.email}</span>
+                                      </p>
+                                    )}
+                                    {shipping.phone && (
+                                      <p>
+                                        <span className="font-medium">Phone: </span>
+                                        <span>{shipping.phone}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              {hasPrintPayload && (
+                                <div className="space-y-2 border-t border-border/60 pt-2">
+                                  <p className="text-xs font-semibold text-foreground">
+                                    Printing press payload
+                                  </p>
+                                  <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-[10px] leading-relaxed text-foreground/80">
+                                    {JSON.stringify(user.printOrderPayload, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
                             </div>
                           </PopoverContent>
                         </Popover>
@@ -1032,6 +1122,7 @@ function Users() {
                     </span>
                   </p>
                   <p className="truncate text-foreground/60">{displayEmail}</p>
+                  <p className="truncate text-foreground/60">{displayPhone}</p>
                 </div>
 
                 <div className="space-y-4">
@@ -1134,7 +1225,7 @@ function Users() {
                     variant="outline"
                     size="sm"
                     className="gap-1"
-                    onClick={() => handleShare(user)}
+                    onClick={() => handleOpenShare(user)}
                   >
                     <Share2 className="h-4 w-4" />
                     Share
@@ -1236,32 +1327,88 @@ function Users() {
         </Card>
       )}
 
+      {shareUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 px-4">
+          <Card className="w-full max-w-md border-border/60 bg-card/95 shadow-lg">
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">
+                Share booking link
+              </CardTitle>
+              <CardDescription className="text-sm text-foreground/60">
+                Add an optional message that will be visible on the share page.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {shareMessages.length > 0 && (
+                <div className="space-y-2 rounded-md border border-border/60 bg-muted/40 p-3 text-xs max-h-60 overflow-y-auto">
+                  <p className="text-xs font-semibold text-foreground">
+                    Messages
+                  </p>
+                  <div className="space-y-2">
+                    {shareMessages.map((message) => (
+                      <div
+                        key={message._id}
+                        className="flex flex-col gap-0.5 rounded-md bg-background/80 px-2 py-1.5"
+                      >
+                        <p className="text-[10px] font-semibold text-foreground/70">
+                          {message.role === 'admin' ? 'You' : 'Recipient'}
+                        </p>
+                        <p className="whitespace-pre-wrap text-xs text-foreground/80">
+                          {message.content}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="share-message">Message (optional)</Label>
+                <Textarea
+                  id="share-message"
+                  rows={4}
+                  value={shareMessage}
+                  onChange={(event) => setShareMessage(event.target.value)}
+                  placeholder="Write a short note for the family receiving this link…"
+                />
+              </div>
+
+              {shareLink && (
+                <div className="space-y-2 rounded-md border border-border/60 bg-muted/40 p-3 text-xs">
+                  <p className="font-semibold text-foreground">Share link</p>
+                  <p className="break-all text-foreground/80">{shareLink}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCloseShare}
+                  disabled={isSavingShare}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-2"
+                  onClick={handleConfirmShare}
+                  disabled={isSavingShare}
+                >
+                  {isSavingShare && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {shareLink ? 'Copy again' : 'Save & copy link'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <ImageViewer open={Boolean(viewerAsset)} image={viewerAsset} onClose={handleViewerClose} />
     </div>
   );
 }
 
 export default Users;
-  const handleShare = async (user) => {
-    if (!user.shopifyOrderId) {
-      toast.error('Share link is only available for Shopify orders.');
-      return;
-    }
-
-    const origin =
-      typeof window !== 'undefined' && window.location
-        ? window.location.origin
-        : '';
-    const shareUrl = `${origin}/share/${encodeURIComponent(user.shopifyOrderId)}`;
-
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-        toast.success('Share link copied to clipboard');
-      } else {
-        toast.success(`Share link: ${shareUrl}`);
-      }
-    } catch {
-      toast.success(`Share link: ${shareUrl}`);
-    }
-  };

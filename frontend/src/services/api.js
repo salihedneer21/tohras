@@ -111,6 +111,8 @@ export const userAPI = {
     });
   },
   deleteImage: (id, assetId) => api.delete(`/users/${id}/images/${assetId}`),
+  getMessages: (id) => api.get(`/users/${id}/messages`),
+  addMessage: (id, data) => api.post(`/users/${id}/messages`, data),
 };
 
 // Training API

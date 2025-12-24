@@ -1,0 +1,34 @@
+{
+  "orderReferenceId": "6455229448415",
+  "orderType": "order",
+  "currency": "USD",
+  "retailCurrency": "USD",
+  "retailShippingPriceInclVat": "7.99",
+  "shippingAddress": {
+    "country": "US",
+    "firstName": "Salih",
+    "lastName": "Edneer",
+    "addressLine1": "3395 great Plains Way",
+    "addressLine2": "Not Provided",
+    "city": "Lehi",
+    "postCode": "84048",
+    "state": "UT",
+    "email": "salihedneer21@gmail.com",
+    "phone": "+19177941314",
+    "companyName": "My Torah Tales"
+  },
+  "items": [
+    {
+      "itemReferenceId": "15687294714079",
+      "productUid": "large-posters_pf_500x700-mm_pt_170-gsm-coated-silk_cl_4-0_ver",
+      "quantity": 1,
+      "retailPriceInclVat": "29.99",
+      "files": [
+        {
+          "type": "default",
+          "url": "https://book-story-ai-generate.s3.amazonaws.com/books/trip-to-israel-1764719116698/pdfs/mjauk1j3-0cfbc4835c73-trip-to-israel-confirmed.pdf"
+        }
+      ]
+    }
+  ]
+}

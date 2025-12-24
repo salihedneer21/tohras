@@ -1,13 +1,36 @@
 const { body } = require('express-validator');
 
 /**
- * Validation rules for user creation/update
+ * Validation rules for user creation
  */
-exports.validateUser = [
+exports.validateUserCreate = [
   body('name')
     .trim()
     .notEmpty()
     .withMessage('Name is required')
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Name must be between 2 and 100 characters'),
+
+  body('age')
+    .optional({ checkFalsy: true })
+    .isInt({ min: 0, max: 150 })
+    .withMessage('Age must be between 0 and 150'),
+
+  body('gender')
+    .optional({ checkFalsy: true })
+    .isIn(['male', 'female', 'other'])
+    .withMessage('Gender must be male, female, or other'),
+];
+
+/**
+ * Validation rules for user update (partial)
+ */
+exports.validateUserUpdate = [
+  body('name')
+    .optional()
+    .trim()
+    .notEmpty()
+    .withMessage('Name cannot be empty')
     .isLength({ min: 2, max: 100 })
     .withMessage('Name must be between 2 and 100 characters'),
 
